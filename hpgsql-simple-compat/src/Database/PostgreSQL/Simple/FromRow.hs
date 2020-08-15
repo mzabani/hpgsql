@@ -1,0 +1,1264 @@
+{-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE RecordWildCards #-}
+
+------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+
+-- |
+-- Module:      Database.PostgreSQL.Simple.FromRow
+-- Copyright:   (c) 2012 Leon P Smith
+-- License:     BSD3
+-- Maintainer:  Leon P Smith <leon@melding-monads.com>
+-- Stability:   experimental
+--
+-- The 'FromRow' typeclass, for converting a row of results
+-- returned by a SQL query into a more useful Haskell representation.
+--
+-- Predefined instances are provided for tuples containing up to ten
+-- elements.  The instances for 'Maybe' types return 'Nothing' if all
+-- the columns that would have been otherwise consumed are null,  otherwise
+-- it attempts a regular conversion.
+module Database.PostgreSQL.Simple.FromRow
+  ( FromRow (..),
+    RowParser,
+    field,
+    fieldWith,
+    numFieldsRemaining,
+  )
+where
+
+import Control.Applicative ((<|>))
+import Control.Monad (replicateM, replicateM_)
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State.Strict
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as B
+import Data.Vector (Vector)
+import qualified Data.Vector as V
+import qualified Database.PostgreSQL.LibPQ as PQ
+import Database.PostgreSQL.Simple.Compat
+import Database.PostgreSQL.Simple.FromField
+import Database.PostgreSQL.Simple.Internal
+import Database.PostgreSQL.Simple.Ok
+import Database.PostgreSQL.Simple.TypeInfo
+import Database.PostgreSQL.Simple.Types (Null, Only (..), (:.) (..))
+import GHC.Generics
+import Prelude hiding (null)
+
+-- | A collection type that can be converted from a sequence of fields.
+-- Instances are provided for tuples up to 10 elements and lists of any length.
+--
+-- Note that instances can be defined outside of hpgsql-simple-compat,  which is
+-- often useful.   For example, here's an instance for a user-defined pair:
+--
+-- @
+-- data User = User { name :: String, fileQuota :: Int }
+--
+-- instance 'FromRow' User where
+--     fromRow = User \<$\> 'field' \<*\> 'field'
+-- @
+--
+-- The number of calls to 'field' must match the number of fields returned
+-- in a single row of the query result.  Otherwise,  a 'ConversionFailed'
+-- exception will be thrown.
+--
+-- You can also derive 'FromRow' for your data type using GHC generics, like
+-- this:
+--
+-- @
+-- \{-# LANGUAGE DeriveAnyClass \#-}
+-- \{-# LANGUAGE DeriveGeneric  \#-}
+--
+-- import "GHC.Generics" ('GHC.Generics.Generic')
+-- import "Database.PostgreSQL.Simple" ('FromRow')
+--
+-- data User = User { name :: String, fileQuota :: Int }
+--   deriving ('GHC.Generics.Generic', 'FromRow')
+-- @
+--
+-- Note that this only works for product types (e.g. records) and does not
+-- support sum types or recursive types.
+--
+-- Note that 'field' evaluates its result to WHNF, so the caveats listed in
+-- mysql-simple and very early versions of hpgsql-simple-compat no longer apply.
+-- Instead, look at the caveats associated with user-defined implementations
+-- of 'fromField'.
+class FromRow a where
+  fromRow :: RowParser a
+  default fromRow :: (Generic a, GFromRow (Rep a)) => RowParser a
+  fromRow = to <$> gfromRow
+
+getvalue :: PQ.Result -> PQ.Row -> PQ.Column -> Maybe ByteString
+getvalue result row col = unsafeDupablePerformIO (PQ.getvalue' result row col)
+
+nfields :: PQ.Result -> PQ.Column
+nfields result = unsafeDupablePerformIO (PQ.nfields result)
+
+getTypeInfoByCol :: Row -> PQ.Column -> Conversion TypeInfo
+getTypeInfoByCol Row {..} col =
+  Conversion $ \conn -> do
+    oid <- PQ.ftype rowresult col
+    Ok <$> getTypeInfo conn oid
+
+getTypenameByCol :: Row -> PQ.Column -> Conversion ByteString
+getTypenameByCol row col = typname <$> getTypeInfoByCol row col
+
+fieldWith :: FieldParser a -> RowParser a
+fieldWith fieldP = RP $ do
+  let unCol (PQ.Col x) = fromIntegral x :: Int
+  r@Row {..} <- ask
+  column <- lift get
+  lift (put (column + 1))
+  let ncols = nfields rowresult
+  if (column >= ncols)
+    then lift $ lift $ do
+      vals <- mapM (getTypenameByCol r) [0 .. ncols - 1]
+      let err =
+            ConversionFailed
+              (show (unCol ncols) ++ " values: " ++ show (map ellipsis vals))
+              Nothing
+              ""
+              ( "at least "
+                  ++ show (unCol column + 1)
+                  ++ " slots in target type"
+              )
+              "mismatch between number of columns to \
+              \convert and number in target type"
+      conversionError err
+    else do
+      let !result = rowresult
+          !typeOid = unsafeDupablePerformIO (PQ.ftype result column)
+          !field' = Field {..}
+      lift (lift (fieldP field' (getvalue result row column)))
+
+field :: (FromField a) => RowParser a
+field = fieldWith fromField
+
+ellipsis :: ByteString -> ByteString
+ellipsis bs
+  | B.length bs > 15 = B.take 10 bs `B.append` "[...]"
+  | otherwise = bs
+
+numFieldsRemaining :: RowParser Int
+numFieldsRemaining = RP $ do
+  Row {..} <- ask
+  column <- lift get
+  return $! (\(PQ.Col x) -> fromIntegral x) (nfields rowresult - column)
+
+null :: RowParser Null
+null = field
+
+instance (FromField a) => FromRow (Only a) where
+  fromRow = Only <$> field
+
+instance (FromField a) => FromRow (Maybe (Only a)) where
+  fromRow =
+    (null *> pure Nothing)
+      <|> (Just <$> fromRow)
+
+instance (FromField a, FromField b) => FromRow (a, b) where
+  fromRow = (,) <$> field <*> field
+
+instance (FromField a, FromField b) => FromRow (Maybe (a, b)) where
+  fromRow =
+    (null *> null *> pure Nothing)
+      <|> (Just <$> fromRow)
+
+instance (FromField a, FromField b, FromField c) => FromRow (a, b, c) where
+  fromRow = (,,) <$> field <*> field <*> field
+
+instance (FromField a, FromField b, FromField c) => FromRow (Maybe (a, b, c)) where
+  fromRow =
+    (null *> null *> null *> pure Nothing)
+      <|> (Just <$> fromRow)
+
+instance
+  (FromField a, FromField b, FromField c, FromField d) =>
+  FromRow (a, b, c, d)
+  where
+  fromRow = (,,,) <$> field <*> field <*> field <*> field
+
+instance
+  (FromField a, FromField b, FromField c, FromField d) =>
+  FromRow (Maybe (a, b, c, d))
+  where
+  fromRow =
+    (null *> null *> null *> null *> pure Nothing)
+      <|> (Just <$> fromRow)
+
+instance
+  (FromField a, FromField b, FromField c, FromField d, FromField e) =>
+  FromRow (a, b, c, d, e)
+  where
+  fromRow = (,,,,) <$> field <*> field <*> field <*> field <*> field
+
+instance
+  (FromField a, FromField b, FromField c, FromField d, FromField e) =>
+  FromRow (Maybe (a, b, c, d, e))
+  where
+  fromRow =
+    (null *> null *> null *> null *> null *> pure Nothing)
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f
+  ) =>
+  FromRow (a, b, c, d, e, f)
+  where
+  fromRow =
+    (,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g
+  ) =>
+  FromRow (a, b, c, d, e, f, g)
+  where
+  fromRow =
+    (,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h)
+  where
+  fromRow =
+    (,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i)
+  where
+  fromRow =
+    (,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j)
+  where
+  fromRow =
+    (,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k)
+  where
+  fromRow =
+    (,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l)
+  where
+  fromRow =
+    (,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m)
+  where
+  fromRow =
+    (,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m, n)
+  where
+  fromRow =
+    (,,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m, n))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)
+  where
+  fromRow =
+    (,,,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p)
+  where
+  fromRow =
+    (,,,,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q)
+  where
+  fromRow =
+    (,,,,,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q,
+    FromField r
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r)
+  where
+  fromRow =
+    (,,,,,,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q,
+    FromField r
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q,
+    FromField r,
+    FromField s
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s)
+  where
+  fromRow =
+    (,,,,,,,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q,
+    FromField r,
+    FromField s
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q,
+    FromField r,
+    FromField s,
+    FromField t
+  ) =>
+  FromRow (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t)
+  where
+  fromRow =
+    (,,,,,,,,,,,,,,,,,,,)
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+instance
+  ( FromField a,
+    FromField b,
+    FromField c,
+    FromField d,
+    FromField e,
+    FromField f,
+    FromField g,
+    FromField h,
+    FromField i,
+    FromField j,
+    FromField k,
+    FromField l,
+    FromField m,
+    FromField n,
+    FromField o,
+    FromField p,
+    FromField q,
+    FromField r,
+    FromField s,
+    FromField t
+  ) =>
+  FromRow (Maybe (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t))
+  where
+  fromRow =
+    ( null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> null
+        *> pure Nothing
+    )
+      <|> (Just <$> fromRow)
+
+instance (FromField a) => FromRow [a] where
+  fromRow = do
+    n <- numFieldsRemaining
+    replicateM n field
+
+instance (FromField a) => FromRow (Maybe [a]) where
+  fromRow = do
+    n <- numFieldsRemaining
+    (replicateM_ n null *> pure Nothing) <|> (Just <$> replicateM n field)
+
+instance (FromField a) => FromRow (Vector a) where
+  fromRow = do
+    n <- numFieldsRemaining
+    V.replicateM n field
+
+instance (FromField a) => FromRow (Maybe (Vector a)) where
+  fromRow = do
+    n <- numFieldsRemaining
+    (replicateM_ n null *> pure Nothing) <|> (Just <$> V.replicateM n field)
+
+instance (FromRow a, FromRow b) => FromRow (a :. b) where
+  fromRow = (:.) <$> fromRow <*> fromRow
+
+-- Type class for default implementation of FromRow using generics
+class GFromRow f where
+  gfromRow :: RowParser (f p)
+
+instance (GFromRow f) => GFromRow (M1 c i f) where
+  gfromRow = M1 <$> gfromRow
+
+instance (GFromRow f, GFromRow g) => GFromRow (f :*: g) where
+  gfromRow = liftA2 (:*:) gfromRow gfromRow
+
+instance (FromField a) => GFromRow (K1 R a) where
+  gfromRow = K1 <$> field
+
+instance GFromRow U1 where
+  gfromRow = pure U1

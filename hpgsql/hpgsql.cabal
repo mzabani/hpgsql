@@ -1,0 +1,153 @@
+cabal-version: 2.0
+
+name:           hpgsql
+version:        0.1.6
+description:    hpgsql is a pure Haskell implementation of a PostgreSQL driver
+homepage:       https://github.com/mzabani/hpgsql#readme
+bug-reports:    https://github.com/mzabani/hpgsql/issues
+author:         Marcelo Zabani
+maintainer:     mzabani@gmail.com
+copyright:      2025 Marcelo Zabani
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/mzabani/hpgsql
+
+library
+  exposed-modules:
+      HPgsql
+      HPgsql.Connection
+      HPgsql.Field
+      HPgsql.Newtypes
+      HPgsql.Parsing
+      HPgsql.Query
+      HPgsql.TypeInfo
+  other-modules:
+      HPgsql.Msgs
+      Paths_hpgsql
+  autogen-modules:
+      Paths_hpgsql
+  hs-source-dirs:
+      src
+  default-extensions:
+      BangPatterns
+      DataKinds
+      DefaultSignatures
+      DeriveAnyClass
+      DeriveFunctor
+      DeriveGeneric
+      DerivingStrategies
+      DerivingVia
+      DuplicateRecordFields
+      LambdaCase
+      FlexibleContexts
+      FlexibleInstances
+      GADTs
+      GeneralizedNewtypeDeriving
+      MultiParamTypeClasses
+      MultiWayIf
+      NamedFieldPuns
+      NumericUnderscores
+      OverloadedStrings
+      RankNTypes
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      TypeFamilies
+      TypeFamilyDependencies
+      TypeOperators
+      ViewPatterns
+  -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
+  ghc-options: -O2 -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path
+  build-depends:
+      aeson >= 2
+    , async
+    , attoparsec
+    , base
+    , binary
+    , bytestring
+    , containers
+    , dlist
+    , network
+    , network-uri
+    , Only
+    , safe-exceptions
+    , scientific
+    , stm
+    , streaming
+    , template-haskell
+    , text
+    , time
+    , transformers
+    , vector
+  default-language: Haskell2010
+
+test-suite hpgsql-test
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      AllSpecs
+      DbUtils
+      HPgsqlSpec
+      Paths_hpgsql
+  autogen-modules:
+      Paths_hpgsql
+  hs-source-dirs:
+      test
+  default-extensions:
+      BangPatterns
+      DeriveAnyClass
+      DeriveFunctor
+      DeriveGeneric
+      DerivingStrategies
+      DerivingVia
+      LambdaCase
+      FlexibleContexts
+      FlexibleInstances
+      GADTs
+      GeneralizedNewtypeDeriving
+      MultiParamTypeClasses
+      NamedFieldPuns
+      NumericUnderscores
+      OverloadedStrings
+      RankNTypes
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      TypeFamilies
+      TypeFamilyDependencies
+      TypeOperators
+      ViewPatterns
+  -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
+  ghc-options: -O2 -threaded -rtsopts "-with-rtsopts=-N" -Wunused-packages -optP-Wno-nonportable-include-path
+  -- Until https://github.com/input-output-hk/haskell.nix/issues/231 is resolved,
+  -- do not include hspec-discover in system-build-tools. We hack around the issue
+  -- in flake.nix so both cabal and nix build work.
+  -- build-tools:
+  --     hspec-discover
+  build-depends:
+      aeson >= 2
+    , async
+    , base
+    , bytestring
+    , containers
+    , hedgehog
+    , hpgsql
+    , hspec
+    , hspec-hedgehog
+    , safe-exceptions
+    , scientific
+    , streaming
+    , text
+    , time
+    , vector
+  default-language: Haskell2010

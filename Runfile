@@ -1,0 +1,132 @@
+.SHELL = bash
+
+##
+# Runs benchmarks.
+# OPTION NIX --nix Use a Nix-built test executable instead of compiling with cabal in the user's shell.
+benchmarks:
+    set -eo pipefail
+
+    if [ -n "$NIX" ]; then
+        nix-build -A hpgsql-benchmarks -o local/hpgsql-benchmarks
+        ./local/hpgsql-benchmarks/bin/hpgsql-benchmarks
+    else
+        cabal run -O2 hpgsql-benchmarks
+    fi
+
+##
+# Runs all tests that CI runs, exactly like CI runs them.
+ci-tests:
+    set -eo pipefail
+
+    echo "Testing install script posix compatibility"
+    shellcheck --shell=sh nix/install-codd.sh
+
+    echo "Running tests that don't depend on a database"
+    run test-no-db --nix
+
+    # Postgres-version dependent tests for each possible version next
+    # We test the last version with the vanilla nixpkgs-built derivation,
+    # not the IOHK one. We assume differences in the codebase regarding different
+    # postgres versions aren't enough to make it worth testing every version here too.
+    concurrently -g --timings --names pg16Nixpkgs,pg15,pg14,pg13 \
+      'nix-build ./nix/install-codd-nixpkgs.nix --no-out-link -A coddWithCheck' \
+      'run test-with-db --nix --pg 15' \
+      'run test-with-db --nix --pg 14' \
+      'run test-with-db --nix --pg 13'
+
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        echo "Running system-resources test"
+        run test-system-resources --nix
+    else
+        echo "Skipping system-resources test as strace is only available on Linux"
+    fi
+
+##
+# Formats all Haskell files with fourmolu.
+format-hs:
+    set -eo pipefail
+
+    readarray -d '' FILES < <(git ls-files -z '*.hs')
+
+    for f in "${FILES[@]}"; do
+        if [ "$f" = "src/Codd/Internal.hs" ]; then
+            echo "Skipping \"$f\" because of some fourmolu bug"
+        else
+            echo "Formatting $f..."
+            fourmolu --mode inplace "$f"
+        fi
+    done
+
+## 
+# Runs a test without starting a postgresql DB for it. If no extra arguments are passed, special cases to running
+# all tests that don't require a database.
+# OPTION NIX --nix Run tests in a Nix derivation's sandbox
+test-no-db:
+    set -eo pipefail
+    ARGSARRAY=("$@")
+    [ -z "$1" ] && ARGSARRAY=(--skip /DbDependentSpecs/ --skip /SystemResourcesSpecs/)
+    TARGS=$(printf "'%s' " "$@") && [ -z "$1" ] && TARGS="--skip /DbDependentSpecs/ --skip /SystemResourcesSpecs/"
+    if [ -n "$NIX" ]; then
+        nix-build --no-out-link -A testsNoDb --argstr hspecArgs "$TARGS"
+    else
+        cabal build -O0 hpgsql-test
+        `cabal list-bin -O0 hpgsql-test` "${ARGSARRAY[@]}"
+    fi
+
+## 
+# Runs a test in an environment where there is a postgresql DB listening. If no extra arguments are passed, special cases to running
+# all tests that _do_ require a database.
+# OPTION PG --pg <pg> The version of the postgresql instance to start or 'all'. Defaults to 16 if unspecified.
+# OPTION NIX --nix Run tests in a Nix derivation's sandbox
+test-with-db:
+    set -eo pipefail
+    [ -z "$PG" ] && PG=(16)
+    [ "${PG[0]}" = "all" ] && PG=(13 14 15 16)
+    TARGS=() && [ -n "$1" ] && TARGS=$(printf "'%s' " "${@}")
+    
+    for pg in "${PG[@]}"; do
+        echo "Running tests on Postgres $pg"
+        if [ -n "$NIX" ]; then
+            nix-build --no-out-link -A "testsPg${pg}" --argstr hspecArgs "$TARGS"
+        else
+            cabal build -O0 hpgsql-test
+            nix-shell -A "shellPg${pg}" ./default.nix --run "./scripts/run-tests-db-internal.sh $TARGS"
+        fi
+    done
+
+## 
+# Runs hpgsql-simple-compat's tests.
+# OPTION PG --pg <pg> The version of the postgresql instance to start or 'all'. Defaults to 16 if unspecified.
+test-compat:
+    set -eo pipefail
+    [ -z "$PG" ] && PG=(16)
+    [ "${PG[0]}" = "all" ] && PG=(13 14 15 16)
+    TARGS=() && [ -n "$1" ] && TARGS=$(printf "'%s' " "${@}")
+    
+    for pg in "${PG[@]}"; do
+        echo "Running tests on Postgres $pg"
+        cabal build -O0 hpgsql-simple-compat:test
+        nix-shell -A "shellPg${pg}" ./default.nix --run "./scripts/run-hpgsql-simple-compat-tests-db-internal.sh $TARGS"
+    done
+
+##
+# Test that codd does not open more than one migration file or on-disk representation file simultaneously, so that it won't fail in shells or OS's with tight open file limits.
+# OPTION NIX --nix Run tests in a Nix derivation's sandbox
+test-system-resources:
+    set -eo pipefail
+
+    if [ -n "$NIX" ]; then
+        nix-build --no-out-link -A testsSystemResources
+    else
+        if ! command -v strace &> /dev/null
+        then
+            echo strace could not be found. You need strace installed for this test.
+            exit 1
+        fi
+
+        rm -f /tmp/strace-codd-system-resources-test.log
+        trap "rm -f /tmp/strace-codd-system-resources-test.log" ERR EXIT
+
+        cabal build -O0 hpgsql-test
+        nix-shell -A "shellPg16" ./default.nix --run "./scripts/run-tests-system-resources.sh"
+    fi

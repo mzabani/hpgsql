@@ -1,0 +1,69 @@
+cabal-version: 2.0
+
+name:           hpgsql-benchmarks
+version:        0.1.6
+description:    hpgsql is a pure Haskell implementation of a PostgreSQL driver
+homepage:       https://github.com/mzabani/hpgsql#readme
+bug-reports:    https://github.com/mzabani/hpgsql/issues
+author:         Marcelo Zabani
+maintainer:     mzabani@gmail.com
+copyright:      2025 Marcelo Zabani
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/mzabani/hpgsql
+
+executable hpgsql-benchmarks
+  main-is: Main.hs
+  hs-source-dirs: src
+  -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
+  ghc-options: -O2 -threaded -rtsopts "-with-rtsopts=-maxN2 -qg -T" -Wall -Wpartial-fields -optP-Wno-nonportable-include-path
+  default-extensions:
+      BangPatterns
+      DeriveAnyClass
+      DeriveFunctor
+      DeriveGeneric
+      DerivingStrategies
+      DerivingVia
+      LambdaCase
+      FlexibleContexts
+      FlexibleInstances
+      GADTs
+      GeneralizedNewtypeDeriving
+      MultiParamTypeClasses
+      NamedFieldPuns
+      NumericUnderscores
+      OverloadedStrings
+      RankNTypes
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      TypeFamilies
+      TypeFamilyDependencies
+      TypeOperators
+      ViewPatterns
+  build-depends:
+    aeson >= 2
+    , base
+    , hpgsql
+    , criterion-measurement >= 0.2.0.0
+    , deepseq
+    , hspec
+    , hspec-core
+    , hspec-expectations
+    , postgresql-simple
+    , resourcet
+    , statistics
+    , streaming
+    , streaming-postgresql-simple
+    , text
+    , vector
+  default-language: Haskell2010
+
