@@ -74,7 +74,6 @@ library
     , binary
     , bytestring
     , containers
-    , dlist
     , network
     , network-uri
     , Only

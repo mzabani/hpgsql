@@ -4,8 +4,8 @@
 module HPgsql.Parsing
   ( parseSql,
     piecesToText,
-    SqlPiece(..),
-    BlockOrNotBlock(..),
+    SqlPiece (..),
+    BlockOrNotBlock (..),
   )
 where
 
@@ -25,156 +25,52 @@ import Data.Attoparsec.Text
     many',
     many1,
     peekChar,
-    skipWhile,
     string,
     takeWhile,
     takeWhile1,
   )
 import qualified Data.Attoparsec.Text as Parsec
-import Data.Bifunctor (first)
 import qualified Data.Char as Char
-import qualified Data.DList as DList
-import Data.List.NonEmpty (NonEmpty (..))
-import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Streaming
-  ( Identity (..),
-    Of (..),
-  )
-import qualified Streaming.Internal as S
-import Streaming.Prelude (Stream)
-import qualified Streaming.Prelude as Streaming
 import Prelude hiding (takeWhile)
 
-data SqlPiece = CommentPiece !Text | WhiteSpacePiece !Text | CopyFromStdinStatement !Text | CopyFromStdinRows !Text | CopyFromStdinEnd !Text | BeginTransaction !Text | OtherSqlPiece ![BlockOrNotBlock]
+data SqlPiece = CommentPiece !Text | WhiteSpacePiece !Text | OtherSqlPiece ![BlockOrNotBlock]
   deriving stock (Show, Eq)
 
 -- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which
 -- semicolons are not to be considered statement boundaries. These include strings, comments,
 -- parenthesised expressions and dollar-quoted strings.
--- Knowing if a fragment of SQL is a block or not can help interpolate '?' as arguments in some contexts,
--- while avoiding doing so inside e.g. text strings.
+-- Knowing if a fragment of SQL is a block or not can help interpolate '?' or other placeholder
+-- strings as arguments in some contexts, while avoiding doing so inside e.g. text strings.
 data BlockOrNotBlock = Block !Text | NotBlock !Text
   deriving stock (Eq, Show)
 
 parseSql :: String -> [SqlPiece]
-parseSql str = runIdentity $ Streaming.toList_ $ parseSqlPiecesStreaming' sqlPieceParser (Streaming.yield (Text.pack str))
-
-parseSqlPiecesStreaming' ::
-  forall m.
-  (Monad m) =>
-  (ParserState -> Parser ([SqlPiece], ParserState)) ->
-  Stream (Of Text) m () ->
-  Stream (Of SqlPiece) m ()
-parseSqlPiecesStreaming' parser contents = go $ Streaming.concat $ manyStreaming parser OutsideCopy contents
-  where
-    go :: Stream (Of SqlPiece) m (Stream (Of Text) m (), ParserState) -> Stream (Of SqlPiece) m ()
-    go = \case
-      S.Step (sqlPiece :> rest) -> S.Step $ sqlPiece :> go rest
-      S.Return (unparsedTextStream, _) -> S.Effect $ do
-        allRemainingText <- Streaming.mconcat_ unparsedTextStream
-        -- If there is white-space at the end of the migration, it would've been parsed as WhiteSpacePiece. If there is valid SQL, then it would've been parsed as some other SQL piece. And so on.
-        -- Thus, if we're here, the end of the migration is either empty text or something we failed to parse. It is almost certainly
-        -- the former, but if it's the latter we return it all in a single OtherSqlPiece to try to be helpful.
-        if allRemainingText == ""
-          then pure $ S.Return ()
-          else
-            pure $ Streaming.yield $ OtherSqlPiece [NotBlock allRemainingText]
-      S.Effect eff -> S.Effect $ go <$> eff
-
--- TODO: Remove dlist as a dependency if we can
-
--- | This should be equivalent to attoparsec's `many`, but with streams and a stateful parser. Naturally, there are differences in the type signature given the Streaming nature of this function.
--- It returns as the Stream's result the unparsed text.
-manyStreaming ::
-  forall m a s.
-  (Monad m, Show a) =>
-  (s -> Parser (a, s)) ->
-  s ->
-  -- | The input stream/text. Empty strings are ignored, and end-of-stream interpreted as an EOF marker when parsing.
-  Stream (Of Text) m () ->
-  -- | Returns a stream of parsed values with the stream's result being any unparsed text at the end.
-  Stream (Of a) m (Stream (Of Text) m (), s)
-manyStreaming parser initialState inputStream = go initialState DList.empty (Parsec.parse (parser initialState)) inputStreamWithoutEmptyStrs
-  where
-    -- End-Of-Stream is EOF for us, but attoparsec understands the empty string as EOF, so we filter it out because empty strings
-    -- are perfectly valid chunks for streams and should have no impact on parsing
-    inputStreamWithoutEmptyStrs = Streaming.filter ("" /=) inputStream
-    go :: s -> DList.DList Text -> (Text -> Parsec.Result (a, s)) -> Stream (Of Text) m () -> Stream (Of a) m (Stream (Of Text) m (), s)
-    go s !partiallyParsedTexts parseFunc stream =
-      case stream of
-        S.Step (textPiece :> rest) -> case parseFunc textPiece of
-          Parsec.Fail {} -> S.Return (Streaming.each (DList.toList partiallyParsedTexts) <> Streaming.yield textPiece <> rest, s)
-          Parsec.Done unconsumedInput (parsedValue, newParserState) -> S.Step $ parsedValue :> go newParserState DList.empty (Parsec.parse (parser newParserState)) (if unconsumedInput == "" then rest else S.Step $ unconsumedInput :> rest)
-          Parsec.Partial continueParsing -> go s (partiallyParsedTexts `DList.snoc` textPiece) continueParsing rest
-        S.Effect m -> S.Effect $ go s partiallyParsedTexts parseFunc <$> m
-        S.Return () ->
-          -- End of stream is EOF, which is represented by the empty string for attoparsec parsers
-          case parseFunc "" of
-            Parsec.Fail {} ->
-              S.Return (Streaming.each $ DList.toList partiallyParsedTexts, s)
-            Parsec.Done !unconsumedInput (!parsedValue, !newParserState) -> S.Step $ parsedValue :> S.Return (Streaming.yield unconsumedInput, newParserState)
-            Parsec.Partial _ ->
-              -- What is this case? Partial match on EOF? I suppose it is possible for an arbitrary parser to do this..
-              S.Return (Streaming.each $ DList.toList partiallyParsedTexts, s)
+parseSql str =
+  case Parsec.parseOnly (many' sqlPieceParser <* endOfInput) (Text.pack str) of
+    Right pieces -> pieces
+    Left err -> error $ "Please report this as a bug in hpgsql: " ++ err
 
 sqlPieceText :: SqlPiece -> Text
 sqlPieceText (CommentPiece s) = s
 sqlPieceText (WhiteSpacePiece s) = s
-sqlPieceText (BeginTransaction s) = s
 sqlPieceText (OtherSqlPiece ls) = Text.concat $ map blockText ls
-sqlPieceText (CopyFromStdinStatement s) = s
-sqlPieceText (CopyFromStdinRows s) = s
-sqlPieceText (CopyFromStdinEnd s) = s
 
-mapSqlPiece :: (Text -> Text) -> SqlPiece -> SqlPiece
-mapSqlPiece f = \case
-  CommentPiece s -> CommentPiece (f s)
-  WhiteSpacePiece s -> WhiteSpacePiece (f s)
-  BeginTransaction s -> BeginTransaction (f s)
-  OtherSqlPiece s -> OtherSqlPiece (map (mapBlock f) s)
-  CopyFromStdinStatement s -> CopyFromStdinStatement (f s)
-  CopyFromStdinRows s -> CopyFromStdinRows (f s)
-  CopyFromStdinEnd s -> CopyFromStdinEnd (f s)
-
-data ParserState = OutsideCopy | InsideCopy
-  deriving stock (Eq, Show)
-
-sqlPieceParser :: ParserState -> Parser ([SqlPiece], ParserState)
-sqlPieceParser parserState = case parserState of
-  OutsideCopy -> first (: []) <$> outsideCopyParser
-  InsideCopy -> copyFromStdinAfterStatementParser 65536
+sqlPieceParser :: Parser SqlPiece
+sqlPieceParser =
+  CommentPiece
+    . blockText
+    <$> commentParser
+    <|> WhiteSpacePiece
+      <$> takeWhile1
+        (\c -> Char.isSpace c || c == '\n' || c == '\r' || c == '\t')
+    <|> OtherSqlPiece
+      <$> anySqlPieceParser
   where
-    outsideCopyParser =
-      (,OutsideCopy)
-        . CommentPiece
-        . blockText
-        <$> commentParser
-        <|> (,OutsideCopy)
-          . WhiteSpacePiece
-          <$> takeWhile1
-            (\c -> Char.isSpace c || c == '\n' || c == '\r' || c == '\t')
-        <|> (,InsideCopy)
-          <$> copyFromStdinStatementParser
-        <|> (,OutsideCopy)
-          . BeginTransaction
-          . blockListText
-          <$> beginTransactionParser
-        <|> (,OutsideCopy)
-          . OtherSqlPiece
-          <$> anySqlPieceParser
-    beginTransactionParser =
-      spaceSeparatedTokensToParser
-        [CITextToken "BEGIN", AllUntilEndOfStatement]
-        <|> spaceSeparatedTokensToParser
-          [ CITextToken "START",
-            CITextToken "TRANSACTION",
-            AllUntilEndOfStatement
-          ]
     anySqlPieceParser = do
       arbText <- spaceSeparatedTokensToParser [AllUntilEndOfStatement]
-      when (blockListText arbText == "") $ fail "Please report this as a bug in codd: trying to parse empty string as SQL piece"
+      when (blockListText arbText == "") $ fail "Please report this as a bug in hpgsql: trying to parse empty string as SQL piece"
       pure arbText
 
 data SqlToken = CITextToken !Text | SqlIdentifier | CommaSeparatedIdentifiers | Optional ![SqlToken] | CustomParserToken (Parser [BlockOrNotBlock]) | AllUntilEndOfStatement
@@ -228,74 +124,6 @@ listOfAtLeast1 elementTokens separator = do
         )
   pure $ firstEl <> otherEls
 
--- Urgh.. parsing statements precisely would benefit a lot from importing the lex parser
-copyFromStdinStatementParser :: Parser SqlPiece
-copyFromStdinStatementParser = do
-  stmt <-
-    spaceSeparatedTokensToParser
-      [ CITextToken "COPY",
-        SqlIdentifier,
-        Optional
-          [ CITextToken "(",
-            Optional [CommaSeparatedIdentifiers],
-            CITextToken ")"
-          ],
-        CITextToken "FROM",
-        CITextToken "STDIN",
-        AllUntilEndOfStatement
-      ]
-  seol <- eol
-  pure $ CopyFromStdinStatement $ blockListText stmt <> seol
-
--- | Parser to be used after "COPY FROM STDIN..." has been parsed with `copyFromStdinStatementParser`.
-copyFromStdinAfterStatementParser :: Int -> Parser ([SqlPiece], ParserState)
-copyFromStdinAfterStatementParser approxMaxChunkSize = do
-  when (approxMaxChunkSize <= 0) $
-    error "approxMaxChunkSize must be strictly positive"
-  -- This stateful parser is tricky to get right but it's proven to be much faster than simpler
-  -- alternatives I've tried (e.g. taking lines and concatenating them was incredibly slow for some reason)
-  (contents, (_, _, terminatorLen)) <-
-    Parsec.runScanner
-      (0 :: Int, 0 :: Int, 0 :: Int)
-      ( \(lenTotalParsed, lenCurrentLine, lenTerminatorSoFar) c ->
-          if lenTotalParsed >= approxMaxChunkSize && lenCurrentLine == 0
-            then Nothing -- Only stop at the beginning of a new line
-            else
-              if lenCurrentLine /= lenTerminatorSoFar && c == '\n'
-                then Just (1 + lenTotalParsed, 0, 0)
-                else
-                  if lenCurrentLine /= lenTerminatorSoFar
-                    then Just (1 + lenTotalParsed, 1 + lenCurrentLine, 0)
-                    else case (lenTerminatorSoFar, c) of
-                      (0, '\\') ->
-                        Just (1 + lenTotalParsed, 1 + lenCurrentLine, 1)
-                      (1, '.') ->
-                        Just (1 + lenTotalParsed, 1 + lenCurrentLine, 2)
-                      (2, '\n') ->
-                        Just (1 + lenTotalParsed, 1 + lenCurrentLine, 3) -- Last char in terminator, but `Just` because it needs to be in the parsed contents
-                      (3, _) -> Nothing -- Terminator with len=3 means it's been parsed, so end here.
-                      (_, '\n') -> Just (1 + lenTotalParsed, 0, 0)
-                      _ ->
-                        Just (1 + lenTotalParsed, 1 + lenCurrentLine, 0)
-      )
-  isEnd :: Bool <- Parsec.atEnd
-  let fullTerminator = "\\.\n"
-      eofTerminator = "\\."
-      terminatorFound
-        | terminatorLen == 3 = fullTerminator
-        | isEnd && terminatorLen == 2 = eofTerminator
-        | otherwise = ""
-      rows = Text.dropEnd terminatorLen contents
-  case (rows, terminatorFound) of
-    ("", "") -> pure ([], InsideCopy) -- This should be impossible
-    ("", _) -> pure ([CopyFromStdinEnd terminatorFound], OutsideCopy)
-    (_, "") -> pure ([CopyFromStdinRows rows], InsideCopy)
-    (_, _) ->
-      pure
-        ( [CopyFromStdinRows rows, CopyFromStdinEnd terminatorFound],
-          OutsideCopy
-        )
-
 -- | Parses 0 or more consecutive white-space or comments
 commentOrSpaceParser :: Bool -> Parser [BlockOrNotBlock]
 commentOrSpaceParser atLeastOne =
@@ -318,34 +146,6 @@ blockText = \case
 -- a Parser? We should probably use that instead of this.
 blockListText :: [BlockOrNotBlock] -> Text
 blockListText = Text.concat . map blockText
-
-flattenBlocks :: [BlockOrNotBlock] -> [BlockOrNotBlock]
-flattenBlocks =
-  map
-    ( \bs@(firstEl :| _) -> case firstEl of
-        NotBlock _ -> NotBlock $ blockListText $ NE.toList bs
-        Block _ -> Block $ blockListText $ NE.toList bs
-    )
-    . NE.groupBy
-      ( \a b -> case (a, b) of
-          (NotBlock _, NotBlock _) -> True
-          (Block _, Block _) -> True
-          _ -> False
-      )
-    . filter (\b -> blockText b /= "")
-
-flattenBlocksInPieces :: [SqlPiece] -> [SqlPiece]
-flattenBlocksInPieces =
-  map
-    ( \case
-        OtherSqlPiece bs -> OtherSqlPiece $ flattenBlocks bs
-        ctor -> ctor
-    )
-
-mapBlock :: (Text -> Text) -> BlockOrNotBlock -> BlockOrNotBlock
-mapBlock f = \case
-  Block t -> Block $ f t
-  NotBlock t -> NotBlock $ f t
 
 -- For now, this assumes standard_conforming_strings is always on.
 blockParser :: Parser [BlockOrNotBlock]
@@ -539,43 +339,6 @@ parseStdConformingString = fmap Block $ do
           (False, _) -> Just False
       )
   pure $ openingQuote <> rest
-
--- | Parses a value using backslash as an escape char for any char that matches
--- the supplied predicate. Stops at and does not consume the first predicate-passing
--- char, and does not include escape chars in the returned value,
--- as one would expect.
-parseWithEscapeCharProper :: (Char -> Bool) -> Parser Text
-parseWithEscapeCharProper untilc = do
-  cs <- Parsec.takeWhile (\c -> c /= '\\' && not (untilc c))
-  nextChar <- peekChar
-  case nextChar of
-    Nothing -> pure cs
-    Just '\\' -> do
-      void $ char '\\'
-      c <- Parsec.take 1
-      rest <- parseWithEscapeCharProper untilc
-      pure $ cs <> c <> rest
-    Just _ -> pure cs
-
-eitherToMay :: Either a b -> Maybe b
-eitherToMay (Left _) = Nothing
-eitherToMay (Right v) = Just v
-
--- | Parser that consumes only the space character, not other kinds of white space.
-skipJustSpace :: Parser ()
-skipJustSpace = skipWhile (== ' ')
-
--- | Parser that consumes any kind of Unicode space character, including \t, \n, \r, \f, \v.
-skipAllWhiteSpace :: Parser ()
-skipAllWhiteSpace = skipWhile Char.isSpace
-
-isWhiteSpacePiece :: SqlPiece -> Bool
-isWhiteSpacePiece (WhiteSpacePiece _) = True
-isWhiteSpacePiece _ = False
-
-isCommentPiece :: SqlPiece -> Bool
-isCommentPiece (CommentPiece _) = True
-isCommentPiece _ = False
 
 piecesToText :: (Foldable t) => t SqlPiece -> Text
 piecesToText = foldr ((<>) . sqlPieceText) ""
