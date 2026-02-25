@@ -1,11 +1,11 @@
-{ postgres, pkgs, coddtests, hspecArgs }:
+{ postgres, pkgs, hpgsql-tests, hspecArgs }:
 let fs = pkgs.lib.fileset;
 in
  pkgs.stdenv.mkDerivation {
-     name = "codd-test-with-db-results";
+     name = "hpgsql-tests-with-db-results";
      src = fs.toSource {
       root = ../.;
-      fileset = fs.unions [ ../conf/test-db ../test/migrations ../scripts/init-pg-cluster.sh ../scripts/wait-for-pg-ready.sh ];
+      fileset = fs.unions [ ../conf/test-db ../scripts/init-pg-cluster.sh ../scripts/wait-for-pg-ready.sh ];
      };
      nativeBuildInputs = [ postgres pkgs.bash pkgs.coreutils pkgs.glibcLocales ];
      installPhase = ''
@@ -22,12 +22,8 @@ in
       trap "pg_ctl stop || true" EXIT ERR
       pg_ctl -l "$out/pg_ctl_init.log" start
       scripts/wait-for-pg-ready.sh
-      # This isn't deterministic due to randomised testing and timing
-      # information in the output, so we're really
-      # abusing Nix's sandbox here, but it does makes life a lot easier.
-      ${coddtests}/bin/codd-test ${hspecArgs} 2>&1 | tee "$out/haskell-tests.log"
+      ${hpgsql-tests}/bin/hpgsql-tests ${hspecArgs}
       pg_ctl stop
       trap - EXIT ERR
-      cp -R "$PGDATA/log" "$out/pglogs"
     '';
   }

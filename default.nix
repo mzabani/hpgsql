@@ -2,13 +2,14 @@
 let
   addPgExtensions = postgres: postgres.withPackages (ps: [ ps.pg_cron ]);
 in
-{
+rec {
   hpgsql = pkgs.haskellPackages.hpgsql;
+  hpgsql-tests = pkgs.haskellPackages.hpgsql-tests;
   hpgsql-simple-compat = pkgs.haskellPackages.hpgsql-simple-compat;
   hpgsql-benchmarks = pkgs.haskellPackages.hpgsql-benchmarks;
   haskellPackages = pkgs.haskellPackages;
 
-  # testsPg16 = { hspecArgs ? "--match /DbDependentSpecs/"}: import ./nix/run-db-tests.nix { inherit pkgs coddtests hspecArgs; postgres = addPgExtensions pkgs.postgresql_16; };
+  testsPg16 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_16; };
   # testsPg15 = { hspecArgs ? "--match /DbDependentSpecs/"}: import ./nix/run-db-tests.nix { inherit pkgs coddtests hspecArgs; postgres = addPgExtensions pkgs.postgresql_15; };
   # testsPg14 = { hspecArgs ? "--match /DbDependentSpecs/"}: import ./nix/run-db-tests.nix { inherit pkgs coddtests hspecArgs; postgres = addPgExtensions pkgs.postgresql_14; };
   # testsPg13 = { hspecArgs ? "--match /DbDependentSpecs/"}: import ./nix/run-db-tests.nix { inherit pkgs coddtests hspecArgs; postgres = addPgExtensions pkgs.postgresql_13; };

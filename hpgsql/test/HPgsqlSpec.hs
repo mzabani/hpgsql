@@ -264,23 +264,23 @@ sendQueryAfterThreadKilled useTimeout conn = do
   -- Give enough time to be certain the query was sent to postgres
   -- See Note [`timeout` uses the same ThreadId] for why we need to test both
   -- `timeout` and `withAsync`
-  let firstQuery = queryWithStreaming (rowParser @(Only ())) conn "SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x)"
+  let firstQuery = queryWithStreaming (rowParser @(Only ())) conn [sql|SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x)|]
   didNotFinish <- emulatedTimeout 300_000 $ firstQuery >>= S.effects
   didNotFinish `shouldBe` Nothing
-  didNotFinish2 <- emulatedTimeout 300_000 $ queryWith (rowParser @(Only ())) conn "SELECT pg_sleep(999)"
+  didNotFinish2 <- emulatedTimeout 300_000 $ queryWith (rowParser @(Only ())) conn [sql|SELECT pg_sleep(999)|]
   didNotFinish2 `shouldBe` Nothing
-  didNotFinish3 <- emulatedTimeout 300_000 $ runPipeline conn (traverse pipelineCmd ["SELECT pg_sleep(5)", "SELECT 37"]) >>= sequenceA
+  didNotFinish3 <- emulatedTimeout 300_000 $ runPipeline conn (traverse pipelineCmd [[sql|SELECT pg_sleep(5)|], [sql|SELECT 37|]]) >>= sequenceA
   case didNotFinish3 of
     Just _ -> expectationFailure "didNotFinish3 was supposed to have been killed before finishing"
     Nothing -> pure ()
   didNotFinish4 <- emulatedTimeout 300_000 $ do
-    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineL (rowParser @(Only ())) "SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout" <*> pipelineCmd "SELECT pg_sleep(5)"
+    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineL (rowParser @(Only ())) [sql|SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout|] <*> pipelineCmd [sql|SELECT pg_sleep(5)|]
     void firstCmd
     secondCmd
   case didNotFinish4 of
     Just _ -> expectationFailure "didNotFinish4 was supposed to have been killed before finishing"
     Nothing -> pure ()
-  queryWith (rowParser @(Only Int)) conn "with nums(v) as (values (1), (2), (3)) SELECT v FROM nums"
+  queryWith (rowParser @(Only Int)) conn [sql|with nums(v) as (values (1), (2), (3)) SELECT v FROM nums|]
     `shouldReturn` [Only 1, Only 2, Only 3]
   where
     emulatedTimeout :: Int -> IO a -> IO (Maybe a)
@@ -288,19 +288,19 @@ sendQueryAfterThreadKilled useTimeout conn = do
 
 sendQueryAfterCopyKilled :: Bool -> HPgConnection -> IO ()
 sendQueryAfterCopyKilled useTimeout conn = do
-  execute_ conn "CREATE TABLE employee (    employee_id SERIAL PRIMARY KEY    , employee_name TEXT NOT NULL);"
+  execute_ conn [sql|CREATE TABLE employee (    employee_id SERIAL PRIMARY KEY    , employee_name TEXT NOT NULL);|]
   -- Give enough time to be certain the query was sent to postgres
   didNotFinish <- getQueryKilledBeforeItsFinished useTimeout 300_000
     $ withCopy
       conn
-      "COPY employee FROM STDIN WITH (FORMAT CSV);"
+      [sql|COPY employee FROM STDIN WITH (FORMAT CSV);|]
     $ do
       putCopyData conn "5,Dracula\n"
       putCopyData conn "6,The Grinch\n"
       threadDelay 10_000_000
   didNotFinish `shouldBe` Nothing
-  queryWith (rowParser @(Int, Text)) conn "SELECT * FROM employee" `shouldReturn` []
-  execute_ conn "DROP TABLE employee"
+  queryWith (rowParser @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
+  execute_ conn [sql|DROP TABLE employee|]
 
 assumptionsAboutThreadIdBehaviour :: HPgConnection -> IO ()
 assumptionsAboutThreadIdBehaviour _conn = do

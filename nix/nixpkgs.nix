@@ -9,6 +9,7 @@ let
       in {
        haskellPackages = newHaskellPackages // {
         hpgsql = final.haskell.lib.dontCheck newHaskellPackages.hpgsql;
+        hpgsql-tests = newHaskellPackages.hpgsql; # This doesn't reuse the build of hpgsql, which is not great
         hpgsql-benchmarks = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-benchmarks; 
         hpgsql-simple-compat = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-simple-compat;
       };
