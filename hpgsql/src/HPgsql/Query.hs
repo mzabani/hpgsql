@@ -3,18 +3,21 @@
 
 module HPgsql.Query
   ( Query (..), -- We probably shouldn't export this ctor?
+    SingleQuery (..), -- Nor this one
     sql,
   )
 where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import Data.String (IsString (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import HPgsql.Field (ToPgField (..))
-import HPgsql.Parsing (BlockOrNotBlock (..), SqlPiece (..), parseSql)
+import HPgsql.Parsing (BlockOrNotBlock (..), SqlPiece (..), parseSql, piecesToText)
 import HPgsql.TypeInfo (Oid)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
@@ -23,27 +26,29 @@ import Language.Haskell.TH.Quote
 data SqlFragment = LiteralText !Text | InterpolatedVar !String
   deriving stock (Show, Eq)
 
-data Query = Query {queryString :: ByteString, queryParams :: [(Maybe Oid, Maybe LBS.ByteString)]}
+newtype Query = Query (NonEmpty SingleQuery)
+
+data SingleQuery = SingleQuery {queryString :: ByteString, queryParams :: [(Maybe Oid, Maybe LBS.ByteString)]}
 
 instance IsString Query where
-  fromString s = Query (encodeUtf8 $ Text.pack s) []
-
-parseQuery :: String -> Either String [SqlPiece]
-parseQuery q =
-  let sqlPieces = parseSql q
-   in Right sqlPieces
+  fromString s =
+    let statements = parseSql s
+     in Query $ fmap (\pieces -> SingleQuery (encodeUtf8 $ piecesToText pieces) []) statements
 
 sql :: QuasiQuoter
 sql =
   QuasiQuoter
-    { quoteExp = \s ->
-        case parseQuery s of
-          Left err -> fail err
-          Right q -> liftQuery q,
+    { quoteExp = liftQueries . parseSql,
       quotePat = error "HPgsql's sql quasiquoter does not implement quotePat",
       quoteType = error "HPgsql's sql quasiquoter does not implement quoteType",
       quoteDec = error "HPgsql's sql quasiquoter does not implement quoteDec"
     }
+
+liftQueries :: NonEmpty [SqlPiece] -> Q Exp
+liftQueries statements = do
+  queryExps <- mapM liftQuery statements
+  case queryExps of
+    (x :| xs) -> [|Query ($(return x) NE.:| $(return $ ListE xs))|]
 
 liftQuery :: [SqlPiece] -> Q Exp
 liftQuery pieces = do
@@ -51,7 +56,7 @@ liftQuery pieces = do
       (sqlString, varNames) = buildSqlAndVars allFragments 1
   paramExps <- mapM generateParamExp varNames
   let paramList = ListE paramExps
-  [|Query (encodeUtf8 $(litE (stringL sqlString))) $(return paramList)|]
+  [|SingleQuery (encodeUtf8 $(litE (stringL sqlString))) $(return paramList)|]
 
 -- | Walk through fragments in order, building the SQL string with $N placeholders
 -- and collecting the interpolated variable names.
@@ -66,7 +71,7 @@ buildSqlAndVars (InterpolatedVar var : rest) n =
 
 -- | Extract SqlFragment objects from SqlPiece
 extractFragments :: SqlPiece -> [SqlFragment]
-extractFragments (OtherSqlPiece blocks) = concatMap parseBlock blocks
+extractFragments (SqlStatementPiece blocks) = concatMap parseBlock blocks
 extractFragments _ = []
 
 parseBlock :: BlockOrNotBlock -> [SqlFragment]

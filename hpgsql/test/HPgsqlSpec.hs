@@ -16,13 +16,14 @@ import Data.Functor ((<&>))
 import Data.Int (Int16, Int32, Int64, Int8)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.Scientific (Scientific)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import qualified Data.Text.IO as Text
 import Data.Text.Encoding (encodeUtf8)
+import qualified Data.Text.IO as Text
 import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
 import Data.Time.LocalTime (CalendarDiffTime (..))
 import Data.Vector (Vector)
@@ -34,8 +35,8 @@ import DbUtils
 import Debug.Trace
 import GHC.Generics (Generic)
 import HPgsql
-import HPgsql.Query (sql, Query(..))
 import HPgsql.Field (AllowNull (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
+import HPgsql.Query (Query (..), SingleQuery (..), sql)
 import HPgsql.TypeInfo (Oid)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
@@ -54,6 +55,9 @@ spec = do
     it
       "Querying and returning a few rows"
       queryingAndReturningAFewRows
+    it
+      "Querying and returning a few rows with more than one statement in the same query"
+      queryingAndReturningAFewRowsMoreThanOneStatement
     it
       "Querying and returning 0 rows"
       queryingAndReturningZeroRows
@@ -78,9 +82,6 @@ spec = do
     it
       "Query that errors before returning any rows and another successful query after that"
       queryThatErrorsBeforeReturningAnyRowsFollowedBySuccessfulQuery
-    it
-      "Two statements in streaming query are not supported"
-      twoStatementsInStreamingQueryNotSupported
     it
       "Applying commands without caring for returned rows/value"
       discardingReturnCountsAndValues
@@ -193,20 +194,23 @@ spec = do
       copyError
   describe "SQL Quasiquoter" $ do
     it "parses SQL without interpolation" $ do
-      let query = [sql|SELECT * FROM users|]
+      let Query queries = [sql|SELECT * FROM users|]
+          query = getUniqueNE queries
       queryString query `shouldBe` encodeUtf8 "SELECT * FROM users"
       queryParams query `shouldBe` []
-    
+
     it "parses SQL with single interpolation" $ do
       let userId = 42 :: Int
-      let query = [sql|SELECT * FROM users WHERE id = #{userId}|]
+          Query queries = [sql|SELECT * FROM users WHERE id = #{userId}|]
+          query = getUniqueNE queries
       queryString query `shouldBe` encodeUtf8 "SELECT * FROM users WHERE id = $1"
       length (queryParams query) `shouldBe` 1
-    
+
     it "parses SQL with multiple interpolations" $ do
       let userId = 42 :: Int
           userName = "john" :: Text
-      let query = [sql|SELECT * FROM users WHERE id = #{userId} AND name = #{userName}|]
+          Query queries = [sql|SELECT * FROM users WHERE id = #{userId} AND name = #{userName}|]
+          query = getUniqueNE queries
       queryString query `shouldBe` encodeUtf8 "SELECT * FROM users WHERE id = $1 AND name = $2"
       length (queryParams query) `shouldBe` 2
   aroundConn $ describe "Thread safety and trickier error semantics" $ do
@@ -362,6 +366,10 @@ queryingAndReturningAFewRows conn =
     const $
       queryWith (rowParser @(Int, Int)) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
 
+queryingAndReturningAFewRowsMoreThanOneStatement :: HPgConnection -> IO ()
+queryingAndReturningAFewRowsMoreThanOneStatement conn = do
+  queryWith (rowParser @(Int, Int)) conn "SELECT 1; SELECT TRUE; with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
+
 queryingAndReturningZeroRows :: HPgConnection -> IO ()
 queryingAndReturningZeroRows conn =
   forM_ [1 .. 2] $
@@ -434,11 +442,6 @@ queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = d
   when cancelQueryExplicitly $ liftIO $ cancelAnyRunningStatement conn
   execute conn "select true" `shouldReturn` 1
   queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
-
-twoStatementsInStreamingQueryNotSupported :: HPgConnection -> IO ()
-twoStatementsInStreamingQueryNotSupported conn = do
-  queryWith (rowParser @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x); SELECT TRUE FROM generate_series(10,20) subq(x)"
-    `shouldThrow` pgErrorMustContain [(ErrorCode, "42601"), (ErrorHumanReadableMsg, "cannot insert multiple commands into a prepared statement")]
 
 discardingReturnCountsAndValues :: HPgConnection -> IO ()
 discardingReturnCountsAndValues conn = withRollback conn $ do
@@ -852,6 +855,11 @@ withRollback conn f = do
   case res of
     Left e -> throw e
     Right v -> pure v
+
+getUniqueNE :: (HasCallStack) => NonEmpty a -> a
+getUniqueNE l
+  | length l /= 1 = error "NonEmpty list expected to have a single element has more than one"
+  | otherwise = NE.head l
 
 -- Note [`timeout` uses the same ThreadId]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

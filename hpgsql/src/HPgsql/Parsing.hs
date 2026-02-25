@@ -19,7 +19,6 @@ import Control.Monad
   )
 import Data.Attoparsec.Text
   ( Parser,
-    asciiCI,
     char,
     endOfInput,
     many',
@@ -31,11 +30,13 @@ import Data.Attoparsec.Text
   )
 import qualified Data.Attoparsec.Text as Parsec
 import qualified Data.Char as Char
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Prelude hiding (takeWhile)
 
-data SqlPiece = CommentPiece !Text | WhiteSpacePiece !Text | OtherSqlPiece ![BlockOrNotBlock]
+data SqlPiece = CommentPiece !Text | WhiteSpacePiece !Text | SqlStatementPiece ![BlockOrNotBlock]
   deriving stock (Show, Eq)
 
 -- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which
@@ -46,34 +47,48 @@ data SqlPiece = CommentPiece !Text | WhiteSpacePiece !Text | OtherSqlPiece ![Blo
 data BlockOrNotBlock = Block !Text | NotBlock !Text
   deriving stock (Eq, Show)
 
-parseSql :: String -> [SqlPiece]
+-- | Parses one or more SQL statements (separated by semi-colons), and
+-- returns one sublist per complete SQL statement.
+parseSql :: String -> NonEmpty [SqlPiece]
 parseSql str =
-  case Parsec.parseOnly (many' sqlPieceParser <* endOfInput) (Text.pack str) of
-    Right pieces -> pieces
-    Left err -> error $ "Please report this as a bug in hpgsql: " ++ err
+  case Parsec.parseOnly ((,,) <$> many' sqlStatementParser <*> commentsOrWhitespaceParser <*> endOfInput) (Text.pack str) of
+    Right (statements, whitespaceAtEnd, !()) -> case NE.nonEmpty statements of
+      Nothing -> error "Parsed 0 statements. Please report this as a bug in hpgsql"
+      Just neStatements -> mapOnlyLastEl (++ whitespaceAtEnd) neStatements
+    Left err -> error $ "Failed to parse SQL. Please report this as a bug in hpgsql: " ++ err
+  where
+    mapOnlyLastEl :: (a -> a) -> NonEmpty a -> NonEmpty a
+    mapOnlyLastEl f (l :| []) = NE.singleton $ f l
+    mapOnlyLastEl f (x :| (y : ys)) = NE.cons x $ mapOnlyLastEl f (y :| ys)
 
 sqlPieceText :: SqlPiece -> Text
 sqlPieceText (CommentPiece s) = s
 sqlPieceText (WhiteSpacePiece s) = s
-sqlPieceText (OtherSqlPiece ls) = Text.concat $ map blockText ls
+sqlPieceText (SqlStatementPiece ls) = Text.concat $ map blockText ls
 
-sqlPieceParser :: Parser SqlPiece
-sqlPieceParser =
-  CommentPiece
-    . blockText
-    <$> commentParser
-    <|> WhiteSpacePiece
-      <$> takeWhile1
-        (\c -> Char.isSpace c || c == '\n' || c == '\r' || c == '\t')
-    <|> OtherSqlPiece
-      <$> anySqlPieceParser
+sqlStatementParser :: Parser [SqlPiece]
+sqlStatementParser = do
+  commentsAndWhiteSpace <- commentsOrWhitespaceParser
+  statement <- SqlStatementPiece <$> anySqlPieceParser
+  pure $ commentsAndWhiteSpace ++ [statement]
   where
     anySqlPieceParser = do
       arbText <- spaceSeparatedTokensToParser [AllUntilEndOfStatement]
       when (blockListText arbText == "") $ fail "Please report this as a bug in hpgsql: trying to parse empty string as SQL piece"
       pure arbText
 
-data SqlToken = CITextToken !Text | SqlIdentifier | CommaSeparatedIdentifiers | Optional ![SqlToken] | CustomParserToken (Parser [BlockOrNotBlock]) | AllUntilEndOfStatement
+commentsOrWhitespaceParser :: Parser [SqlPiece]
+commentsOrWhitespaceParser =
+  many'
+    ( CommentPiece
+        . blockText
+        <$> commentParser
+        <|> WhiteSpacePiece
+          <$> takeWhile1
+            (\c -> Char.isSpace c || c == '\n' || c == '\r' || c == '\t')
+    )
+
+data SqlToken = AllUntilEndOfStatement
 
 spaceSeparatedTokensToParser :: [SqlToken] -> Parser [BlockOrNotBlock]
 spaceSeparatedTokensToParser allTokens = case allTokens of
@@ -81,19 +96,12 @@ spaceSeparatedTokensToParser allTokens = case allTokens of
   [token1] -> parseToken token1
   (token1 : tokens) -> do
     s1 <- parseToken token1
-    spaces <- case (s1, token1) of
-      ([], Optional _) -> pure []
-      _ -> commentOrSpaceParser True <|> pure []
+    spaces <- commentOrSpaceParser True <|> pure []
 
     others <- spaceSeparatedTokensToParser tokens
     pure $ s1 <> spaces <> others
   where
     parseToken = \case
-      Optional t -> spaceSeparatedTokensToParser t <|> pure []
-      CITextToken t -> (\pt -> [Block pt]) <$> asciiCI t
-      CustomParserToken p -> p
-      SqlIdentifier -> objIdentifier
-      CommaSeparatedIdentifiers -> listOfAtLeast1 [SqlIdentifier] ","
       AllUntilEndOfStatement -> do
         t1 <-
           NotBlock
@@ -110,19 +118,6 @@ spaceSeparatedTokensToParser allTokens = case allTokens of
             -- After reading blocks or just a char, we still need to find a semi-colon to get a statement from start to finish!
             t3 <- parseToken AllUntilEndOfStatement
             pure $ t1 : mconcat t2 <> t3
-
-listOfAtLeast1 :: [SqlToken] -> Text -> Parser [BlockOrNotBlock]
-listOfAtLeast1 elementTokens separator = do
-  firstEl <- spaceSeparatedTokensToParser elementTokens
-  otherEls <-
-    mconcat
-      <$> many'
-        ( spaceSeparatedTokensToParser $
-            CustomParserToken (pure [])
-              : CITextToken separator
-              : elementTokens
-        )
-  pure $ firstEl <> otherEls
 
 -- | Parses 0 or more consecutive white-space or comments
 commentOrSpaceParser :: Bool -> Parser [BlockOrNotBlock]
@@ -273,26 +268,6 @@ parseWithEscapeCharPreserve untilc = do
       rest <- parseWithEscapeCharPreserve untilc
       pure $ cs <> c <> rest
     _ -> pure cs
-
--- | Identifiers can be in fully qualified form `"database"."schema"."objectname"`,
--- with and without double quoting, e.g.: `"schema".tablename`, or just a simple `tablename`.
-objIdentifier :: Parser [BlockOrNotBlock]
-objIdentifier =
-  let singleIdentifier =
-        fmap (: []) $
-          doubleQuotedIdentifier
-            <|> Block
-              <$> takeWhile1
-                ( \c ->
-                    not (Char.isSpace c)
-                      && c
-                        /= ','
-                      && c
-                        /= '.'
-                      && c
-                        /= ')'
-                ) -- TODO: What are the valid chars for identifiers?? Figure it out!!
-   in listOfAtLeast1 [CustomParserToken singleIdentifier] "."
 
 doubleQuotedIdentifier :: Parser BlockOrNotBlock
 doubleQuotedIdentifier = fmap Block $ do

@@ -52,9 +52,10 @@ import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, mask, mask_, onException, throw, try, withException)
-import Control.Monad (forM, join, unless, void, when)
+import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
+import Data.Bifunctor (second)
 import qualified Data.Binary as Binary
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
@@ -77,7 +78,7 @@ import HPgsql.Connection (ConnString (..))
 import HPgsql.Field (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
-import HPgsql.Query (Query (..))
+import HPgsql.Query (Query (..), SingleQuery (..))
 import HPgsql.TypeInfo (Format (..))
 import Network.Socket (Socket)
 import qualified Network.Socket as Socket
@@ -304,6 +305,7 @@ data PoolCleanup = PoolCleanup
     unlistenAll :: Bool,
     -- | Throws an exception if there is an open transaction or if there's a transaction in error state. Defaults to True.
     checkTransactionState :: Bool
+    -- TODO: Check for any temporary tables and throw?
   }
 
 -- | Run this function before putting the connection back into a pool
@@ -867,7 +869,7 @@ executeMany_ :: HPgConnection -> [Query] -> IO ()
 executeMany_ conn qry = void $ executeMany conn qry
 
 mkQuery :: (ToPgRow p) => ByteString -> p -> Query
-mkQuery qry p = Query qry (toPgParams p)
+mkQuery qry p = Query $ NE.singleton $ SingleQuery qry (toPgParams p)
 
 queryWithStreaming :: RowParser a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryWithStreaming rparser conn qry = join $ runPipeline conn $ pipelineS rparser qry
@@ -1020,7 +1022,7 @@ drainOrphanedQueriesAndRunWithControlMsgLock conn = do
         Nothing -> pure True
         Just tid -> (`elem` [ThreadDied, ThreadFinished]) <$> threadStatus tid
 
-data Pipeline a = Pipeline [(Query, Maybe [Format])] (HPgConnection -> [QueryId] -> a)
+data Pipeline a = Pipeline [(SingleQuery, Maybe [Format])] (HPgConnection -> [QueryId] -> a)
   deriving stock (Functor)
 
 instance Applicative Pipeline where
@@ -1033,21 +1035,37 @@ instance Applicative Pipeline where
      in f g
 
 pipelineS :: RowParser a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineS rowparser@(RowParser _ _ expectedColFmts) q = Pipeline [(q, Just expectedColFmts)] (\conn [qryId] -> pure $ consumeStreamingResults rowparser conn qryId)
+pipelineS rowparser@(RowParser _ _ expectedColFmts) (Query (lastAndInitNE -> (firstQueriesToSend, lastQueryToSend))) =
+  Pipeline
+    (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just expectedColFmts)])
+    ( \conn qryIds -> do
+        case lastAndInit qryIds of
+          (firstQueries, mLastQry) -> do
+            forM_ firstQueries $ consumeResultsIgnoreRows conn
+            pure $ consumeStreamingResults rowparser conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
+    )
 
 pipelineL :: RowParser a -> Query -> Pipeline (IO [a])
 pipelineL rowparser q = join . fmap S.toList_ <$> pipelineS rowparser q
 
 pipelineCmd :: Query -> Pipeline (IO Int64)
-pipelineCmd q = Pipeline [(q, Nothing)] (\conn [qryId] -> consumeResultsIgnoreRows conn qryId)
+pipelineCmd (Query qs) =
+  Pipeline
+    (map (,Nothing) (NE.toList qs))
+    ( \conn qryIds -> do
+        case lastAndInit qryIds of
+          (firstQueries, mLastQry) -> do
+            forM_ firstQueries $ consumeResultsIgnoreRows conn
+            consumeResultsIgnoreRows conn (fromMaybe (error "pipelineCmd internal bug: no mLastQry") mLastQry)
+    )
 
 -- | IMPORTANT: Do not consume query results from the same pipeline in different threads. The thread
 -- that sends the pipeline must consume the results of every query in the pipeline itself, and in order.
--- This is not officially supported by HPgsql and may result in deadlocks or worse: undefined behaviour.
+-- Anything else is not officially supported by HPgsql and may result in deadlocks or worse: undefined behaviour.
 runPipeline :: HPgConnection -> Pipeline a -> IO a
 runPipeline conn (Pipeline [] run) = pure $ run conn []
 runPipeline conn (Pipeline (NE.fromList -> queries) run) = do
-  let toMessages (Query qryString qryParams, mRowInfo) =
+  let toMessages (SingleQuery qryString qryParams, mRowInfo) =
         [ SomeMessage $ Parse qryString (map fst qryParams),
           SomeMessage $
             Bind
@@ -1105,13 +1123,14 @@ queryWith :: RowParser a -> HPgConnection -> Query -> IO [a]
 queryWith rparser conn qry = join $ runPipeline conn $ pipelineL rparser qry
 
 withCopy :: HPgConnection -> Query -> IO () -> IO Int64
-withCopy conn (Query qryString qryParams) copyFn = do
+withCopy conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) copyFn = do
+  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmd (Query fqne)
   thisThreadId <- getMyWeakThreadId
   atomicallyInitiatePipelineOrPanicAndThenConsumeResults
     conn
     (CopyQuery StillCopying :| [])
-    [ SomeMessage $ Parse qryString (map fst qryParams),
-      SomeMessage $ Bind {paramsValuesInOrder = map snd qryParams, resultColumnFmts = []},
+    [ SomeMessage $ Parse queryString (map fst queryParams),
+      SomeMessage $ Bind {paramsValuesInOrder = map snd queryParams, resultColumnFmts = []},
       -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
       SomeMessage Execute,
       SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
@@ -1226,6 +1245,21 @@ lastMaybe :: [a] -> Maybe a
 lastMaybe [] = Nothing
 lastMaybe [x] = Just x
 lastMaybe (_ : xs) = lastMaybe xs
+
+lastAndInit :: [a] -> ([a], Maybe a)
+lastAndInit xs = case NE.nonEmpty xs of
+  Nothing -> ([], Nothing)
+  Just nxs -> second Just $ lastAndInitNE nxs
+
+lastAndInitNE :: NonEmpty a -> ([a], a)
+lastAndInitNE (x :| []) = ([], x)
+lastAndInitNE (x :| xs) =
+  let (others, l) = lastAndInitNE (NE.fromList xs)
+   in (x : others, l)
+
+whenNonEmpty :: [a] -> (NonEmpty a -> IO b) -> IO ()
+whenNonEmpty [] _ = pure ()
+whenNonEmpty (x : xs) f = void $ f (x :| xs)
 
 -- whenM :: IO Bool -> IO a -> IO ()
 -- whenM cond f = do
