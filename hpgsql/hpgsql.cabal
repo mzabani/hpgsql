@@ -95,6 +95,7 @@ test-suite hpgsql-test
       AllSpecs
       DbUtils
       HPgsqlSpec
+      ParsingSpec
       Paths_hpgsql
   autogen-modules:
       Paths_hpgsql
@@ -143,6 +144,7 @@ test-suite hpgsql-test
     , hpgsql
     , hspec
     , hspec-hedgehog
+    , random
     , safe-exceptions
     , scientific
     , streaming

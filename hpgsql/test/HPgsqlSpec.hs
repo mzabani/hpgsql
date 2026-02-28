@@ -192,27 +192,6 @@ spec = do
     it
       "COPY error"
       copyError
-  describe "SQL Quasiquoter" $ do
-    it "parses SQL without interpolation" $ do
-      let Query queries = [sql|SELECT * FROM users|]
-          query = getUniqueNE queries
-      queryString query `shouldBe` encodeUtf8 "SELECT * FROM users"
-      queryParams query `shouldBe` []
-
-    it "parses SQL with single interpolation" $ do
-      let userId = 42 :: Int
-          Query queries = [sql|SELECT * FROM users WHERE id = #{userId}|]
-          query = getUniqueNE queries
-      queryString query `shouldBe` encodeUtf8 "SELECT * FROM users WHERE id = $1"
-      length (queryParams query) `shouldBe` 1
-
-    it "parses SQL with multiple interpolations" $ do
-      let userId = 42 :: Int
-          userName = "john" :: Text
-          Query queries = [sql|SELECT * FROM users WHERE id = #{userId} AND name = #{userName}|]
-          query = getUniqueNE queries
-      queryString query `shouldBe` encodeUtf8 "SELECT * FROM users WHERE id = $1 AND name = $2"
-      length (queryParams query) `shouldBe` 2
   aroundConn $ describe "Thread safety and trickier error semantics" $ do
     it
       "Send queries concurrently"
@@ -855,11 +834,6 @@ withRollback conn f = do
   case res of
     Left e -> throw e
     Right v -> pure v
-
-getUniqueNE :: (HasCallStack) => NonEmpty a -> a
-getUniqueNE l
-  | length l /= 1 = error "NonEmpty list expected to have a single element has more than one"
-  | otherwise = NE.head l
 
 -- Note [`timeout` uses the same ThreadId]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

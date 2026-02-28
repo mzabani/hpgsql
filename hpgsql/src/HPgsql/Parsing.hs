@@ -3,8 +3,9 @@
 -- This module contains parsers that are helpful to separate SQL statements from each other by finding query boundaries: semi-colons, but not when inside a string or a parenthesised expression, for example.
 module HPgsql.Parsing
   ( parseSql,
-    piecesToText,
-    SqlPiece (..),
+    flattenBlocksInPieces,
+    sqlStatementText,
+    SqlStatement (..),
     BlockOrNotBlock (..),
   )
 where
@@ -15,7 +16,6 @@ import Control.Applicative
   )
 import Control.Monad
   ( void,
-    when,
   )
 import Data.Attoparsec.Text
   ( Parser,
@@ -32,11 +32,12 @@ import qualified Data.Attoparsec.Text as Parsec
 import qualified Data.Char as Char
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Prelude hiding (takeWhile)
 
-data SqlPiece = CommentPiece !Text | WhiteSpacePiece !Text | SqlStatementPiece ![BlockOrNotBlock]
+data SqlStatement = SqlStatement ![BlockOrNotBlock]
   deriving stock (Show, Eq)
 
 -- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which
@@ -47,77 +48,37 @@ data SqlPiece = CommentPiece !Text | WhiteSpacePiece !Text | SqlStatementPiece !
 data BlockOrNotBlock = Block !Text | NotBlock !Text
   deriving stock (Eq, Show)
 
--- | Parses one or more SQL statements (separated by semi-colons), and
--- returns one sublist per complete SQL statement.
-parseSql :: String -> NonEmpty [SqlPiece]
-parseSql str =
-  case Parsec.parseOnly ((,,) <$> many' sqlStatementParser <*> commentsOrWhitespaceParser <*> endOfInput) (Text.pack str) of
-    Right (statements, whitespaceAtEnd, !()) -> case NE.nonEmpty statements of
-      Nothing -> error "Parsed 0 statements. Please report this as a bug in hpgsql"
-      Just neStatements -> mapOnlyLastEl (++ whitespaceAtEnd) neStatements
-    Left err -> error $ "Failed to parse SQL. Please report this as a bug in hpgsql: " ++ err
-  where
-    mapOnlyLastEl :: (a -> a) -> NonEmpty a -> NonEmpty a
-    mapOnlyLastEl f (l :| []) = NE.singleton $ f l
-    mapOnlyLastEl f (x :| (y : ys)) = NE.cons x $ mapOnlyLastEl f (y :| ys)
+-- | Parses one or more SQL statements (separated by semi-colons).
+parseSql :: Text -> NonEmpty SqlStatement
+parseSql (Text.strip -> str) = case Parsec.parseOnly (many' sqlStatementParser <* endOfInput) str of
+  Right mStatements ->
+    case NE.nonEmpty mStatements of
+      Just stmts -> fmap SqlStatement stmts
+      Nothing -> if str == "" then NE.singleton $ SqlStatement [] else error "Bug in hpgsql when parsing SQL. No statements found."
+  Left err -> error $ "Bug in hpgsql when parsing SQL: " ++ err
 
-sqlPieceText :: SqlPiece -> Text
-sqlPieceText (CommentPiece s) = s
-sqlPieceText (WhiteSpacePiece s) = s
-sqlPieceText (SqlStatementPiece ls) = Text.concat $ map blockText ls
+sqlStatementText :: SqlStatement -> Text
+sqlStatementText (SqlStatement ls) = Text.concat $ map blockText ls
 
-sqlStatementParser :: Parser [SqlPiece]
+sqlStatementParser :: Parser [BlockOrNotBlock]
 sqlStatementParser = do
-  commentsAndWhiteSpace <- commentsOrWhitespaceParser
-  statement <- SqlStatementPiece <$> anySqlPieceParser
-  pure $ commentsAndWhiteSpace ++ [statement]
-  where
-    anySqlPieceParser = do
-      arbText <- spaceSeparatedTokensToParser [AllUntilEndOfStatement]
-      when (blockListText arbText == "") $ fail "Please report this as a bug in hpgsql: trying to parse empty string as SQL piece"
-      pure arbText
-
-commentsOrWhitespaceParser :: Parser [SqlPiece]
-commentsOrWhitespaceParser =
-  many'
-    ( CommentPiece
-        . blockText
-        <$> commentParser
-        <|> WhiteSpacePiece
-          <$> takeWhile1
-            (\c -> Char.isSpace c || c == '\n' || c == '\r' || c == '\t')
-    )
-
-data SqlToken = AllUntilEndOfStatement
-
-spaceSeparatedTokensToParser :: [SqlToken] -> Parser [BlockOrNotBlock]
-spaceSeparatedTokensToParser allTokens = case allTokens of
-  [] -> pure []
-  [token1] -> parseToken token1
-  (token1 : tokens) -> do
-    s1 <- parseToken token1
-    spaces <- commentOrSpaceParser True <|> pure []
-
-    others <- spaceSeparatedTokensToParser tokens
-    pure $ s1 <> spaces <> others
-  where
-    parseToken = \case
-      AllUntilEndOfStatement -> do
-        t1 <-
-          NotBlock
-            <$> takeWhile
-              (\c -> not (isPossibleBlockStartingChar c) && c /= ';')
-        mc <- peekChar
-        case mc of
-          Nothing -> pure [t1]
-          Just ';' -> do
-            void $ char ';'
-            pure [t1, NotBlock ";"]
-          Just _ -> do
-            t2 <- many1 blockParser <|> (\pt -> [[NotBlock pt]]) <$> Parsec.take 1
-            -- After reading blocks or just a char, we still need to find a semi-colon to get a statement from start to finish!
-            t3 <- parseToken AllUntilEndOfStatement
-            pure $ t1 : mconcat t2 <> t3
+  t1 <-
+    takeWhile
+      (\c -> not (isPossibleBlockStartingChar c) && c /= ';')
+  mc <- peekChar
+  case mc of
+    Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [NotBlock t1]
+    Just ';' -> do
+      void $ char ';'
+      -- We take any comments followed by EOF here
+      cws <- optional $ commentOrSpaceParser True <* endOfInput
+      pure $ [NotBlock t1, NotBlock ";"] ++ fromMaybe [] cws
+    Just _ -> do
+      t2 <- many1 blockParser <|> (\pt -> [[NotBlock pt]]) <$> Parsec.take 1
+      -- After reading blocks or just a char, we still need to find a semi-colon
+      -- or EOF to get a statement from start to finish!
+      t3 <- sqlStatementParser <|> ([] <$ endOfInput)
+      pure $ NotBlock t1 : mconcat t2 <> t3
 
 -- | Parses 0 or more consecutive white-space or comments
 commentOrSpaceParser :: Bool -> Parser [BlockOrNotBlock]
@@ -125,9 +86,9 @@ commentOrSpaceParser atLeastOne =
   if atLeastOne
     then many1 (commentParser <|> Block <$> takeWhile1 Char.isSpace)
     else many' (commentParser <|> Block <$> takeWhile1 Char.isSpace)
-
-commentParser :: Parser BlockOrNotBlock
-commentParser = doubleDashComment <|> cStyleComment
+  where
+    commentParser :: Parser BlockOrNotBlock
+    commentParser = doubleDashComment <|> cStyleComment
 
 eol :: Parser Text
 eol = string "\n" <|> string "\r\n"
@@ -315,5 +276,21 @@ parseStdConformingString = fmap Block $ do
       )
   pure $ openingQuote <> rest
 
-piecesToText :: (Foldable t) => t SqlPiece -> Text
-piecesToText = foldr ((<>) . sqlPieceText) ""
+flattenBlocks :: [BlockOrNotBlock] -> [BlockOrNotBlock]
+flattenBlocks =
+  map
+    ( \bs@(firstEl :| _) -> case firstEl of
+        NotBlock _ -> NotBlock $ blockListText $ NE.toList bs
+        Block _ -> Block $ blockListText $ NE.toList bs
+    )
+    . NE.groupBy
+      ( \a b -> case (a, b) of
+          (NotBlock _, NotBlock _) -> True
+          (Block _, Block _) -> True
+          _ -> False
+      )
+    . filter (\b -> blockText b /= "")
+
+flattenBlocksInPieces :: SqlStatement -> SqlStatement
+flattenBlocksInPieces (SqlStatement blks) =
+  SqlStatement $ flattenBlocks blks

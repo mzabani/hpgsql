@@ -17,7 +17,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import HPgsql.Field (ToPgField (..))
-import HPgsql.Parsing (BlockOrNotBlock (..), SqlPiece (..), parseSql, piecesToText)
+import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), parseSql, sqlStatementText)
 import HPgsql.TypeInfo (Oid)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
@@ -32,27 +32,27 @@ data SingleQuery = SingleQuery {queryString :: ByteString, queryParams :: [(Mayb
 
 instance IsString Query where
   fromString s =
-    let statements = parseSql s
-     in Query $ fmap (\pieces -> SingleQuery (encodeUtf8 $ piecesToText pieces) []) statements
+    let statements = parseSql (Text.pack s)
+     in Query $ fmap (\stmt -> SingleQuery (encodeUtf8 $ sqlStatementText stmt) []) statements
 
 sql :: QuasiQuoter
 sql =
   QuasiQuoter
-    { quoteExp = liftQueries . parseSql,
+    { quoteExp = liftQueries . parseSql . Text.pack,
       quotePat = error "HPgsql's sql quasiquoter does not implement quotePat",
       quoteType = error "HPgsql's sql quasiquoter does not implement quoteType",
       quoteDec = error "HPgsql's sql quasiquoter does not implement quoteDec"
     }
 
-liftQueries :: NonEmpty [SqlPiece] -> Q Exp
+liftQueries :: NonEmpty SqlStatement -> Q Exp
 liftQueries statements = do
   queryExps <- mapM liftQuery statements
   case queryExps of
     (x :| xs) -> [|Query ($(return x) NE.:| $(return $ ListE xs))|]
 
-liftQuery :: [SqlPiece] -> Q Exp
-liftQuery pieces = do
-  let allFragments = concatMap extractFragments pieces
+liftQuery :: SqlStatement -> Q Exp
+liftQuery stmt = do
+  let allFragments = extractFragments stmt
       (sqlString, varNames) = buildSqlAndVars allFragments 1
   paramExps <- mapM generateParamExp varNames
   let paramList = ListE paramExps
@@ -69,10 +69,9 @@ buildSqlAndVars (InterpolatedVar var : rest) n =
   let (restSql, restVars) = buildSqlAndVars rest (n + 1)
    in ("$" ++ show n ++ restSql, var : restVars)
 
--- | Extract SqlFragment objects from SqlPiece
-extractFragments :: SqlPiece -> [SqlFragment]
-extractFragments (SqlStatementPiece blocks) = concatMap parseBlock blocks
-extractFragments _ = []
+-- | Extract SqlFragment objects from SqlStatement
+extractFragments :: SqlStatement -> [SqlFragment]
+extractFragments (SqlStatement blocks) = concatMap parseBlock blocks
 
 parseBlock :: BlockOrNotBlock -> [SqlFragment]
 parseBlock (NotBlock text) = parseInterpolations text

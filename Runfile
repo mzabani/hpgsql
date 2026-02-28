@@ -64,8 +64,8 @@ format-hs:
 test-no-db:
     set -eo pipefail
     ARGSARRAY=("$@")
-    [ -z "$1" ] && ARGSARRAY=(--skip /DbDependentSpecs/ --skip /SystemResourcesSpecs/)
-    TARGS=$(printf "'%s' " "$@") && [ -z "$1" ] && TARGS="--skip /DbDependentSpecs/ --skip /SystemResourcesSpecs/"
+    [ -z "$1" ] && ARGSARRAY=(--match /Parsing/)
+    TARGS=$(printf "'%s' " "$@") && [ -z "$1" ] && TARGS="--match /Parsing/"
     if [ -n "$NIX" ]; then
         nix-build --no-out-link -A testsNoDb --argstr hspecArgs "$TARGS"
     else
@@ -82,7 +82,7 @@ test-with-db:
     set -eo pipefail
     [ -z "$PG" ] && PG=(16)
     [ "${PG[0]}" = "all" ] && PG=(13 14 15 16)
-    TARGS=() && [ -n "$1" ] && TARGS=$(printf "'%s' " "${@}")
+    TARGS="--skip '/Parsing/'" && [ -n "$1" ] && TARGS=$(printf "'%s' " "${@}")
     
     for pg in "${PG[@]}"; do
         echo "Running tests on Postgres $pg"
