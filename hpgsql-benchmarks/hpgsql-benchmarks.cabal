@@ -52,6 +52,7 @@ executable hpgsql-benchmarks
   build-depends:
     aeson >= 2
     , base
+    , hasql
     , hpgsql
     , criterion-measurement >= 0.2.0.0
     , deepseq
@@ -64,6 +65,7 @@ executable hpgsql-benchmarks
     , streaming
     , streaming-postgresql-simple
     , text
+    , time
     , vector
   default-language: Haskell2010
 
