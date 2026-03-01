@@ -52,6 +52,7 @@ executable hpgsql-benchmarks
   build-depends:
     aeson >= 2
     , base
+    , hasql
     , hpgsql
     , criterion-measurement >= 0.2.0.0
     , deepseq

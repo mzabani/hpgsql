@@ -22,16 +22,24 @@ import Data.Aeson
   ( FromJSON,
     eitherDecodeFileStrict,
   )
-import Data.Int (Int64)
+import Data.Int (Int32, Int64)
 import Data.Maybe
   ( fromMaybe,
     isJust,
   )
 import Data.Text (Text)
+import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Vector.Unboxed as V
 import qualified Database.PostgreSQL.Simple as PGSimple
 import qualified Database.PostgreSQL.Simple.Streaming as StreamingPostgresSimple
 import GHC.Generics (Generic)
+import qualified Hasql.Connection as HasqlConn
+import qualified Hasql.Connection.Setting as HasqlSetting
+import qualified Hasql.Connection.Setting.Connection as HasqlConnSetting
+import qualified Hasql.Decoders as HasqlDec
+import qualified Hasql.Encoders as HasqlEnc
+import qualified Hasql.Session as HasqlSess
+import qualified Hasql.Statement as HasqlStmt
 import qualified HPgsql
 import HPgsql.Connection (libpqConnString)
 import Statistics.Regression (olsRegress)
@@ -207,6 +215,19 @@ main = do
               \n ->
                 bench "postgresql-simple" $
                   PGSimple.query @_ @(PGSimple.Only Int) pgSimpleConn "SELECT * FROM generate_series(1,?)" (PGSimple.Only n)
+            hasqlConn <-
+              either (\e -> error $ "hasql connection failed: " ++ show e) id
+                <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
+            let hasqlListStmt = HasqlStmt.Statement
+                  "SELECT * FROM generate_series(1,$1)"
+                  (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+                  (HasqlDec.rowList (HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)))
+                  True
+            forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
+              \n ->
+                bench "hasql" $ do
+                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
+                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
         describe "Parsing Int64s in streaming fashion" $ do
           runIO $ do
             hpgsqlConnInfo <- testConnInfo
@@ -224,6 +245,19 @@ main = do
                   runResourceT @IO $ do
                     let res :: Stream (Of (PGSimple.Only Int)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT * FROM generate_series(1,?)" (PGSimple.Only n)
                     S.effects res
+            hasqlConn <-
+              either (\e -> error $ "hasql connection failed: " ++ show e) id
+                <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
+            let hasqlFoldStmt = HasqlStmt.Statement
+                  "SELECT * FROM generate_series(1,$1)"
+                  (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+                  (HasqlDec.foldlRows (\() !_ -> ()) () (HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)))
+                  True
+            forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
+              \n ->
+                bench "hasql" $ do
+                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlFoldStmt) hasqlConn
+                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
 
 -- it "Elapsed wall time must linear wrt input size" $
 --   mustFormALineWithOrigin rs measTime

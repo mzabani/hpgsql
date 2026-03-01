@@ -1,16 +1,17 @@
 .SHELL = bash
 
 ##
-# Runs benchmarks.
+# Runs benchmarks with a postgresql DB listening.
 # OPTION NIX --nix Use a Nix-built test executable instead of compiling with cabal in the user's shell.
 benchmarks:
     set -eo pipefail
 
     if [ -n "$NIX" ]; then
         nix-build -A hpgsql-benchmarks -o local/hpgsql-benchmarks
-        ./local/hpgsql-benchmarks/bin/hpgsql-benchmarks
+        nix-shell -A shellPg18 ./default.nix --run "./local/hpgsql-benchmarks/bin/hpgsql-benchmarks"
     else
-        cabal run -O2 hpgsql-benchmarks
+        cabal build -O2 hpgsql-benchmarks
+        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
     fi
 
 ##
