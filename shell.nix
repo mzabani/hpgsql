@@ -3,9 +3,9 @@ let
   postgres = pkgs.postgresql_16.withPackages (ps: with ps; [ pg_cron ]);
 in
   pkgs.haskellPackages.shellFor {
-    packages = p: with p; [ hpgsql hpgsql-benchmarks hpgsql-simple-compat ];
+    packages = p: with p; [ hpgsql hpgsql-tests hpgsql-benchmarks hpgsql-simple-compat ];
     withHoogle = true;
-    buildInputs = with pkgs; [ run postgres haskellPackages.cabal-install haskellPackages.ghcid haskellPackages.haskell-language-server haskellPackages.hlint ];
+    buildInputs = with pkgs; [ concurrently run postgres haskellPackages.cabal-install haskellPackages.ghcid haskellPackages.haskell-language-server haskellPackages.hlint ];
 
   shellHook = ''
     source scripts/source-env.sh .env

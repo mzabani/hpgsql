@@ -3,14 +3,15 @@ let
     ourOwnHaskellPkgsOverlay = final: prev: 
       let newHaskellPackages = prev.haskellPackages.extend (prev.haskell.lib.compose.packageSourceOverrides {
                                     hpgsql = ../hpgsql;
+                                    hpgsql-tests = ../hpgsql-tests;
                                     hpgsql-benchmarks = ../hpgsql-benchmarks;
                                     hpgsql-simple-compat = ../hpgsql-simple-compat;
                               });
       in {
        haskellPackages = newHaskellPackages // {
         hpgsql = final.haskell.lib.dontCheck newHaskellPackages.hpgsql;
-        hpgsql-tests = newHaskellPackages.hpgsql; # This doesn't reuse the build of hpgsql, which is not great
-        hpgsql-benchmarks = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-benchmarks; 
+        hpgsql-tests = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-tests;
+        hpgsql-benchmarks = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-benchmarks;
         hpgsql-simple-compat = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-simple-compat;
       };
     };
