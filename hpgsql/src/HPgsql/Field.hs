@@ -136,23 +136,22 @@ instance Applicative RowParser where
 singleColRowParser :: FieldParser a -> RowParser a
 singleColRowParser (FieldParser {..}) =
   RowParser
-    { fullRowParser = \colTypes -> do
-        lenNextCol <- fromIntegral <$> int32Parser
-        nextColBs <-
-          -- TODO: Make more frequent branch run earlier,
-          -- see if it makes a difference.
-          if lenNextCol == (-1)
-            then pure Nothing
-            else
-              if lenNextCol == 0
-                then pure $ Just ""
-                else Just . LBS.fromStrict <$> Parsec.take lenNextCol
-        case colTypes of
-          [singleTypOid] ->
-            case fieldValueParser singleTypOid nextColBs of
-              Left err -> fail err
-              Right v -> pure v
-          _ -> error "singleColRowParser expected a single column OID but got 0 or >1",
+    { fullRowParser = \colTypes -> case colTypes of
+        [singleTypOid] ->
+          let decode = fieldValueParser singleTypOid
+           in do
+                lenNextCol <- fromIntegral <$> int32Parser
+                nextColBs <-
+                  if lenNextCol /= (-1)
+                    then
+                      if lenNextCol == 0
+                        then pure $ Just ""
+                        else Just . LBS.fromStrict <$> Parsec.take lenNextCol
+                    else pure Nothing
+                case decode nextColBs of
+                  Right v -> pure v
+                  Left err -> fail err
+        _ -> error "singleColRowParser expected a single column OID but got 0 or >1",
       rowColumnsTypeCheck = \case
         [singleTypOid] -> allowedPgTypes singleTypOid
         _ -> False,
@@ -194,9 +193,6 @@ compositeTypeParser nullCheck (RowParser {..}) =
       numCols <- fromIntegral <$> int32Parser
       let numColsExpected = length resultColumnsFmts
       unless (numCols == numColsExpected) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numColsExpected
-      -- { fullRowParser :: [Oid] -> Parsec.Parser a,
-      --   rowColumnsTypeCheck :: [Oid] -> Bool,
-      --   resultColumnsFmts :: [Format]
       cols <- forM [1 .. numCols] $ const $ do
         !oid <- Oid . fromIntegral <$> int32Parser
         (LBS.fromStrict -> sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
@@ -491,14 +487,11 @@ instance FromPgField () where
 instance FromPgField Int where
   fieldParser =
     FieldParser
-      { -- TODO: Here and in other FromPgField instances, does it improve
-        -- performance if we float out the oid argument in fieldValueParser?
-        -- As in `fieldValueParser = \oid -> \mbs -> case mbs of ..`
-        -- Guessing it might because `fieldValueParser` is later partially applied to oid
-        -- once per result set, or at least it _could_ be.
-        fieldValueParser = \oid mbs -> case mbs of
-          Just bs -> binaryIntDecoder oid bs
-          Nothing -> Left "Cannot parse SQL null into Haskell Int type. Use a `Maybe Int`",
+      { fieldValueParser = \oid ->
+          let decode = binaryIntDecoder oid
+           in \mbs -> case mbs of
+                Just bs -> decode bs
+                Nothing -> Left "Cannot parse SQL null into Haskell Int type. Use a `Maybe Int`",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` haskellIntOids)
       }
@@ -506,9 +499,11 @@ instance FromPgField Int where
 instance FromPgField Int16 where
   fieldParser =
     FieldParser
-      { fieldValueParser = \oid mbs -> case mbs of
-          Just bs -> binaryIntDecoder oid bs
-          Nothing -> Left "Cannot parse SQL null into Haskell Int16 type. Use a `Maybe Int16`",
+      { fieldValueParser = \oid ->
+          let decode = binaryIntDecoder oid
+           in \mbs -> case mbs of
+                Just bs -> decode bs
+                Nothing -> Left "Cannot parse SQL null into Haskell Int16 type. Use a `Maybe Int16`",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (== int2Oid)
       }
@@ -516,9 +511,11 @@ instance FromPgField Int16 where
 instance FromPgField Int32 where
   fieldParser =
     FieldParser
-      { fieldValueParser = \oid mbs -> case mbs of
-          Just bs -> binaryIntDecoder oid bs
-          Nothing -> Left "Cannot parse SQL null into Haskell Int32 type. Use a `Maybe Int32`",
+      { fieldValueParser = \oid ->
+          let decode = binaryIntDecoder oid
+           in \mbs -> case mbs of
+                Just bs -> decode bs
+                Nothing -> Left "Cannot parse SQL null into Haskell Int32 type. Use a `Maybe Int32`",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [int2Oid, int4Oid])
       }
@@ -526,9 +523,11 @@ instance FromPgField Int32 where
 instance FromPgField Int64 where
   fieldParser =
     FieldParser
-      { fieldValueParser = \oid mbs -> case mbs of
-          Just bs -> binaryIntDecoder oid bs
-          Nothing -> Left "Cannot parse SQL null into Haskell Int64 type. Use a `Maybe Int64`",
+      { fieldValueParser = \oid ->
+          let decode = binaryIntDecoder oid
+           in \mbs -> case mbs of
+                Just bs -> decode bs
+                Nothing -> Left "Cannot parse SQL null into Haskell Int64 type. Use a `Maybe Int64`",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [int2Oid, int4Oid, int8Oid])
       }
@@ -536,15 +535,17 @@ instance FromPgField Int64 where
 instance FromPgField Integer where
   fieldParser =
     FieldParser
-      { fieldValueParser = \oid mbs -> case mbs of
-          Just bs
-            | oid /= numericOid -> fromIntegral <$> binaryIntDecoder @Int64 oid bs
-            | otherwise -> case Parsec.parseOnly (scientificDecoder True <* Parsec.endOfInput) bs of
-                Right sci -> case floatingOrInteger @Double @Integer sci of
-                  Right i -> Right i
-                  Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
-                Left err -> Left err
-          Nothing -> Left "Cannot parse SQL null into Haskell Integer type. Use a `Maybe Integer`",
+      { fieldValueParser = \oid ->
+          let decodeInt = binaryIntDecoder @Int64 oid
+           in \mbs -> case mbs of
+                Just bs
+                  | oid /= numericOid -> fromIntegral <$> decodeInt bs
+                  | otherwise -> case Parsec.parseOnly (scientificDecoder True <* Parsec.endOfInput) bs of
+                      Right sci -> case floatingOrInteger @Double @Integer sci of
+                        Right i -> Right i
+                        Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
+                      Left err -> Left err
+                Nothing -> Left "Cannot parse SQL null into Haskell Integer type. Use a `Maybe Integer`",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [int8Oid, numericOid, int4Oid, int2Oid])
       }
@@ -568,7 +569,7 @@ instance FromPgField Float where
 instance FromPgField Double where
   fieldParser =
     FieldParser
-      { fieldValueParser = \oid mbs -> case mbs of
+      { fieldValueParser = \oid -> \mbs -> case mbs of
           -- TODO: Ask in GHC issue tracker
           -- Sadly, both realToFrac and float2Double look broken:
           -- ghci> realToFrac (3.14 :: Float) ::  Double
@@ -619,14 +620,16 @@ instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
   fieldParser =
     FieldParser
-      { fieldValueParser = \oid mbs -> case mbs of
-          Just bs ->
-            -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
-            -- float4Oid and float8Oid here?
-            if oid == numericOid
-              then Parsec.parseOnly (scientificDecoder False <* Parsec.endOfInput) bs
-              else flip scientific 0 . fromIntegral <$> binaryIntDecoder @Int64 oid bs
-          Nothing -> Left "Cannot parse SQL null into Haskell Scientific type. Use a `Maybe Scientific`",
+      { fieldValueParser = \oid ->
+          let decodeInt = binaryIntDecoder @Int64 oid
+           in \mbs -> case mbs of
+                Just bs ->
+                  -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
+                  -- float4Oid and float8Oid here?
+                  if oid == numericOid
+                    then Parsec.parseOnly (scientificDecoder False <* Parsec.endOfInput) bs
+                    else flip scientific 0 . fromIntegral <$> decodeInt bs
+                Nothing -> Left "Cannot parse SQL null into Haskell Scientific type. Use a `Maybe Scientific`",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid])
       }
@@ -643,16 +646,18 @@ instance FromPgField Char where
   fieldParser =
     let textParser = fieldValueParser (fieldParser @Text)
      in FieldParser
-          { fieldValueParser = \oid mbs -> case mbs of
-              Just bs ->
-                if oid == charOid
-                  -- TODO: Postgres has values of type "char" in the pg_type.typcategory table.
-                  -- We should test this instance works with those, and we haven't yet.
-                  then Right $ Data.ByteString.Lazy.Char8.head bs
-                  else case textParser oid mbs of
-                    Left err -> Left err
-                    Right t -> if Text.length t > 1 then Left "Cannot parse text with more than one character into a Haskell Char type." else Right (Text.head t)
-              Nothing -> Left "Cannot parse SQL null into Haskell Char type. Use a `Maybe Char`",
+          { fieldValueParser = \oid ->
+              let decodeText = textParser oid
+               in \mbs -> case mbs of
+                    Just bs ->
+                      if oid == charOid
+                        -- TODO: Postgres has values of type "char" in the pg_type.typcategory table.
+                        -- We should test this instance works with those, and we haven't yet.
+                        then Right $ Data.ByteString.Lazy.Char8.head bs
+                        else case decodeText mbs of
+                          Left err -> Left err
+                          Right t -> if Text.length t > 1 then Left "Cannot parse text with more than one character into a Haskell Char type." else Right (Text.head t)
+                    Nothing -> Left "Cannot parse SQL null into Haskell Char type. Use a `Maybe Char`",
             fieldFmt = BinaryFmt,
             -- TODO: All the varchar types?
             allowedPgTypes = (`elem` [charOid, textOid])
