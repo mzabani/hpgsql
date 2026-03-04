@@ -71,7 +71,7 @@ library
     , async
     , attoparsec
     , base
-    , binary
+    , cereal
     , bytestring
     , containers
     , network

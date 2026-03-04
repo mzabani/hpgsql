@@ -25,7 +25,7 @@ where
 import Control.Monad (forM, replicateM, unless, when)
 import qualified Data.Aeson as Aeson
 import qualified Data.Attoparsec.ByteString.Lazy as Parsec
-import qualified Data.Binary as Binary
+import qualified Data.Serialize as Cereal
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8
@@ -261,15 +261,15 @@ instance ToPgField Int where
 
 instance ToPgField Int16 where
   toTypeOid _ = Just int2Oid
-  toPgField n = Just $ Binary.encode @Int16 . fromIntegral $ n
+  toPgField n = Just $ Cereal.encodeLazy @Int16 . fromIntegral $ n
 
 instance ToPgField Int32 where
   toTypeOid _ = Just int4Oid
-  toPgField n = Just $ Binary.encode @Int32 . fromIntegral $ n
+  toPgField n = Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
 
 instance ToPgField Int64 where
   toTypeOid _ = Just int8Oid
-  toPgField n = Just $ Binary.encode @Int64 . fromIntegral $ n
+  toPgField n = Just $ Cereal.encodeLazy @Int64 . fromIntegral $ n
 
 instance ToPgField Integer where
   toTypeOid _ = Just numericOid
@@ -277,12 +277,12 @@ instance ToPgField Integer where
 
 instance ToPgField Oid where
   toTypeOid _ = Just oidOid
-  toPgField n = Just $ Binary.encode @Int32 . fromIntegral $ n
+  toPgField n = Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
 
 instance ToPgField Scientific where
   toTypeOid _ = Just numericOid
   toPgField n =
-    let sign = Binary.encode @Int16 $ if n >= 0 then 0 else 0x4000
+    let sign = Cereal.encodeLazy @Int16 $ if n >= 0 then 0 else 0x4000
         -- The number is coeff * 10^exp, but we want it in base-10000 so we convert it to
         -- new_coeff * 10^new_exp with new_exp a multiple of 4
         base10000Expon = 4 * (base10Exponent n `div` 4)
@@ -290,8 +290,8 @@ instance ToPgField Scientific where
         ndigits, weight :: Int16
         digits :: LBS.LazyByteString
         (ndigits, weight, digits) = calculateDigits 0 0 (abs base10000Coeff) ""
-        dscale = Binary.encode @Int16 (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
-     in Just $ Binary.encode ndigits <> Binary.encode (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
+        dscale = Cereal.encodeLazy @Int16 (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
+     in Just $ Cereal.encodeLazy ndigits <> Cereal.encodeLazy (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
     where
       calculateDigits :: Int16 -> Int16 -> Integer -> LBS.LazyByteString -> (Int16, Int16, LBS.LazyByteString)
       calculateDigits !ndigitsSoFar !weightSoFar 0 !encodedDigits = (ndigitsSoFar, weightSoFar, encodedDigits)
@@ -301,26 +301,26 @@ instance ToPgField Scientific where
               (ndigitsSoFar + 1)
               (weightSoFar + 1)
               quotient
-              (Binary.encode @Int16 rest <> encodedDigits)
+              (Cereal.encodeLazy @Int16 rest <> encodedDigits)
 
 instance ToPgField Float where
   toTypeOid _ = Just float4Oid
-  toPgField n = Just $ Binary.encode @Word32 $ castFloatToWord32 n
+  toPgField n = Just $ Cereal.encodeLazy @Word32 $ castFloatToWord32 n
 
 instance ToPgField Double where
   toTypeOid _ = Just float8Oid
-  toPgField n = Just $ Binary.encode @Word64 $ castDoubleToWord64 n
+  toPgField n = Just $ Cereal.encodeLazy @Word64 $ castDoubleToWord64 n
 
 instance ToPgField Bool where
-  -- TODO: Binary.encode seems to work, but reference the documentation that shows how bools are encoded
+  -- TODO: Cereal.encodeLazy seems to work, but reference the documentation that shows how bools are encoded
   toTypeOid _ = Just boolOid
-  toPgField n = Just $ Binary.encode @Bool $ n
+  toPgField n = Just $ Cereal.encodeLazy @Bool $ n
 
 instance ToPgField Day where
   -- PG Dates are Int32 number of days relative to 2000-01-01
   -- https://github.com/postgres/postgres/blob/master/src/include/datatype/timestamp.h#L235
   toTypeOid _ = Just dateOid
-  toPgField d = Just $ Binary.encode @Int32 $ daysSince2000
+  toPgField d = Just $ Cereal.encodeLazy @Int32 $ daysSince2000
     where
       -- TODO: Catch integer overflow and do what?
       daysSince2000 = fromIntegral $ diffDays d (fromGregorian 2000 1 1)
@@ -329,11 +329,11 @@ instance ToPgField CalendarDiffTime where
   toTypeOid _ = Just intervalOid
   toPgField CalendarDiffTime {..} =
     let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400_000_000_000_000
-     in Just $ Binary.encode @(Int64, Int32, Int32) (round $ timeUnderOneDay * 1_000_000, days, fromIntegral ctMonths)
+     in Just $ Cereal.encodeLazy @(Int64, Int32, Int32) (round $ timeUnderOneDay * 1_000_000, days, fromIntegral ctMonths)
 
 instance ToPgField UTCTime where
   toTypeOid _ = Just timestamptzOid
-  toPgField (UTCTime parsedDate timeinday) = Just $ Binary.encode @Int64 totalusecs
+  toPgField (UTCTime parsedDate timeinday) = Just $ Cereal.encodeLazy @Int64 totalusecs
     where
       -- TODO: Catch integer overflow and do what?
       -- This is FromPgField UTCTime:
@@ -439,31 +439,31 @@ haskellIntOids :: [Oid]
 -- | Big-Endian binary encoder for Haskell's `Data.Int`, which is machine-dependent.
 binaryIntEncoder :: Int -> LBS.ByteString
 binaryIntEncoder
-  | haskellIntOid == int8Oid = Binary.encode @Int64 . fromIntegral
-  | haskellIntOid == int4Oid = Binary.encode @Int32 . fromIntegral
-  | otherwise = Binary.encode @Int16 . fromIntegral
+  | haskellIntOid == int8Oid = Cereal.encodeLazy @Int64 . fromIntegral
+  | haskellIntOid == int4Oid = Cereal.encodeLazy @Int32 . fromIntegral
+  | otherwise = Cereal.encodeLazy @Int16 . fromIntegral
 
 -- | Big-Endian binary decoder for Haskell's various IntXX types.
 binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> LBS.ByteString -> Either String a
 binaryIntDecoder typOid = \bs ->
   if doesFit
-    then Right $ intDecoder bs
+    then intDecoder bs
     else Left $ "Chosen integral type does not fit every value for PG type with OID " ++ show typOid
   where
     maxBoundPgType :: Integer
-    intDecoder :: LBS.ByteString -> a
+    intDecoder :: LBS.ByteString -> Either String a
     (maxBoundPgType, intDecoder)
-      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fromIntegral . Binary.decode @Int64)
-      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fromIntegral . Binary.decode @Int32)
-      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fromIntegral . Binary.decode @Int16)
+      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . Cereal.decodeLazy @Int64)
+      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . Cereal.decodeLazy @Int32)
+      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . Cereal.decodeLazy @Int16)
       | otherwise = error "Bug in HPgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
 binaryFloat4Decoder :: LBS.ByteString -> Float
-binaryFloat4Decoder = castWord32ToFloat . Binary.decode @Word32
+binaryFloat4Decoder = castWord32ToFloat . either error id . Cereal.decodeLazy @Word32
 
 binaryFloat8Decoder :: LBS.ByteString -> Double
-binaryFloat8Decoder = castWord64ToDouble . Binary.decode @Word64
+binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decodeLazy @Word64
 
 parsePgType :: Format -> [Oid] -> (Maybe LBS.ByteString -> Either String a) -> FieldParser a
 parsePgType fieldFmt requiredTypeOids fieldValueParser =
@@ -635,7 +635,7 @@ instance FromPgField Scientific where
       }
 
 binaryTrue :: LBS.ByteString
-binaryTrue = Binary.encode True
+binaryTrue = Cereal.encodeLazy True
 
 instance FromPgField Bool where
   fieldParser = parsePgType BinaryFmt [boolOid] $ \case
@@ -693,55 +693,39 @@ instance FromPgField String where
 
 instance FromPgField UTCTime where
   fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
-    Just bs ->
+    Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      let totalusecs = Binary.decode @Int64 bs
-          (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+      totalusecs <- Cereal.decodeLazy @Int64 bs
+      let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-       in Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+      Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     Nothing -> Left "Cannot parse SQL null into Haskell UTCTime type. Use a `Maybe UTCTime`"
 
 instance FromPgField ZonedTime where
   fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
-    Just bs ->
+    Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      let totalusecs = Binary.decode @Int64 bs
-          (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+      totalusecs <- Cereal.decodeLazy @Int64 bs
+      let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-       in Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+      Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     Nothing -> Left "Cannot parse SQL null into Haskell ZonedTime type. Use a `Maybe ZonedTime`"
 
 instance FromPgField Day where
   fieldParser = parsePgType BinaryFmt [dateOid] $ \case
-    Just bs ->
-      Right $
+    Just bs -> do
         -- There is a very specific conversion function for these, which I poorly translated to Haskell
         -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
         -- But I found a simpler way to do this. Let's see if it works in our property based tests
-        let jd = Binary.decode @Int32 bs
-         in -- julian1 = jd + 32044
-            -- quad1 = julian1 `div` 146097
-            -- extra = (julian1 - quad1 * 146097) * 4 + 3
-            -- julian2 = julian1 + 60 + quad1 * 3 + extra `div` 146097
-            -- quad2 = julian2 `div` 1461
-            -- julian3 = julian2 - quad2 * 1461
-            -- y1 = julian3 * 4 `div` 1461
-            -- julian4 = (if (y1 /= 0) then ((julian3 + 305) `mod` 365) else ((julian3 + 306) `mod` 366)) + 123
-            -- y2 = y1 + quad2 * 4
-            -- year = y2 - 4800
-            -- quad3 = julian4 * 2141 `div` 65536
-            -- day = julian4 - 7834 * quad3 `div` 256
-            -- month = (quad3 + 10) `mod` 12 + 1
-            -- in addJulianDurationClip (CalendarDiffDays 0 (4716 * 365)) $ fromJulian (fromIntegral year) (fromIntegral month) (fromIntegral day)
-            addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
+        jd <- Cereal.decodeLazy @Int32 bs
+        Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot parse SQL null into Haskell Day type. Use a `Maybe Day`"
 
 instance FromPgField CalendarDiffTime where
   fieldParser = parsePgType BinaryFmt [intervalOid] $ \case
-    Just bs ->
-      Right $
-        let (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) = Binary.decode bs
-         in CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime ((fromIntegral nDays) * 86400) + realToFrac (picosecondsToDiffTime ((fromIntegral nMicrosecs) * 1_000_000))}
+    Just bs -> do
+        (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decodeLazy bs
+        Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime ((fromIntegral nDays) * 86400) + realToFrac (picosecondsToDiffTime ((fromIntegral nMicrosecs) * 1_000_000))}
     Nothing -> Left "Cannot parse SQL null into Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
 
 instance FromPgField Aeson.Value where
@@ -793,10 +777,10 @@ instance forall a. (FromPgField a) => FromPgField (Vector a) where
             Right el -> pure el
 
 int32Parser :: Parsec.Parser Int32
-int32Parser = Binary.decode @Int32 . LBS.fromStrict <$> Parsec.take 4
+int32Parser = either fail pure . Cereal.decode @Int32 =<< Parsec.take 4
 
 int16Parser :: Parsec.Parser Int16
-int16Parser = Binary.decode @Int16 . LBS.fromStrict <$> Parsec.take 2
+int16Parser = either fail pure . Cereal.decode @Int16 =<< Parsec.take 2
 
 -- {- Generic deriving -}
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowParser a

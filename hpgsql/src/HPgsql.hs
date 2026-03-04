@@ -56,7 +56,7 @@ import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
 import Data.Bifunctor (second)
-import qualified Data.Binary as Binary
+import qualified Data.Serialize as Cereal
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
@@ -398,7 +398,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
   receiveUntilBufferHasAtLeast 5
   charAndLength <- peekIntoBuffer 5
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
-      lenLeftToFetch :: Int64 = fromIntegral $ Binary.decode @Int32 lenbs - 4
+      lenLeftToFetch :: Int64 = fromIntegral $ either error id (Cereal.decodeLazy @Int32 lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
   receiveUntilBufferHasAtLeast fullMessageLen
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMessageLen

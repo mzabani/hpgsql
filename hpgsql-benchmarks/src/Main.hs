@@ -1,13 +1,12 @@
 module Main where
 
-import Control.Concurrent (threadDelay)
 import Control.DeepSeq
   ( NFData,
     force,
   )
 import Control.Exception (evaluate)
-import Control.Monad (forM, forM_, unless, void)
-import Control.Monad.Trans.Resource (ResourceT, liftResourceT, runResourceT)
+import Control.Monad (forM_, unless)
+import Control.Monad.Trans.Resource (ResourceT, runResourceT)
 import Criterion.Measurement
   ( initializeTime,
     measure,
@@ -20,12 +19,10 @@ import Criterion.Measurement.Types
   )
 import Data.Aeson
   ( FromJSON,
-    eitherDecodeFileStrict,
   )
 import Data.Int (Int32, Int64)
 import Data.Maybe
   ( fromMaybe,
-    isJust,
   )
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
@@ -43,11 +40,12 @@ import qualified Hasql.Decoders as HasqlDec
 import qualified Hasql.Encoders as HasqlEnc
 import qualified Hasql.Session as HasqlSess
 import qualified Hasql.Statement as HasqlStmt
+import Numeric (showFFloat)
 import Statistics.Regression (olsRegress)
 import Streaming (Of (..))
 import Streaming.Prelude (Stream)
 import qualified Streaming.Prelude as S
-import System.Environment (getEnv, lookupEnv)
+import System.Environment (getEnv)
 import qualified System.IO as IO
 import System.Mem (performBlockingMajorGC)
 import Test.Hspec
@@ -55,11 +53,9 @@ import Test.Hspec
     describe,
     expectationFailure,
     hspec,
-    it,
     runIO,
     shouldBe,
   )
-import Test.Hspec.Expectations (shouldReturn)
 
 testConnInfo :: IO HPgsql.ConnString
 testConnInfo = getEnv "PGPORT" >>= \portStr -> pure HPgsql.ConnString {user = "postgres", database = "postgres", hostname = "127.0.0.1", port = read portStr, password = "", options = ""}
@@ -87,7 +83,7 @@ bench name f = do
       ++ ": Wall time="
       ++ secs measTime
       ++ ", total Haskell (does not include C heap) memory allocated="
-      ++ show ((/ (1024 * 1024)) . fromIntegral @Int64 @Double <$> fromInt measAllocated)
+      ++ maybe "N/A" (\v -> showFFloat (Just 1) v "") ((/ (1024 * 1024)) . fromIntegral @Int64 @Double <$> fromInt measAllocated)
       ++ " MB."
   pure msr
 
@@ -175,22 +171,6 @@ main = do
   -- initializeTime must run first: https://hackage.haskell.org/package/criterion-measurement-0.2.0.0/docs/Criterion-Measurement.html#v:initializeTime
   initializeTime
 
-  -- This is very ad-hoc, but variance in GitHub actions is much greater than on my own machine,
-  -- and I don't want to increase variance tolerance on my machine as it's good for it to be tight.
-  -- So we check if we're in CI and increase our tolerance for divergent perf numbers.
-  isCI <- isJust <$> lookupEnv "CI"
-  let expectedPerfPath :: FilePath =
-        if isCI
-          then "hpgsql-benchmarks/expected-perf/ci.json"
-          else "hpgsql-benchmarks/expected-perf/local.json"
-  putStrLn $ "Reading expected performance numbers from " ++ expectedPerfPath
-  CurrentPerf {..} <-
-    either (error "Could not decode expected performance file") id
-      <$> eitherDecodeFileStrict expectedPerfPath
-
-  let (diffWallTimeTolerance, diffMaxMemTolerance) =
-        if isCI then (1e-4, 1) else (1e-5, 1)
-
   hspec $ do
     describe
       "Elapsed wall time must be linear with input size and max memory usage constant when streaming parse"
@@ -204,42 +184,53 @@ main = do
         --    mess up our horizontal line check.
         describe "Parsing 9-column rows into a List" $ do
           runIO $ do
-            pure ()
-        -- hpgsqlConnInfo <- testConnInfo
-        -- conn <-
-        --   HPgsql.connect hpgsqlConnInfo 10
-        -- pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
-        -- let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5 FROM generate_series(1,$1) g"
-        -- forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
-        --   \n -> do
-        --     bench "hpgsql" $
-        --       HPgsql.queryWith (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
-        -- forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
-        --   \n ->
-        --     bench "postgresql-simple" $
-        --       PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double) pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5 FROM generate_series(1,?) g" (PGSimple.Only n)
-        -- hasqlConn <-
-        --   either (\e -> error $ "hasql connection failed: " ++ show e) id
-        --     <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
-        -- let hasqlListStmt = HasqlStmt.Statement
-        --       sql
-        --       (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
-        --       (HasqlDec.rowList ((,,,,,,,,)
-        --         <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-        --         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)))
-        --       True
-        -- forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
-        --   \n ->
-        --     bench "hasql" $ do
-        --       result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
-        --       either (\e -> error $ "hasql query failed: " ++ show e) pure result
+            hpgsqlConnInfo <- testConnInfo
+            conn <-
+              HPgsql.connect hpgsqlConnInfo 10
+            pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
+            hasqlConn <-
+              either (\e -> error $ "hasql connection failed: " ++ show e) id
+                <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
+            let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5 FROM generate_series(1,$1) g"
+                pgSimpleSql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5 FROM generate_series(1,?) g"
+                hasqlListStmt =
+                  HasqlStmt.Statement
+                    sql
+                    (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+                    ( HasqlDec.rowList
+                        ( (,,,,,,,,)
+                            <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                        )
+                    )
+                    True
+            forM_ [10_000 :: Int, 100_000] $
+              \n -> do
+                bench ("hpgsql List (" ++ show n ++ " rows)") $
+                  HPgsql.queryWith (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+            forM_ [10_000 :: Int, 100_000] $
+              \n ->
+                bench ("hasql List (" ++ show n ++ " rows)") $ do
+                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
+                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
+            forM_ [10_000 :: Int, 100_000] $
+              \n ->
+                bench ("postgresql-simple List (" ++ show n ++ " rows)") $
+                  PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double) pgSimpleConn pgSimpleSql (PGSimple.Only n)
+            -- Verify all libraries return the same results
+            forM_ [10_000 :: Int, 100_000] $ \n -> do
+              hpgsqlRes <- HPgsql.queryWith (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+              pgSimpleRes <- PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double) pgSimpleConn pgSimpleSql (PGSimple.Only n)
+              hasqlRes <- either (\e -> error $ "hasql query failed: " ++ show e) pure =<< HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
+              hpgsqlRes `shouldBe` pgSimpleRes
+              map (\(a, b, c, d, e, f, g, h, i) -> (fromIntegral @Int32 @Int a, b, c, d, e, f, g, h, i)) hasqlRes `shouldBe` hpgsqlRes
         describe "Parsing 9-column rows in streaming fashion" $ do
           runIO $ do
             hpgsqlConnInfo <- testConnInfo
@@ -247,112 +238,43 @@ main = do
               HPgsql.connect hpgsqlConnInfo 10
             pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
             let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5 FROM generate_series(1,$1) g"
-            -- forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
-            forM_ [1_000_000 :: Int] $
+            forM_ [10_000 :: Int, 100_000] $
               \n -> do
-                bench "hpgsql" $ do
+                bench ("hpgsql Stream (" ++ show n ++ " rows)") $ do
                   res <- HPgsql.queryWithStreaming (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
                   S.effects res
 
--- forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
---   \n ->
---     bench "streaming-postgresql-simple" $ do
---       runResourceT @IO $ do
---         let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5 FROM generate_series(1,?) g" (PGSimple.Only n)
---         S.effects res
--- hasqlConn <-
---   either (\e -> error $ "hasql connection failed: " ++ show e) id
---     <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
--- let hasqlFoldStmt = HasqlStmt.Statement
---       sql
---       (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
---       (HasqlDec.foldlRows (\() !_ -> ()) () ((,,,,,,,,)
---         <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
---         <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)))
---       True
--- forM_ [10_000 :: Int, 100_000, 500_000, 1_000_000] $
---   \n ->
---     bench "hasql" $ do
---       result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlFoldStmt) hasqlConn
---       either (\e -> error $ "hasql query failed: " ++ show e) pure result
-
--- it "Elapsed wall time must linear wrt input size" $
---   mustFormALineWithOrigin rs measTime
-
---   it
---     "Peak memory usage must be constant regardless of input size"
---     $ mustFormAHorizontalLine
---       rs
---       (fromGcInt . measPeakMbAllocated)
---   it "Must not be too different from expected performance" $ do
---     shouldBeF
---       "Average wall time regression"
---       diffWallTimeTolerance
---       (avgSamples measTime rs)
---       (fst select1TimeAndMemory)
---     shouldBeF
---       "Max memory usage regression"
---       diffMaxMemTolerance
---       ( maximum $
---           map (fromGcInt . measPeakMbAllocated . snd) rs
---       )
---       (snd select1TimeAndMemory)
-
--- describe "Parsing COPY statement" $ do
---   rs :: [(Double, Measured)] <-
---     runIO $
---       forM [10_000, 100_000, 500_000, 1_000_000] $ -- Only large-ish sizes or less memory will be used and we want constant memory usage
---         \n ->
---           fmap (fromIntegral n,) $
---             bench ("COPY " ++ show n) $
---               do
---                 -- Uncomment the line below to make memory usage linear on input size
---                 -- and see memory usage rise and the test fail
---                 -- _ <- evaluate $ force [1 .. n]
---                 parseMig (veryLargeCopy n)
---                   >>= Streaming.any_
---                     ( ==
---                         CommentPiece
---                           "Not in the stream"
---                     )
-
---   it "Elapsed wall time must linear wrt input size" $
---     mustFormALineWithOrigin rs measTime
---   it
---     "Peak memory usage must be constant regardless of input size"
---     $ mustFormAHorizontalLine
---       rs
---       (fromGcInt . measPeakMbAllocated)
-
---   it "Must not be too different from expected performance" $ do
---     shouldBeF
---       "Average wall time regression"
---       diffWallTimeTolerance
---       (avgSamples measTime rs)
---       (fst copyTimeAndMemory)
---     shouldBeF
---       "Max memory usage regression"
---       diffMaxMemTolerance
---       ( maximum $
---           map (fromGcInt . measPeakMbAllocated . snd) rs
---       )
---       (snd copyTimeAndMemory)
-
---   it
---     "Number of SQL pieces must be low to avoid too many round-trips"
---     $ do
---       -- The body of the contents inside COPY can be very large, so we don't want
---       -- small pieces coming out of the parser to avoid too many unnecessary round-trips.
---       -- Any changes to the parser will be detected by this test, but those should never
---       -- increase the number of parsed pieces too much.
---       len :: Int <-
---         parseMig (veryLargeCopy 500_000)
---           >>= Streaming.length_
---       len `shouldBe` 178
+            hasqlConn <-
+              either (\e -> error $ "hasql connection failed: " ++ show e) id
+                <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
+            let hasqlFoldStmt =
+                  HasqlStmt.Statement
+                    sql
+                    (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+                    ( HasqlDec.foldlRows
+                        (\() !_ -> ())
+                        ()
+                        ( (,,,,,,,,)
+                            <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                            <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                        )
+                    )
+                    True
+            forM_ [10_000 :: Int, 100_000] $
+              \n ->
+                bench ("hasql Stream (" ++ show n ++ " rows)") $ do
+                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlFoldStmt) hasqlConn
+                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
+            forM_ [10_000 :: Int, 100_000] $
+              \n ->
+                bench ("streaming-postgresql-simple Stream (" ++ show n ++ " rows)") $ do
+                  runResourceT @IO $ do
+                    let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5 FROM generate_series(1,?) g" (PGSimple.Only n)
+                    S.effects res

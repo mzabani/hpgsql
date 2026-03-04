@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-`cabal list-bin -O2 hpgsql-benchmarks` "${@}"
+`cabal list-bin -O1 hpgsql-benchmarks` "${@}"

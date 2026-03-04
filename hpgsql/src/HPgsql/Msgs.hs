@@ -7,7 +7,7 @@ import Control.Monad (replicateM)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
 import qualified Data.Attoparsec.Text as TextParsec
-import qualified Data.Binary as Binary
+import qualified Data.Serialize as Cereal
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.ByteString.Builder (Builder)
@@ -58,7 +58,7 @@ colParser = do
   Parsec.skip (== 0)
   void $ Parsec.take (4 + 2)
   -- TODO: OIDs are unsigned integers! Try `select (-1)::oid` to see. Change to UInt32 somehow
-  typOid <- Binary.decode @Int32 . BS.fromStrict <$> Parsec.take 4
+  typOid <- either fail pure . Cereal.decode @Int32 =<< Parsec.take 4
   void $ Parsec.take (2 + 4 + 2)
   pure $ Oid (fromIntegral typOid)
 
@@ -170,7 +170,9 @@ instance FromPgMessage AuthenticationOk where
 
 instance FromPgMessage BackendKeyData where
   msgParser = PgMsgParser $ \c (LBS.splitAt 4 -> (pidBS, secretBS)) -> case c of
-    'K' -> Just $ BackendKeyData {backendPid = Binary.decode @Int32 pidBS, backendSecretKey = Binary.decode @Int32 secretBS}
+    'K' -> case (,) <$> Cereal.decodeLazy @Int32 pidBS <*> Cereal.decodeLazy @Int32 secretBS of
+      Right (pid, secret) -> Just $ BackendKeyData {backendPid = pid, backendSecretKey = secret}
+      Left _ -> Nothing
     _ -> Nothing
 
 instance FromPgMessage BindComplete where
@@ -338,7 +340,7 @@ instance FromPgMessage RowDescription where
     if c == 'T'
       then
         let (numColsBS, colContents) = LBS.splitAt 2 restOfMsg
-            numCols = Binary.decode @Int16 numColsBS
+            numCols = either error id $ Cereal.decodeLazy @Int16 numColsBS
             allColOidsParser :: Parsec.Parser [Oid]
             allColOidsParser = replicateM (fromIntegral numCols) colParser
          in case LazyParsec.parseOnly (allColOidsParser <* Parsec.endOfInput) colContents of
@@ -385,7 +387,7 @@ instance FromPgMessage NotificationResponse where
       then Nothing
       else
         let (notifierPidBs, channelNameAndPayload) = LBS.splitAt 4 restOfMsg
-            notifierPid = Binary.decode @Int32 notifierPidBs
+            notifierPid = either error id $ Cereal.decodeLazy @Int32 notifierPidBs
          in case LazyParsec.parseOnly
               ((NotificationResponse notifierPid <$> nulTerminatedCStringParser <*> nulTerminatedCStringParser) <* Parsec.endOfInput)
               channelNameAndPayload of

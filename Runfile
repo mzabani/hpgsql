@@ -10,7 +10,7 @@ benchmarks:
         nix-build -A hpgsql-benchmarks -o local/hpgsql-benchmarks
         nix-shell -A shellPg18 ./default.nix --run "./local/hpgsql-benchmarks/bin/hpgsql-benchmarks"
     else
-        cabal build -O2 hpgsql-benchmarks
+        cabal build -O1 hpgsql-benchmarks
         nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
     fi
 
