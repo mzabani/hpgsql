@@ -33,6 +33,7 @@ import DbUtils
     testConnInfo,
   )
 import Debug.Trace
+import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import HPgsql
 import HPgsql.Field (AllowNull (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
@@ -104,6 +105,9 @@ spec = do
     it
       "Numeric values round-trip even when result types are larger"
       numericValuesRoundTripEvenWhenTargetTypesAreLarger
+    it
+      "Numeric extreme values round-trip"
+      numericExtremeValuesRoundTrip
 
     it
       "Date decoding"
@@ -489,15 +493,43 @@ numericValuesRoundTrip conn = hedgehog $ do
 
 numericValuesRoundTripEvenWhenTargetTypesAreLarger :: HPgConnection -> PropertyT IO ()
 numericValuesRoundTripEvenWhenTargetTypesAreLarger conn = hedgehog $ do
-  -- Cannot decode postgres float4 into Haskell Double yet due to precision issues
-  -- floatVal :: Float <- Gen.forAll $ Gen.float $ Gen.exponentialFloatFrom 0 (-1e38) 1e38
+  floatVal :: Float <- Gen.forAll $ Gen.float $ Gen.exponentialFloatFrom 0 (-1e38) 1e38
   int2Val :: Int16 <- Gen.forAll Gen.enumBounded
   int4Val :: Int32 <- Gen.forAll Gen.enumBounded
   int8Val :: Int64 <- Gen.forAll Gen.enumBounded
-  let row = (int2Val, int2Val, int2Val, int2Val, int4Val, int4Val, int4Val, int8Val, int8Val)
-      rowRes = (fromIntegral int2Val :: Int32, fromIntegral int2Val :: Int64, fromIntegral int2Val :: Integer, fromIntegral int2Val :: Scientific, fromIntegral int4Val :: Int64, fromIntegral int4Val :: Integer, fromIntegral int4Val :: Scientific, fromIntegral int8Val :: Integer, fromIntegral int8Val :: Scientific)
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9" row)
+  let row = (floatVal, int2Val, int2Val, int2Val, int2Val, int4Val, int4Val, int4Val, int8Val, int8Val)
+      rowRes = (float2Double floatVal, fromIntegral int2Val :: Int32, fromIntegral int2Val :: Int64, fromIntegral int2Val :: Integer, fromIntegral int2Val :: Scientific, fromIntegral int4Val :: Int64, fromIntegral int4Val :: Integer, fromIntegral int4Val :: Scientific, fromIntegral int8Val :: Integer, fromIntegral int8Val :: Scientific)
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [rowRes]
+
+numericExtremeValuesRoundTrip :: HPgConnection -> IO ()
+numericExtremeValuesRoundTrip conn = do
+  -- Integer boundary values
+  let int16Row = (minBound :: Int16, maxBound :: Int16)
+      int32Row = (minBound :: Int32, maxBound :: Int32)
+      int64Row = (minBound :: Int64, maxBound :: Int64)
+  queryWith rowParser conn (mkQuery "SELECT $1, $2" int16Row) `shouldReturn` [int16Row]
+  queryWith rowParser conn (mkQuery "SELECT $1, $2" int32Row) `shouldReturn` [int32Row]
+  queryWith rowParser conn (mkQuery "SELECT $1, $2" int64Row) `shouldReturn` [int64Row]
+  -- NaN for Float and Double
+  [(f :: Float, d :: Double)] <- queryWith rowParser conn (mkQuery "SELECT $1, $2" (nanFloat, nanDouble))
+  f `shouldSatisfy` isNaN
+  d `shouldSatisfy` isNaN
+  -- +-Infinity for Float and Double
+  let infRow = (posInfFloat, negInfFloat, posInfDouble, negInfDouble)
+  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4" infRow) `shouldReturn` [infRow]
+  -- NaN and +-Infinity encoded as Float, decoded as Double
+  [(d1 :: Double, d2 :: Double, d3 :: Double)] <- queryWith rowParser conn (mkQuery "SELECT $1, $2, $3" (nanFloat, posInfFloat, negInfFloat))
+  d1 `shouldSatisfy` isNaN
+  d2 `shouldBe` posInfDouble
+  d3 `shouldBe` negInfDouble
+  where
+    nanFloat = (0 / 0) :: Float
+    nanDouble = (0 / 0) :: Double
+    posInfFloat = (1 / 0) :: Float
+    negInfFloat = ((-1) / 0) :: Float
+    posInfDouble = (1 / 0) :: Double
+    negInfDouble = ((-1) / 0) :: Double
 
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do

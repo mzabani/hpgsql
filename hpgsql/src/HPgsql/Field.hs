@@ -25,7 +25,6 @@ where
 import Control.Monad (forM, replicateM, unless, when)
 import qualified Data.Aeson as Aeson
 import qualified Data.Attoparsec.ByteString.Lazy as Parsec
-import qualified Data.Serialize as Cereal
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Lazy.Char8
@@ -38,6 +37,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Proxy (Proxy (..))
 import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
+import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
@@ -49,7 +49,7 @@ import Data.Tuple.Only (Only (..))
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import Data.Word (Word32, Word64)
-import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, castWord64ToDouble, expt)
+import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, castWord64ToDouble, expt, float2Double)
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, symbolVal)
 import HPgsql.TypeInfo (Format (..), Oid (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
@@ -232,6 +232,9 @@ instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgFiel
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j) => FromPgRow (a, b, c, d, e, f, g, h, i, j) where
   rowParser = (,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
+  rowParser = (,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
 
 class FromPgField a where
   fieldParser :: FieldParser a
@@ -426,6 +429,9 @@ instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgF
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j) => ToPgRow (a, b, c, d, e, f, g, h, i, j) where
   toPgParams (a, b, c, d, e, f, g, h, i, j) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g), (toTypeOid (Proxy @h), toPgField h), (toTypeOid (Proxy @i), toPgField i), (toTypeOid (Proxy @j), toPgField j)]
 
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
+  toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g), (toTypeOid (Proxy @h), toPgField h), (toTypeOid (Proxy @i), toPgField i), (toTypeOid (Proxy @j), toPgField j), (toTypeOid (Proxy @k), toPgField k)]
+
 -- | The OID for `Data.Int`, which is machine dependent.
 haskellIntOid :: Oid
 
@@ -569,17 +575,13 @@ instance FromPgField Float where
 instance FromPgField Double where
   fieldParser =
     FieldParser
-      { fieldValueParser = \oid -> \mbs -> case mbs of
-          -- TODO: Ask in GHC issue tracker
-          -- Sadly, both realToFrac and float2Double look broken:
-          -- ghci> realToFrac (3.14 :: Float) ::  Double
-          -- 3.140000104904175
-          -- Possibly related:
-          -- https://gitlab.haskell.org/ghc/ghc/-/issues/16519
-          -- https://gitlab.haskell.org/ghc/ghc/-/issues/3676
-          -- Once this is addressed, add a test
-          Just bs -> if oid == float8Oid then Right $ binaryFloat8Decoder bs else Left "Hpgsql still does not support decoding postgres float4 into Haskell Double because it seems like Haskell's `realToFrac` and `float2Double` both sacrifice precision"
-          Nothing -> Left "Cannot parse SQL null into Haskell Double type. Use a `Maybe Double`",
+      { fieldValueParser = \oid ->
+          let decoder
+                | oid == float8Oid = binaryFloat8Decoder
+                | otherwise = float2Double . binaryFloat4Decoder
+           in \mbs -> case mbs of
+                Just bs -> Right $ decoder bs
+                Nothing -> Left "Cannot parse SQL null into Haskell Double type. Use a `Maybe Double`",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [float8Oid, float4Oid])
       }
@@ -714,18 +716,18 @@ instance FromPgField ZonedTime where
 instance FromPgField Day where
   fieldParser = parsePgType BinaryFmt [dateOid] $ \case
     Just bs -> do
-        -- There is a very specific conversion function for these, which I poorly translated to Haskell
-        -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
-        -- But I found a simpler way to do this. Let's see if it works in our property based tests
-        jd <- Cereal.decodeLazy @Int32 bs
-        Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
+      -- There is a very specific conversion function for these, which I poorly translated to Haskell
+      -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
+      -- But I found a simpler way to do this. Let's see if it works in our property based tests
+      jd <- Cereal.decodeLazy @Int32 bs
+      Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot parse SQL null into Haskell Day type. Use a `Maybe Day`"
 
 instance FromPgField CalendarDiffTime where
   fieldParser = parsePgType BinaryFmt [intervalOid] $ \case
     Just bs -> do
-        (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decodeLazy bs
-        Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime ((fromIntegral nDays) * 86400) + realToFrac (picosecondsToDiffTime ((fromIntegral nMicrosecs) * 1_000_000))}
+      (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decodeLazy bs
+      Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime ((fromIntegral nDays) * 86400) + realToFrac (picosecondsToDiffTime ((fromIntegral nMicrosecs) * 1_000_000))}
     Nothing -> Left "Cannot parse SQL null into Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
 
 instance FromPgField Aeson.Value where
