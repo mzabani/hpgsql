@@ -6,12 +6,14 @@
 benchmarks:
     set -eo pipefail
 
+    [ -n "$1" ] && BARGS=$(printf "'%s' " "${@}")
+
     if [ -n "$NIX" ]; then
         nix-build -A hpgsql-benchmarks -o local/hpgsql-benchmarks
-        nix-shell -A shellPg18 ./default.nix --run "./local/hpgsql-benchmarks/bin/hpgsql-benchmarks"
+        nix-shell -A shellPg18 ./default.nix --run "./local/hpgsql-benchmarks/bin/hpgsql-benchmarks $BARGS"
     else
         cabal build hpgsql-benchmarks
-        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
+        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh $BARGS"
     fi
 
 ##
