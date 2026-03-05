@@ -13,7 +13,12 @@ import System.Mem (performGC)
 import Test.Hspec
 
 testConnInfo :: IO ConnString
-testConnInfo = getEnv "PGPORT" >>= \portStr -> pure ConnString {user = "postgres", database = "postgres", hostname = "127.0.0.1", port = read portStr, password = "", options = ""}
+testConnInfo = do
+  portStr <- getEnv "PGPORT"
+  hostname <- getEnv "PGHOST"
+  database <- getEnv "PGDATABASE"
+  user <- getEnv "PGUSER"
+  pure ConnString {user, database, hostname, port = read portStr, password = "", options = ""}
 
 aroundConn :: SpecWith HPgConnection -> Spec
 aroundConn = around $ \act -> do

@@ -51,12 +51,11 @@ import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, mask, mask_, onException, throw, try, withException)
+import Control.Exception.Safe (Exception (..), MonadThrow, bracket, bracketOnError, finally, mask, mask_, onException, throw, withException)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
 import Data.Bifunctor (second)
-import qualified Data.Serialize as Cereal
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
@@ -68,6 +67,7 @@ import qualified Data.List.NonEmpty as NE
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
@@ -80,7 +80,7 @@ import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComple
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Query (Query (..), SingleQuery (..))
 import HPgsql.TypeInfo (Format (..))
-import Network.Socket (Socket)
+import Network.Socket (AddrInfo (..), Socket)
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
 import Streaming (Of (..), Stream)
@@ -279,18 +279,26 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
     getConnectedSocket resolvedAddr = do
       addrInfo <- case resolvedAddr of
         Just addrInfo -> pure addrInfo
-        Nothing -> do
-          addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
-          case addrInfos of
-            [] -> throwIrrecoverableError "Could not resolve address"
-            addrInfo : _ -> pure addrInfo
-      connattempt <- try $ do
-        sock <- Socket.openSocket addrInfo
-        Socket.connect sock (Socket.addrAddress addrInfo)
-        pure sock
-      case connattempt of
-        Left (_ :: SomeException) -> getConnectedSocket (Just addrInfo)
-        Right s -> pure s
+        Nothing ->
+          if "/" `List.isPrefixOf` hostname
+            then
+              pure
+                AddrInfo
+                  { addrFlags = [],
+                    addrFamily = Socket.AF_UNIX,
+                    addrSocketType = Socket.Stream,
+                    addrProtocol = Socket.defaultProtocol,
+                    addrAddress = Socket.SockAddrUnix $ List.dropWhileEnd (== '/') hostname ++ "/.s.PGSQL." ++ show port,
+                    addrCanonName = Nothing
+                  }
+            else do
+              addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
+              case addrInfos of
+                [] -> throwIrrecoverableError "Could not resolve address"
+                addrInfo : _ -> pure addrInfo
+      sock <- Socket.openSocket addrInfo
+      Socket.connect sock (Socket.addrAddress addrInfo)
+      pure sock
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
 getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
