@@ -65,7 +65,7 @@ library
       TypeOperators
       ViewPatterns
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -O2 -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path
+  ghc-options: -O1 -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path
   build-depends:
       aeson >= 2
     , async

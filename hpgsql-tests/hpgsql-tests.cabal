@@ -52,7 +52,7 @@ executable hpgsql-tests
       TypeOperators
       ViewPatterns
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -O2 -threaded -rtsopts "-with-rtsopts=-N" -Wunused-packages -optP-Wno-nonportable-include-path
+  ghc-options: -O1 -threaded -rtsopts "-with-rtsopts=-N" -Wunused-packages -optP-Wno-nonportable-include-path
   -- Until https://github.com/input-output-hk/haskell.nix/issues/231 is resolved,
   -- do not include hspec-discover in system-build-tools. We hack around the issue
   -- in flake.nix so both cabal and nix build work.

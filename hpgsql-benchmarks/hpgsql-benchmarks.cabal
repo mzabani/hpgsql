@@ -22,7 +22,7 @@ executable hpgsql-benchmarks
   main-is: Main.hs
   hs-source-dirs: src
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -O2 -threaded -rtsopts "-with-rtsopts=-maxN2 -qg -T" -Wall -Wpartial-fields -optP-Wno-nonportable-include-path
+  ghc-options: -O1 -threaded -rtsopts "-with-rtsopts=-maxN2 -qg -T" -Wall -Wpartial-fields -optP-Wno-nonportable-include-path
   default-extensions:
       BangPatterns
       DeriveAnyClass

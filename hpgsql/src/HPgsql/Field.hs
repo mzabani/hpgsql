@@ -171,7 +171,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
   case nullCheck of
     DisallowNull ->
       FieldParser
-        { fieldValueParser = \_compositeTypeOid mbs -> case mbs of
+        { fieldValueParser = \_compositeTypeOid -> \mbs -> case mbs of
             Nothing -> Left "Got NULL in composite type but it was not allowed"
             Just bs -> Parsec.parseOnly (parserForRecord <* Parsec.endOfInput) bs,
           allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
@@ -179,7 +179,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
         }
     AllowNull ->
       FieldParser
-        { fieldValueParser = \_compositeTypeOid mbs -> case mbs of
+        { fieldValueParser = \_compositeTypeOid -> \mbs -> case mbs of
             Nothing -> Right Nothing
             Just bs -> Just <$> Parsec.parseOnly (parserForRecord <* Parsec.endOfInput) bs,
           allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
@@ -235,6 +235,12 @@ instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgFiel
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
   rowParser = (,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l) where
+  rowParser = (,,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
+  rowParser = (,,,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
 
 class FromPgField a where
   fieldParser :: FieldParser a
@@ -474,7 +480,7 @@ binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decodeLazy @
 parsePgType :: Format -> [Oid] -> (Maybe LBS.ByteString -> Either String a) -> FieldParser a
 parsePgType fieldFmt requiredTypeOids fieldValueParser =
   FieldParser
-    { fieldValueParser = const fieldValueParser,
+    { fieldValueParser = \_oid -> fieldValueParser,
       fieldFmt,
       allowedPgTypes = (`elem` requiredTypeOids)
     }
@@ -482,7 +488,7 @@ parsePgType fieldFmt requiredTypeOids fieldValueParser =
 instance FromPgField () where
   fieldParser =
     FieldParser
-      { fieldValueParser = \_oid mbs -> case mbs of
+      { fieldValueParser = \_oid -> \mbs -> case mbs of
           Just "" -> Right ()
           Just bs -> Left $ "Invalid value '" ++ show bs ++ "' for postgres void type"
           Nothing -> Left "Cannot parse SQL null into Haskell () type. Use a `Maybe ()`",
@@ -494,7 +500,7 @@ instance FromPgField Int where
   fieldParser =
     FieldParser
       { fieldValueParser = \oid ->
-          let decode = binaryIntDecoder oid
+          let !decode = binaryIntDecoder oid
            in \mbs -> case mbs of
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int type. Use a `Maybe Int`",
@@ -506,7 +512,7 @@ instance FromPgField Int16 where
   fieldParser =
     FieldParser
       { fieldValueParser = \oid ->
-          let decode = binaryIntDecoder oid
+          let !decode = binaryIntDecoder oid
            in \mbs -> case mbs of
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int16 type. Use a `Maybe Int16`",
@@ -518,7 +524,7 @@ instance FromPgField Int32 where
   fieldParser =
     FieldParser
       { fieldValueParser = \oid ->
-          let decode = binaryIntDecoder oid
+          let !decode = binaryIntDecoder oid
            in \mbs -> case mbs of
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int32 type. Use a `Maybe Int32`",
@@ -530,7 +536,7 @@ instance FromPgField Int64 where
   fieldParser =
     FieldParser
       { fieldValueParser = \oid ->
-          let decode = binaryIntDecoder oid
+          let !decode = binaryIntDecoder oid
            in \mbs -> case mbs of
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int64 type. Use a `Maybe Int64`",
@@ -542,7 +548,7 @@ instance FromPgField Integer where
   fieldParser =
     FieldParser
       { fieldValueParser = \oid ->
-          let decodeInt = binaryIntDecoder @Int64 oid
+          let !decodeInt = binaryIntDecoder @Int64 oid
            in \mbs -> case mbs of
                 Just bs
                   | oid /= numericOid -> fromIntegral <$> decodeInt bs
@@ -559,7 +565,7 @@ instance FromPgField Integer where
 instance FromPgField Oid where
   fieldParser =
     FieldParser
-      { fieldValueParser = \_ mbs -> case mbs of
+      { fieldValueParser = \_ -> \mbs -> case mbs of
           -- Oids are just int4
           Just bs -> Oid <$> binaryIntDecoder int4Oid bs
           Nothing -> Left "Cannot parse SQL null into Haskell Oid type. Use a `Maybe Oid`",
@@ -576,7 +582,7 @@ instance FromPgField Double where
   fieldParser =
     FieldParser
       { fieldValueParser = \oid ->
-          let decoder
+          let !decoder
                 | oid == float8Oid = binaryFloat8Decoder
                 | otherwise = float2Double . binaryFloat4Decoder
            in \mbs -> case mbs of
@@ -594,7 +600,7 @@ instance FromPgField Double where
 anyTypeDecoder :: FieldParser LBS.ByteString
 anyTypeDecoder =
   FieldParser
-    { fieldValueParser = \_oid mbs -> case mbs of
+    { fieldValueParser = \_oid -> \mbs -> case mbs of
         Nothing -> Left "Cannot parse SQL null with `anyTypeDecoder`."
         Just bs -> Right bs,
       fieldFmt = TextFmt,
@@ -623,7 +629,7 @@ instance FromPgField Scientific where
   fieldParser =
     FieldParser
       { fieldValueParser = \oid ->
-          let decodeInt = binaryIntDecoder @Int64 oid
+          let !decodeInt = binaryIntDecoder @Int64 oid
            in \mbs -> case mbs of
                 Just bs ->
                   -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
@@ -649,7 +655,7 @@ instance FromPgField Char where
     let textParser = fieldValueParser (fieldParser @Text)
      in FieldParser
           { fieldValueParser = \oid ->
-              let decodeText = textParser oid
+              let !decodeText = textParser oid
                in \mbs -> case mbs of
                     Just bs ->
                       if oid == charOid
@@ -739,11 +745,13 @@ instance FromPgField Aeson.Value where
 
 instance (FromPgField a) => FromPgField (Maybe a) where
   fieldParser =
-    let (FieldParser {..}) = fieldParser
+    let (!FieldParser {..}) = fieldParser
      in FieldParser
-          { fieldValueParser = \oid -> \case
-              Nothing -> Right Nothing
-              justBs -> Just <$> fieldValueParser oid justBs,
+          { fieldValueParser = \oid ->
+              let !origFieldValueParser = fieldValueParser oid
+               in \case
+                    Nothing -> Right Nothing
+                    justBs -> Just <$> origFieldValueParser justBs,
             fieldFmt,
             allowedPgTypes
           }
@@ -752,7 +760,7 @@ instance forall a. (FromPgField a) => FromPgField (Vector a) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   fieldParser =
     FieldParser
-      { fieldValueParser = \_oid mbs -> case mbs of
+      { fieldValueParser = \_oid -> \mbs -> case mbs of
           Nothing -> Left "Cannot parse SQL null into Haskell Vector type. Use a `Maybe (Vector a)`"
           Just bs -> Parsec.parseOnly (arrayParser <* Parsec.endOfInput) bs,
         fieldFmt = BinaryFmt, -- TODO: What happens for decoder that are TextFmt?
