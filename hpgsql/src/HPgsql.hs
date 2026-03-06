@@ -251,11 +251,11 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
         CancelNotConnect cancelRequest -> do
-          interruptibleSendMsg hpgConnPartialDoNotReturn cancelRequest
-          Socket.close sock
+          nonAtomicSendMsg hpgConnPartialDoNotReturn cancelRequest
+          closeGracefully hpgConnPartialDoNotReturn
         Connect -> do
           -- TODO: Send encoding and other things with "options"?
-          interruptibleSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user, database, options}
+          nonAtomicSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user, database, options}
           void $ receiveNextMsgUnsafe hpgConnPartialDoNotReturn (msgParser @AuthenticationOk)
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
           -- TODO: Throw informative error for unimplemented authentication methods
@@ -356,7 +356,7 @@ closeGracefully conn@(HPgConnection {socket}) = flip finally (Socket.close socke
         STM.writeTVar sttv $ st {fundamentalCommunicationError = Just $ IrrecoverableHpgsqlError {hpgsqlDetails = "Bug in HPgsql. Should not be in this state when receiving control msgs because firstPendingQry should have thrown in this case", pgErrorDetails = mempty}}
     )
     $ \() -> do
-      interruptibleSendMsg conn Terminate
+      nonAtomicSendMsg conn Terminate
 
 -- | Closes the connection with postgres as quickly as possible without
 -- the proper postgres protocol handshake procedures. This is equivalent to
@@ -489,6 +489,9 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
 -- behaviour is undefined. That means if you had a Stream result and you run this function, you should
 -- not further inspect the Stream, and if you had sent a pipeline with multiple queries and you run this
 -- function, you should not try to consume the results of any query in that pipeline.
+-- Also, postgresql's protocol receives cancellation requests through separate/new database connections,
+-- so if you run this and then run another query, there's a race condition where the cancellation request
+-- might be processed by the server _after_ your query starts, and then cancels it.
 cancelAnyRunningStatement :: HPgConnection -> IO ()
 cancelAnyRunningStatement conn = do
   copyState <-
@@ -504,7 +507,7 @@ cancelAnyRunningStatement conn = do
           _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
   case copyState of
     Just StillCopying ->
-      uninterruptibleSendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail "COPY statement automatically cancelled by HPgsql because it was interrupted", SomeMessage Sync], markCopyFailSent)
+      atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail "COPY statement automatically cancelled by HPgsql because it was interrupted", SomeMessage Sync], markCopyFailSent)
     Just CopyDoneAndSyncSent ->
       pure
         () -- Already finished, nothing to cancel
@@ -901,7 +904,7 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
     -- is still empty (it will be modified once we send all control messages to postgres).
     -- This is Note [Only modify totalQueriesSent]
     let newPipeline = zipWith (\queryIdentifier queryProtocol -> QueryState {queryIdentifier, queryOwner = Just thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
-    uninterruptibleSendControlMsgs_
+    atomicallySendControlMsgs_
       conn
       ( allMsgs,
         do
@@ -1152,7 +1155,7 @@ withCopy conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) copyFn
 
 copyEnd :: HPgConnection -> QueryId -> IO Int64
 copyEnd conn qryId = do
-  uninterruptibleSendControlMsgs_
+  atomicallySendControlMsgs_
     conn
     ( [SomeMessage CopyDone, SomeMessage Sync],
       do
@@ -1169,9 +1172,9 @@ copyEnd conn qryId = do
     Left err -> throwPostgresError err
     Right (CommandComplete n) -> pure n
 
--- | A simpler version of `uninterruptibleSendControlMsgs`.
-uninterruptibleSendControlMsgs_ :: HPgConnection -> ([SomeMessage], STM ()) -> IO ()
-uninterruptibleSendControlMsgs_ conn (msgs, stateUpdate) = uninterruptibleSendControlMsgs conn (const $ pure ()) (const $ pure ()) (const $ pure ((), msgs, stateUpdate))
+-- | A simpler version of `atomicallySendControlMsgs`.
+atomicallySendControlMsgs_ :: HPgConnection -> ([SomeMessage], STM ()) -> IO ()
+atomicallySendControlMsgs_ conn (msgs, stateUpdate) = atomicallySendControlMsgs conn (const $ pure ()) (const $ pure ()) (const $ pure ((), msgs, stateUpdate))
 
 data SomeMessage = forall msg. (ToPgMessage msg) => SomeMessage msg
 
@@ -1187,21 +1190,29 @@ instance ToPgMessage SomeMessage where
 -- state will be updated once they're sent, and other callers calling this
 -- will wait for previous messages to be sent, so they see the same state
 -- they would under normal/error-free operation.
-uninterruptibleSendControlMsgs :: HPgConnection -> (TVar InternalConnectionState -> STM a) -> (TVar InternalConnectionState -> STM ()) -> (a -> IO (b, [SomeMessage], STM ())) -> IO b
-uninterruptibleSendControlMsgs conn acquire release f =
-  withControlMsgsLock
+atomicallySendControlMsgs :: HPgConnection -> (TVar InternalConnectionState -> STM a) -> (TVar InternalConnectionState -> STM ()) -> (a -> IO (b, [SomeMessage], STM ())) -> IO b
+atomicallySendControlMsgs conn acquire release f = do
+  queuedMsgsFlushedV <- STM.newTVarIO False
+  ret <- withControlMsgsLock
     conn
     acquire
     release
     $ \acqValue ->
       modifyMVar (sendBuffer conn) $
         \msgsInBuffer -> do
-          (ret, msgs, afterSentTxn) <- f acqValue
+          (ret, msgs, afterSentTxnF) <- f acqValue
+          let afterSentTxn = do
+                afterSentTxnF
+                STM.writeTVar queuedMsgsFlushedV True
           -- Use a DList for appends? Probably not worth it since there are so few control messages.
-          pure (msgsInBuffer ++ [(mconcat (map (Builder.toLazyByteString . toPgMessage) msgs), afterSentTxn)], ret)
+          pure (msgsInBuffer ++ [(Builder.toLazyByteString (mconcat $ map toPgMessage msgs), afterSentTxn)], ret)
+  STM.atomically $ do
+    flushed <- STM.readTVar queuedMsgsFlushedV
+    unless flushed STM.retry
+  pure ret
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
-putCopyData conn t = interruptibleSendMsg conn (CopyData t)
+putCopyData conn t = nonAtomicSendMsg conn (CopyData t)
 
 -- | This function is thread-and-interruption-safe, so you
 -- can run it with the same connection in parallel to any other functions.
@@ -1230,8 +1241,12 @@ getNotification conn =
         Just notif -> pure notif
         Nothing -> f
 
-interruptibleSendMsg :: (ToPgMessage msg, Show msg) => HPgConnection -> msg -> IO ()
-interruptibleSendMsg HPgConnection {socket} msg = do
+-- | Non-atomic because if it's interrupted, it can leave the socket in a state
+-- where only part of the message's bytes were pushed across the userspace<->kernel
+-- boundary, leaving the connection in a ruined state.
+-- TODO: Maybe we should mark the connection as broken on exception?
+nonAtomicSendMsg :: (ToPgMessage msg, Show msg) => HPgConnection -> msg -> IO ()
+nonAtomicSendMsg HPgConnection {socket} msg = do
   SocketLBS.sendAll socket $ Builder.toLazyByteString $ toPgMessage msg
   debugPrint $ "Sent " ++ show msg
 

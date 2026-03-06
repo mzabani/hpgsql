@@ -411,6 +411,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = d
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
   when cancelQueryExplicitly $ liftIO $ cancelAnyRunningStatement conn
+  threadDelay 3_000_000
   execute conn "select true" `shouldReturn` 1
   queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
 
