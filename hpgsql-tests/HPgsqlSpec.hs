@@ -6,7 +6,7 @@ module HPgsqlSpec where
 import Control.Concurrent (myThreadId, threadDelay)
 import Control.Concurrent.Async (Concurrently (..), mapConcurrently, wait, withAsync)
 import Control.Exception.Safe (SomeException, catch, throw, try)
-import Control.Monad (forM_, void, when)
+import Control.Monad (forM, forM_, void, when)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
@@ -196,35 +196,39 @@ spec = do
     it
       "COPY error"
       copyError
-  aroundConn $ describe "Thread safety and trickier error semantics" $ do
+  describe "Thread safety and trickier error semantics" $ do
     it
-      "Send queries concurrently"
-      sendQueriesConcurrently
-    it
-      "Cancel active streaming query then try to consume its results"
-      cancelStreamingQueryThenTryToConsumeResults
-    forM_ [False, True] $ \cancelQueryExplicitly -> do
+      "Query cancellation in the future"
+      queryCancellationInTheFuture
+    aroundConn $ do
       it
-        ("Query that errors due to bad FromPgField implementation - " ++ show cancelQueryExplicitly)
-        (queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly)
+        "Send queries concurrently"
+        sendQueriesConcurrently
       it
-        ("Query that errors due to bad FromPgField implementation - streaming - " ++ show cancelQueryExplicitly)
-        ( queryThatErrorsDueToBadFromPgFieldImplementation2
-            cancelQueryExplicitly
-        )
-    forM_ [False, True] $ \useTimeout -> do
+        "Cancel active streaming query then try to consume its results"
+        cancelStreamingQueryThenTryToConsumeResults
+      forM_ [False, True] $ \cancelQueryExplicitly -> do
+        it
+          ("Query that errors due to bad FromPgField implementation - " ++ show cancelQueryExplicitly)
+          (queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly)
+        it
+          ("Query that errors due to bad FromPgField implementation - streaming - " ++ show cancelQueryExplicitly)
+          ( queryThatErrorsDueToBadFromPgFieldImplementation2
+              cancelQueryExplicitly
+          )
+      forM_ [False, True] $ \useTimeout -> do
+        it
+          ("Can send query after thread killed - useTimeout " ++ show useTimeout)
+          (sendQueryAfterThreadKilled useTimeout)
+        it
+          ("Can send query after COPY thread killed - useTimeout " ++ show useTimeout)
+          (sendQueryAfterCopyKilled useTimeout)
       it
-        ("Can send query after thread killed - useTimeout " ++ show useTimeout)
-        (sendQueryAfterThreadKilled useTimeout)
+        "Assumptions about ThreadId behaviour"
+        assumptionsAboutThreadIdBehaviour
       it
-        ("Can send query after COPY thread killed - useTimeout " ++ show useTimeout)
-        (sendQueryAfterCopyKilled useTimeout)
-    it
-      "Assumptions about ThreadId behaviour"
-      assumptionsAboutThreadIdBehaviour
-    it
-      "cancelAnyRunningStatement does not require any queries to be running and is idempotent"
-      cancelAnyRunningStatementIsIdempotent
+        "cancelAnyRunningStatement does not require any queries to be running and is idempotent"
+        cancelAnyRunningStatementIsIdempotent
   describe "Connectivity" $ do
     it
       "Connecting to non-existing db"
@@ -410,10 +414,27 @@ queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = d
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
-  when cancelQueryExplicitly $ liftIO $ cancelAnyRunningStatement conn
-  threadDelay 3_000_000
+  when cancelQueryExplicitly $ cancelAnyRunningStatement conn
   execute conn "select true" `shouldReturn` 1
   queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
+
+-- | Ensures a query sent after a cancellation request isn't cancelled by it.
+-- This sounds impossible, but it is in fact possible and has confused driver
+-- writers many times. Read the docs for internalConnectOrCancel to know more.
+queryCancellationInTheFuture :: IO ()
+queryCancellationInTheFuture = do
+  hpgsqlConnInfo <- testConnInfo
+  -- This needs to run _many_ times for us to be certain
+  -- because it's a race condition.
+  -- Follow the cancellation code path in `internalConnectOrCancel`
+  -- and comment out the waiting-for-socket-closed part to see
+  -- this test fail with a query cancelled exception, at least some
+  -- times.
+  forM_ [1 :: Int .. 1_000] $
+    const $
+      withConnection hpgsqlConnInfo 10 $ \conn -> do
+        cancelAnyRunningStatement conn
+        execute conn "select true" `shouldReturn` 1
 
 queryThatErrorsDueToBadFromPgFieldImplementation2 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = do
@@ -423,7 +444,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = d
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
-  when cancelQueryExplicitly $ liftIO $ cancelAnyRunningStatement conn
+  when cancelQueryExplicitly $ cancelAnyRunningStatement conn
   execute conn "select true" `shouldReturn` 1
   queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
 

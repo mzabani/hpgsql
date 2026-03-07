@@ -51,7 +51,7 @@ import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (Exception (..), MonadThrow, bracket, bracketOnError, finally, mask, mask_, onException, throw, withException)
+import Control.Exception.Safe (Exception (..), MonadThrow, bracket, bracketOnError, finally, mask, mask_, onException, throw, tryJust, withException)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
@@ -87,6 +87,7 @@ import Streaming (Of (..), Stream)
 import qualified Streaming as S
 import qualified Streaming.Internal as SInternal
 import qualified Streaming.Prelude as S
+import System.IO.Error (isResourceVanishedError)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Mem.Weak (Weak, deRefWeak)
 import System.Timeout (timeout)
@@ -252,7 +253,11 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       case connectOrCancel of
         CancelNotConnect cancelRequest -> do
           nonAtomicSendMsg hpgConnPartialDoNotReturn cancelRequest
-          closeGracefully hpgConnPartialDoNotReturn
+          -- We _must_ wait until the socket is closed _by the other end_ (PostgreSQL-the-server),
+          -- because otherwise this cancellation request might be processed while the client sends
+          -- another query. See https://www.postgresql.org/message-id/flat/27126.1126649920%40sss.pgh.pa.us#75364d0966758fccad56cd6c71547771
+          void $ tryJust (\err -> if isResourceVanishedError err then Just () else Nothing) $ Socket.waitReadSocketSTM (socket hpgConnPartialDoNotReturn) >>= STM.atomically
+          Socket.close sock
         Connect -> do
           -- TODO: Send encoding and other things with "options"?
           nonAtomicSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user, database, options}
@@ -280,7 +285,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       addrInfo <- case resolvedAddr of
         Just addrInfo -> pure addrInfo
         Nothing ->
-          if "/" `List.isPrefixOf` hostname
+          if "/" `List.isInfixOf` hostname
             then
               pure
                 AddrInfo
@@ -489,9 +494,6 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
 -- behaviour is undefined. That means if you had a Stream result and you run this function, you should
 -- not further inspect the Stream, and if you had sent a pipeline with multiple queries and you run this
 -- function, you should not try to consume the results of any query in that pipeline.
--- Also, postgresql's protocol receives cancellation requests through separate/new database connections,
--- so if you run this and then run another query, there's a race condition where the cancellation request
--- might be processed by the server _after_ your query starts, and then cancels it.
 cancelAnyRunningStatement :: HPgConnection -> IO ()
 cancelAnyRunningStatement conn = do
   copyState <-
