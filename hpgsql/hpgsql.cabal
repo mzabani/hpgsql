@@ -29,6 +29,7 @@ library
       HPgsql.TypeInfo
   other-modules:
       HPgsql.Msgs
+      HPgsql.Networking
       Paths_hpgsql
   autogen-modules:
       Paths_hpgsql

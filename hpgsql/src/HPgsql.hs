@@ -73,11 +73,13 @@ import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 import Data.Word (Word64)
+import GHC.Clock (getMonotonicTime)
 import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Field (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
+import HPgsql.Networking (recvNonBlocking, socketWaitRead)
 import HPgsql.Query (Query (..), SingleQuery (..))
 import HPgsql.TypeInfo (Format (..))
 import Network.Socket (AddrInfo (..), Socket)
@@ -465,15 +467,6 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
           else
             error "Bug in HPgsql. Internal buffer's bytes weren't filled enough"
 
-    socketRecvAtLeast :: Int64 -> IO LBS.ByteString
-    socketRecvAtLeast n = do
-      l1 <- SocketLBS.recv socket (max n 8192) -- Do we need `max`?
-      if LBS.length l1 >= n
-        then pure l1
-        else do
-          rest <- socketRecvAtLeast (n - LBS.length l1)
-          pure $ l1 <> rest
-
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
     receiveUntilBufferHasAtLeast :: Int64 -> IO ()
@@ -482,8 +475,10 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
       when (nBytesInBuffer < minBytesNecessary) $ mask $ \restore -> do
         -- This takes from the kernel's recv buffer and appendds to our buffer atomically,
         -- or an exception is thrown when receiving
-        restOfBytes <- restore $ socketRecvAtLeast (minBytesNecessary - nBytesInBuffer)
-        modifyMVar_ recvBuffer (\lbs -> pure $ lbs <> restOfBytes)
+        restore $ socketWaitRead socket
+        someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+        modifyMVar_ recvBuffer (\lbs -> pure $ lbs <> LBS.fromStrict someBytes)
+        restore $ receiveUntilBufferHasAtLeast minBytesNecessary
 
     peekIntoBuffer :: Int64 -> IO LBS.ByteString
     peekIntoBuffer n = LBS.take n <$> readMVar recvBuffer
@@ -1265,6 +1260,14 @@ debugPrint :: String -> IO ()
 debugPrint _ = pure ()
 
 -- debugPrint str = modifyMVar_ _globalLock $ const $ putStrLn str
+timeDebugNonBlockingOperation :: String -> IO a -> IO a
+-- timeDebugNonBlockingOperation _ f = f
+timeDebugNonBlockingOperation opName f = do
+  t1 <- getMonotonicTime
+  ret <- f
+  t2 <- getMonotonicTime
+  when (t2 - t1 > 0.01) $ putStrLn $ opName ++ " took more than 10ms: " ++ show (t2 - t1)
+  pure ret
 
 lastMaybe :: [a] -> Maybe a
 lastMaybe [] = Nothing

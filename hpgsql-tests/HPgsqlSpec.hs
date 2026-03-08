@@ -4,7 +4,7 @@
 module HPgsqlSpec where
 
 import Control.Concurrent (myThreadId, threadDelay)
-import Control.Concurrent.Async (Concurrently (..), mapConcurrently, wait, withAsync)
+import Control.Concurrent.Async (Concurrently (..), cancel, mapConcurrently, wait, withAsync)
 import Control.Exception.Safe (SomeException, catch, throw, try)
 import Control.Monad (forM, forM_, void, when)
 import Control.Monad.IO.Class (liftIO)
@@ -201,6 +201,9 @@ spec = do
       "Query cancellation in the future"
       queryCancellationInTheFuture
     aroundConn $ do
+      it
+        "Exercise interruption safety"
+        exerciseInterruptionSafety
       it
         "Send queries concurrently"
         sendQueriesConcurrently
@@ -435,6 +438,20 @@ queryCancellationInTheFuture = do
       withConnection hpgsqlConnInfo 10 $ \conn -> do
         cancelAnyRunningStatement conn
         execute conn "select true" `shouldReturn` 1
+
+-- | Massively exercise sending an asynchronous exception to a query
+-- that is actively receiving data from the backend (so not abusing
+-- pg_sleep). The idea is to try to interrupt hpgsql in the middle
+-- of receiving messages, since taking from the kernel's buffers
+-- is a blocking and risky process.
+exerciseInterruptionSafety :: HPgConnection -> IO ()
+exerciseInterruptionSafety conn = do
+  let veryLongTxtString :: String = take 10000 $ repeat 'x'
+  forM_ [1_000 :: Int .. 2_000] $ \i -> do
+    withAsync (execute conn [sql|select #{veryLongTxtString}, pg_sleep(0.5) FROM generate_series(1, 100000)|]) $ \queryAsync -> do
+      threadDelay i
+      cancel queryAsync
+    execute conn "SELECT 1" `shouldReturn` 1
 
 queryThatErrorsDueToBadFromPgFieldImplementation2 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = do
