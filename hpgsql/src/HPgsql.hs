@@ -47,7 +47,6 @@ where
 
 import Control.Applicative (Alternative (..))
 import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, myThreadId, threadDelay)
-import Control.Concurrent.Async (async, wait)
 import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
@@ -79,7 +78,7 @@ import HPgsql.Connection (ConnString (..))
 import HPgsql.Field (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
-import HPgsql.Networking (recvNonBlocking, socketWaitRead)
+import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import HPgsql.Query (Query (..), SingleQuery (..))
 import HPgsql.TypeInfo (Format (..))
 import Network.Socket (AddrInfo (..), Socket)
@@ -237,6 +236,9 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
     Nothing -> throwIrrecoverableError "Could not connect in the supplied timeout"
     -- TODO: It's still possible for an asynchronous exception to interrupt this before the `onException` handler is installed
     Just sock -> flip onException (Socket.close sock) $ do
+      Socket.withFdSocket sock Socket.getNonBlock >>= \case
+        False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
+        True -> pure ()
       recvBuffer <- newMVar mempty
       sendBuffer <- newMVar mempty
       connParams <- newMVar mempty
@@ -539,7 +541,7 @@ withControlMsgsLock ::
   (TVar InternalConnectionState -> STM b) ->
   (a -> IO c) ->
   IO c
-withControlMsgsLock conn acqStm relStm f = do
+withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
   -- To make sure any messages sent by threads killed before
   -- we even look a internal connection state have their effects
   -- on internal state, we flush the send buffer.
@@ -583,23 +585,21 @@ withControlMsgsLock conn acqStm relStm f = do
     )
   where
     flushSendBuffer :: IO ()
-    flushSendBuffer = mask $ \restore -> do
-      threadWasKilled <- newMVar False
-      unkillableThread <- async
-        $ flip
-          withException
-          -- An exception here could be a socket error or something
-          -- that forces us to discard the connection
-          ( \ex -> do
-              debugPrint $ "!!!!!!!!!!!!! Got synchronous exception: " ++ show ex
-              STM.atomically $ updateConnStateTxn conn $ \sttv -> do
-                st <- STM.readTVar sttv
-                STM.writeTVar (internalConnectionState conn) $ st {fundamentalCommunicationError = Just ex}
-          )
-        $ do
+    flushSendBuffer =
+      flip
+        withException
+        -- An exception here could be a socket error or something
+        -- that forces us to discard the connection
+        ( \ex -> do
+            debugPrint $ "!!!!!!!!!!!!! Got synchronous exception: " ++ show ex
+            STM.atomically $ updateConnStateTxn conn $ \sttv -> do
+              st <- STM.readTVar sttv
+              STM.writeTVar (internalConnectionState conn) $ st {fundamentalCommunicationError = Just ex}
+        )
+        $ mask
+        $ \restore -> do
           let go = do
-                -- We run this in a forked thread to keep
-                -- the user thread interruptible.
+                restore $ socketWaitWrite socket
                 others <- modifyMVar (sendBuffer conn) $ \case
                   [] -> pure ([], [])
                   ((msgs, afterSentTxn) : xs) ->
@@ -609,20 +609,14 @@ withControlMsgsLock conn acqStm relStm f = do
                         STM.atomically afterSentTxn
                         pure (xs, xs)
                       else do
-                        n <- SocketLBS.send (socket conn) msgs
+                        n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
                         -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
                         let fin = (LBS.drop n msgs, afterSentTxn) : xs
                         pure (fin, fin)
 
-                stop <- readMVar threadWasKilled
                 -- debugPrint $ show $ stop || null others
-                unless (null others || stop) go
+                unless (null others) go
           go
-      flip
-        onException
-        (modifyMVar_ threadWasKilled $ const $ pure True)
-        $ restore
-        $ wait unkillableThread
 
 -- | Receives the next response message for the given QueryId safely/atomically, updates
 -- internal connection state to reflect it, and returns the updated state alongside the
@@ -1189,24 +1183,16 @@ instance ToPgMessage SomeMessage where
 -- they would under normal/error-free operation.
 atomicallySendControlMsgs :: HPgConnection -> (TVar InternalConnectionState -> STM a) -> (TVar InternalConnectionState -> STM ()) -> (a -> IO (b, [SomeMessage], STM ())) -> IO b
 atomicallySendControlMsgs conn acquire release f = do
-  queuedMsgsFlushedV <- STM.newTVarIO False
-  ret <- withControlMsgsLock
+  withControlMsgsLock
     conn
     acquire
     release
     $ \acqValue ->
       modifyMVar (sendBuffer conn) $
         \msgsInBuffer -> do
-          (ret, msgs, afterSentTxnF) <- f acqValue
-          let afterSentTxn = do
-                afterSentTxnF
-                STM.writeTVar queuedMsgsFlushedV True
+          (ret, msgs, afterSentTxn) <- f acqValue
           -- Use a DList for appends? Probably not worth it since there are so few control messages.
           pure (msgsInBuffer ++ [(Builder.toLazyByteString (mconcat $ map toPgMessage msgs), afterSentTxn)], ret)
-  STM.atomically $ do
-    flushed <- STM.readTVar queuedMsgsFlushedV
-    unless flushed STM.retry
-  pure ret
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn (CopyData t)
@@ -1266,7 +1252,7 @@ timeDebugNonBlockingOperation opName f = do
   t1 <- getMonotonicTime
   ret <- f
   t2 <- getMonotonicTime
-  when (t2 - t1 > 0.01) $ putStrLn $ opName ++ " took more than 10ms: " ++ show (t2 - t1)
+  when (t2 - t1 > 0.001) $ putStrLn $ opName ++ " took more than 1ms: " ++ show (t2 - t1)
   pure ret
 
 lastMaybe :: [a] -> Maybe a

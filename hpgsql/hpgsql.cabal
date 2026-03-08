@@ -69,7 +69,6 @@ library
   ghc-options: -O1 -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path
   build-depends:
       aeson >= 2
-    , async
     , attoparsec
     , base
     , cereal
