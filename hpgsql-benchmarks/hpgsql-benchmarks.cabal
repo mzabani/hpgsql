@@ -18,11 +18,20 @@ source-repository head
   type: git
   location: https://github.com/mzabani/hpgsql
 
+flag threaded
+  description: Build with the threaded runtime
+  default: True
+  manual: True
+
 executable hpgsql-benchmarks
   main-is: Main.hs
   hs-source-dirs: src
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -O1 -threaded -rtsopts "-with-rtsopts=-maxN2 -qg -T" -Wall -Wpartial-fields -optP-Wno-nonportable-include-path
+  ghc-options: -O1 -rtsopts -Wall -Wpartial-fields -optP-Wno-nonportable-include-path
+  if flag(threaded)
+    ghc-options: -threaded "-with-rtsopts=-N"
+  else
+    ghc-options: -single-threaded
   default-extensions:
       BangPatterns
       DeriveAnyClass

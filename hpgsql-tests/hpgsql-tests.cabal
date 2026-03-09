@@ -16,6 +16,11 @@ source-repository head
   type: git
   location: https://github.com/mzabani/hpgsql
 
+flag threaded
+  description: Build with the threaded runtime
+  default: True
+  manual: True
+
 executable hpgsql-tests
   main-is: Main.hs
   other-modules:
@@ -52,12 +57,11 @@ executable hpgsql-tests
       TypeOperators
       ViewPatterns
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -O1 -threaded -rtsopts "-with-rtsopts=-N" -Wunused-packages -optP-Wno-nonportable-include-path
-  -- Until https://github.com/input-output-hk/haskell.nix/issues/231 is resolved,
-  -- do not include hspec-discover in system-build-tools. We hack around the issue
-  -- in flake.nix so both cabal and nix build work.
-  -- build-tools:
-  --     hspec-discover
+  ghc-options: -O1 -rtsopts -Wunused-packages -optP-Wno-nonportable-include-path
+  if flag(threaded)
+    ghc-options: -threaded "-with-rtsopts=-N"
+  else
+    ghc-options: -single-threaded
   build-depends:
       aeson >= 2
     , async

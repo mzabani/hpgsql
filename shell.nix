@@ -1,4 +1,9 @@
-{ pkgs ? import ./nix/nixpkgs.nix {} }:
+# Switch betweein `-threaded` and `+threaded` to change both the dev shell
+# and the output of `nix-build` commands to build executables like hpgsql-tests
+# and hpgsql-benchmarks with the single or multi-threaded GHC RTS
+let threading = "+threaded";
+in
+{ pkgs ? import ./nix/nixpkgs.nix { inherit threading; } }:
 let
   postgres = pkgs.postgresql_16.withPackages (ps: with ps; [ pg_cron ]);
 in
@@ -18,6 +23,14 @@ in
     # to make it work, so we only init the cluster.
     # See https://github.com/direnv/direnv/issues/755
     ./scripts/init-pg-cluster.sh ./conf/dev-db
+
+    export HPGSQL_THREADED="${threading}"
+    cat << LOCAL > cabal.project.local
+package hpgsql-tests
+  flags: ${threading}
+package hpgsql-benchmarks
+  flags: ${threading}
+LOCAL
 
     echo You should be able to start postgres with 'pg_ctl start' and use 'psql' to connect to it, and it will be independent from any your own system might have provided.
     echo If 'psql' fails to connect, check logs at $PGDATA/log/

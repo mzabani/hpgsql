@@ -21,16 +21,17 @@ benchmarks:
 ci-tests:
     set -eo pipefail
 
-    # Postgres-version dependent tests for each possible version next
-    # We test the last version with the vanilla nixpkgs-built derivation,
-    # not the IOHK one. We assume differences in the codebase regarding different
-    # postgres versions aren't enough to make it worth testing every version here too.
     concurrently -g --timings --names pg18,pg17,pg16,pg15,pg14 \
-      'run tests --nix --pg 18' \
-      'run tests --nix --pg 17' \
-      'run tests --nix --pg 16' \
-      'run tests --nix --pg 15' \
-      'run tests --nix --pg 14'
+      'nix-build --no-out-link -A testsPg18' \
+      'nix-build --no-out-link -A testsPg17' \
+      'nix-build --no-out-link -A testsPg16' \
+      'nix-build --no-out-link -A testsPg15' \
+      'nix-build --no-out-link -A testsPg14'
+
+    concurrently -g --timings --names single-threaded,ghc984,ghc967 \
+      'nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
+      'nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
+      'nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
 
 
 ##

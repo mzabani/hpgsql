@@ -1,12 +1,9 @@
-.stack-work/
 *~
 local/*
 !local/.gitkeep
 dist-newstyle/
 .direnv/
+cabal.project.local
 
 # Nix build outputs
 results/
-
-# Result of cabal run -O2 --enable-profiling codd-bench
-codd-bench.prof

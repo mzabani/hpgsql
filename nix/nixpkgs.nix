@@ -1,29 +1,56 @@
-{ system ? builtins.currentSystem }:
+{   system ? builtins.currentSystem
+  , threading ? builtins.getEnv "HPGSQL_THREADED"
+}:
 let
-    ourOwnHaskellPkgsOverlay = final: prev: 
-      let newHaskellPackages = prev.haskellPackages.extend (prev.haskell.lib.compose.packageSourceOverrides {
-                                    hpgsql = ../hpgsql;
-                                    hpgsql-tests = ../hpgsql-tests;
-                                    hpgsql-benchmarks = ../hpgsql-benchmarks;
-                                    hpgsql-simple-compat = ../hpgsql-simple-compat;
-                              });
+    disableThreaded = threading == "-threaded";
+    ourOwnHaskellPkgsOverlay = final: prev:
+      let
+        sourceOverrides = prev.haskell.lib.compose.packageSourceOverrides {
+          hpgsql = ../hpgsql;
+          hpgsql-tests = ../hpgsql-tests;
+          hpgsql-benchmarks = ../hpgsql-benchmarks;
+          hpgsql-simple-compat = ../hpgsql-simple-compat;
+        };
+        dontCheckOverrides = hsSelf: hsSuper:
+          let maybeDisableThreaded = if disableThreaded
+                then final.haskell.lib.compose.disableCabalFlag "threaded"
+                else drv: drv;
+          in {
+            hpgsql = final.haskell.lib.dontCheck hsSuper.hpgsql;
+            hpgsql-tests = maybeDisableThreaded (final.haskell.lib.dontCheck hsSuper.hpgsql-tests);
+            hpgsql-benchmarks = maybeDisableThreaded (final.haskell.lib.dontCheck hsSuper.hpgsql-benchmarks);
+            hpgsql-simple-compat = maybeDisableThreaded (final.haskell.lib.dontCheck hsSuper.hpgsql-simple-compat);
+          };
       in {
-       haskellPackages = newHaskellPackages // {
-        hpgsql = final.haskell.lib.dontCheck newHaskellPackages.hpgsql;
-        hpgsql-tests = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-tests;
-        hpgsql-benchmarks = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-benchmarks;
-        hpgsql-simple-compat = final.haskell.lib.dontCheck newHaskellPackages.hpgsql-simple-compat;
+        haskell = prev.haskell // {
+          packages = builtins.mapAttrs (ghcVer: hpkgs:
+            # Some fields in haskell.packages.* have the `extend` method, others do not;
+            # we assume having it means it's a Haskell package set
+            let canExtend = (builtins.tryEval (hpkgs ? extend)).value or false;
+            in if canExtend then
+              hpkgs.extend (prev.lib.composeExtensions
+                sourceOverrides
+                dontCheckOverrides)
+            else hpkgs
+          ) prev.haskell.packages;
+        };
       };
-    };
 
     notReallyBrokenPkgsOverlay = final: prev:
       {
-       haskellPackages = prev.haskellPackages.override {
-         overrides = hsSelf: hsSuper: {
-            streaming-postgresql-simple = final.haskell.lib.doJailbreak (final.haskell.lib.markUnbroken hsSuper.streaming-postgresql-simple);
-          };
+        haskell = prev.haskell // {
+          packages = builtins.mapAttrs (ghcVer: hpkgs:
+            let canOverride = (builtins.tryEval (hpkgs ? override)).value or false;
+            in if canOverride then
+              hpkgs.override {
+                overrides = hsSelf: hsSuper: {
+                  streaming-postgresql-simple = final.haskell.lib.doJailbreak (final.haskell.lib.markUnbroken hsSuper.streaming-postgresql-simple);
+                };
+              }
+            else hpkgs
+          ) prev.haskell.packages;
+        };
       };
-    };
 
     # Profiling overlays taken from https://ryantm.github.io/nixpkgs/languages-frameworks/haskell/,
     # with package exclude-list from myself after build errors

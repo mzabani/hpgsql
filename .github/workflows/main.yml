@@ -16,6 +16,7 @@ defaults:
 
 env:
   CI: 1
+  HPGSQL_THREADED: +threaded
 
 jobs:
   build-x86_64-linux:
@@ -55,6 +56,18 @@ jobs:
           'scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-tests.txt nix-build --no-out-link -A testsPg16' \
           'scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15' \
           'scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14'
+
+    - name: Run tests with different combinations
+      run: |
+        # GHC's single and multi-threaded runtimes are different with respect
+        # to many things, and our library relies on a lot of ThreadId tracking,
+        # interruption safety, MVars and STM, so we test the single threaded
+        # runtime, too.
+        # We also test with other GHCs. This is a library, after all.
+        concurrently -g --timings --names single-threaded,ghc984,ghc967 \
+          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
+          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
+          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc967-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
 
   build-aarch64-darwin:
     runs-on: macos-14

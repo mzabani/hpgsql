@@ -10,6 +10,6 @@ main = do
   IO.hSetBuffering IO.stdout IO.NoBuffering
   IO.hSetBuffering IO.stderr IO.NoBuffering
 
-  getRTSFlags >>= \f -> print (parFlags f)
+  getRTSFlags >>= print
 
   hspec AllSpecs.spec

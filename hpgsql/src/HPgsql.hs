@@ -1004,7 +1004,7 @@ drainOrphanedQueriesAndRunWithControlMsgLock conn = do
           -- TODO: We should either move the WeakThreadId owner into the full pipeline,
           -- or change this to a `takeWhile` because the internal model allows different
           -- queries to have different owners, even if in practice that shouldn't happen.
-          mustTakeOwnership <- fmap (foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} -> case queryOwner of
+          mustTakeOwnership <- fmap (List.foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} -> case queryOwner of
             Nothing -> pure True
             -- See Note [`timeout` uses the same ThreadId] for why having the same ThreadId _still_ means
             -- we need to cancel and drain those queries

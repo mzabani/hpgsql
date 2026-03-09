@@ -1,13 +1,21 @@
-{ system ? builtins.currentSystem, pkgs ? import ./nix/nixpkgs.nix { inherit system; } }:
+{
+    system ? builtins.currentSystem
+  , threading ? builtins.getEnv "HPGSQL_THREADED"
+  , ghc ? "ghc9103"
+  , pkgs ? import ./nix/nixpkgs.nix { inherit system threading; }
+}:
 let
   addPgExtensions = postgres: postgres.withPackages (ps: [ ps.pg_cron ]);
+  haskellPackages = builtins.getAttr ghc pkgs.haskell.packages;
 in
 rec {
-  hpgsql = pkgs.haskellPackages.hpgsql;
-  hpgsql-tests = pkgs.haskellPackages.hpgsql-tests;
-  hpgsql-simple-compat = pkgs.haskellPackages.hpgsql-simple-compat;
-  hpgsql-benchmarks = pkgs.haskellPackages.hpgsql-benchmarks;
-  haskellPackages = pkgs.haskellPackages;
+  hpgsql = haskellPackages.hpgsql;
+  hpgsql-tests = haskellPackages.hpgsql-tests;
+  # Building for Windows doesn't work yet. It would be nice to test with wine.
+  hpgsql-tests-for-windows = (builtins.getAttr ghc pkgs.pkgsCross.x86_64-windows.haskell.packages).hpgsql-tests;
+  hpgsql-simple-compat = haskellPackages.hpgsql-simple-compat;
+  hpgsql-benchmarks = haskellPackages.hpgsql-benchmarks;
+  inherit haskellPackages;
 
   testsPg18 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_18; };
   testsPg17 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_17; };
