@@ -4,7 +4,8 @@
 module HPgsql.Query
   ( Query (..), -- We probably shouldn't export this ctor?
     SingleQuery (..), -- Nor this one
-    sql,
+    sql, -- Nor this one
+    mkQueryWithQuestionMarks,
   )
 where
 
@@ -15,8 +16,8 @@ import qualified Data.List.NonEmpty as NE
 import Data.String (IsString (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Text.Encoding (encodeUtf8)
-import HPgsql.Field (ToPgField (..))
+import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import HPgsql.Field (ToPgField (..), ToPgRow (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), parseSql, sqlStatementText)
 import HPgsql.TypeInfo (Oid)
 import Language.Haskell.TH
@@ -27,13 +28,53 @@ data SqlFragment = LiteralText !Text | InterpolatedVar !String
   deriving stock (Show, Eq)
 
 newtype Query = Query (NonEmpty SingleQuery)
+  deriving newtype (Eq, Semigroup, Show)
 
 data SingleQuery = SingleQuery {queryString :: ByteString, queryParams :: [(Maybe Oid, Maybe LBS.ByteString)]}
+  deriving stock (Eq, Show)
 
 instance IsString Query where
   fromString s =
     let statements = parseSql (Text.pack s)
      in Query $ fmap (\stmt -> SingleQuery (encodeUtf8 $ sqlStatementText stmt) []) statements
+
+-- | Takes in a query string with question marks as placeholders for query arguments,
+-- e.g. "SELECT * FROM table WHERE col1=? AND col2=?", and a row object, and returns
+-- the equivalent query for Hpgsql to run.
+mkQueryWithQuestionMarks :: (ToPgRow r) => ByteString -> r -> Query
+mkQueryWithQuestionMarks queryTemplate r =
+  let allParams = toPgParams r
+      statements = parseSql (decodeUtf8 queryTemplate)
+   in Query $ distributeParams allParams statements
+  where
+    processStatement :: SqlStatement -> (ByteString, Int)
+    processStatement (SqlStatement blocks) =
+      let (finalN, textParts) = foldl' processBlock (1, []) blocks
+       in (encodeUtf8 $ Text.concat (reverse textParts), finalN - 1)
+
+    processBlock :: (Int, [Text]) -> BlockOrNotBlock -> (Int, [Text])
+    processBlock (n, acc) (Block t) = (n, t : acc)
+    processBlock (n, acc) (NotBlock t) =
+      let (n', t') = replaceQuestionMarks n t
+       in (n', t' : acc)
+
+    replaceQuestionMarks :: Int -> Text -> (Int, Text)
+    replaceQuestionMarks n txt =
+      let (before, rest) = Text.break (== '?') txt
+       in if Text.null rest
+            then (n, before)
+            else
+              let (n', rest') = replaceQuestionMarks (n + 1) (Text.drop 1 rest)
+               in (n', before <> "$" <> Text.pack (show n) <> rest')
+
+    distributeParams :: [(Maybe Oid, Maybe LBS.ByteString)] -> NonEmpty SqlStatement -> NonEmpty SingleQuery
+    distributeParams params (stmt :| rest) =
+      let (queryBS, numParams) = processStatement stmt
+          (theseParams, remainingParams) = splitAt numParams params
+          thisQuery = SingleQuery queryBS theseParams
+       in case rest of
+            [] -> thisQuery :| []
+            (s : ss) -> thisQuery NE.<| distributeParams remainingParams (s :| ss)
 
 sql :: QuasiQuoter
 sql =

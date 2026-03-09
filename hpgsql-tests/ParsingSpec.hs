@@ -27,8 +27,9 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.IO as Text
 import GHC.Num (Natural)
+import HPgsql (Only (..), mkQuery)
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
-import HPgsql.Query (Query (..), SingleQuery (..), sql)
+import HPgsql.Query (Query (..), SingleQuery (..), mkQueryWithQuestionMarks, sql)
 import Hedgehog (Gen, forAll)
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
@@ -259,6 +260,9 @@ spec = do
             query = getUniqueNE queries
         queryString query `shouldBe` encodeUtf8 "SELECT * FROM users WHERE id = $1"
         length (queryParams query) `shouldBe` 1
+
+      it "SQL with question marks as placeholders" $ do
+        mkQueryWithQuestionMarks "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?); SELECT ? FROM table" (11 :: Int, 21 :: Int, 31 :: Int, 41 :: Int, 51 :: Int) `shouldBe` mkQuery "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=$1 AND y IN ($2, $3, $4);" (11 :: Int, 21 :: Int, 31 :: Int, 41 :: Int) <> mkQuery " SELECT $1 FROM table" (Only (51 :: Int))
 
       it "parses SQL with multiple interpolations" $ do
         let userId = 42 :: Int
