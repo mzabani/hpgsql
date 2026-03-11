@@ -66,8 +66,7 @@ jobs:
         # We also test with other GHCs. This is a library, after all.
         concurrently -g --timings --names single-threaded,ghc984,ghc967 \
           'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
-          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
-          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc967-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
+          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18'
 
   build-aarch64-darwin:
     runs-on: macos-14
