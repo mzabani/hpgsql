@@ -8,7 +8,7 @@ let
   postgres = pkgs.postgresql_16.withPackages (ps: with ps; [ pg_cron ]);
 in
   pkgs.haskellPackages.shellFor {
-    packages = p: with p; [ hpgsql hpgsql-tests hpgsql-benchmarks hpgsql-simple-compat ];
+    packages = p: with p; [ hpgsql hpgsql-tests hpgsql-benchmarks hpgsql-simple-compat hpgsql-simple-compat-tests ];
     withHoogle = true;
     buildInputs = with pkgs; [ concurrently run postgres haskellPackages.cabal-install haskellPackages.ghcid haskellPackages.haskell-language-server haskellPackages.hlint ];
 
@@ -26,9 +26,12 @@ in
 
     export HPGSQL_THREADED="${threading}"
     cat << LOCAL > cabal.project.local
+tests: False
 package hpgsql-tests
   flags: ${threading}
 package hpgsql-benchmarks
+  flags: ${threading}
+package hpgsql-simple-compat-tests
   flags: ${threading}
 LOCAL
 

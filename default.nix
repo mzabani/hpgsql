@@ -14,6 +14,7 @@ rec {
   # Building for Windows doesn't work yet. It would be nice to test with wine.
   hpgsql-tests-for-windows = (builtins.getAttr ghc pkgs.pkgsCross.x86_64-windows.haskell.packages).hpgsql-tests;
   hpgsql-simple-compat = haskellPackages.hpgsql-simple-compat;
+  hpgsql-simple-compat-tests = haskellPackages.hpgsql-simple-compat-tests;
   hpgsql-benchmarks = haskellPackages.hpgsql-benchmarks;
   inherit haskellPackages;
 

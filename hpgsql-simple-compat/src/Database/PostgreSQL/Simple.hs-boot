@@ -13,9 +13,9 @@ import Data.Int (Int64)
 import Database.PostgreSQL.Simple.Internal
 import {-# SOURCE #-} Database.PostgreSQL.Simple.ToRow
 import Database.PostgreSQL.Simple.Types
-import qualified HPgsql
+import HPgsql.Field (FromPgRow, ToPgRow)
 
-query :: (ToRow q, HPgsql.FromPgRow r) => Connection -> Query -> q -> IO [r]
-query_ :: (HPgsql.FromPgRow r) => Connection -> Query -> IO [r]
-execute :: (ToRow q) => Connection -> Query -> q -> IO Int64
-executeMany :: (ToRow q) => Connection -> Query -> [q] -> IO Int64
+query :: (ToPgRow q, FromPgRow r) => Connection -> Query -> q -> IO [r]
+query_ :: (FromPgRow r) => Connection -> Query -> IO [r]
+execute :: (ToPgRow q) => Connection -> Query -> q -> IO Int64
+executeMany :: (ToPgRow q) => Connection -> Query -> [q] -> IO Int64

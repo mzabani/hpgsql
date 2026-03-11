@@ -10,6 +10,7 @@ import Control.Monad (forM, forM_, void, when)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Containers.ListUtils (nubOrd)
 import Data.Functor ((<&>))
@@ -348,7 +349,7 @@ cancelStreamingQueryThenTryToConsumeResults conn = do
   -- 1. Might not throw if the query finished running in the server. Change 100000000 to 5 to see this test fail.
   -- 2. Might throw with "canceling statement due to user request", like in this test.
   -- So we should document the behaviour when doing this as UNDEFINED!
-  S.effects res `shouldThrow` pgErrorMustContain [(ErrorCode, "57014")]
+  S.effects res `shouldThrow` pgErrorMustContain "generate_series(1,100000000)" [(ErrorCode, "57014")]
 
 queryingAndReturningAFewRows :: HPgConnection -> IO ()
 queryingAndReturningAFewRows conn =
@@ -384,7 +385,7 @@ executingMixedRowsAndCountReturningStatements conn = do
 queryWithMismatchInNumberOfColumns :: HPgConnection -> IO ()
 queryWithMismatchInNumberOfColumns conn = do
   queryWith (rowParser @(Bool, Bool)) conn "select 1, 2, 3"
-    `shouldThrow` pgErrorMustContain [(ErrorCode, "08P01"), (ErrorHumanReadableMsg, "bind message has 2 result formats but query has 3 columns")]
+    `shouldThrow` pgErrorMustContain "select 1, 2, 3" [(ErrorCode, "08P01"), (ErrorHumanReadableMsg, "bind message has 2 result formats but query has 3 columns")]
 
 queryWithMismatchInTypesOfColumns :: HPgConnection -> IO ()
 queryWithMismatchInTypesOfColumns conn = do
@@ -397,14 +398,14 @@ queryThatErrorsFollowedBySuccessfulQuery conn = do
   -- TODO: Test multiple statements inside the same query string
   -- TODO: Test error statement + empty statement + normal statement all inside the same query string
   queryWith (rowParser @(Only Bool)) conn "select 1/(x - 2) > 0 from generate_series(1,2) subq(x)"
-    `shouldThrow` pgErrorMustContain [(ErrorCode, "22012"), (ErrorHumanReadableMsg, "division by zero")]
+    `shouldThrow` pgErrorMustContain "select 1/(x - 2) > 0 from generate_series(1,2) subq(x)" [(ErrorCode, "22012"), (ErrorHumanReadableMsg, "division by zero")]
   queryWith (rowParser @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
     `shouldReturn` [Only False, Only False]
 
 queryThatErrorsBeforeReturningAnyRowsFollowedBySuccessfulQuery :: HPgConnection -> IO ()
 queryThatErrorsBeforeReturningAnyRowsFollowedBySuccessfulQuery conn = do
   queryWith (rowParser @(Only Bool)) conn "select 1/0"
-    `shouldThrow` pgErrorMustContain [(ErrorCode, "22012"), (ErrorHumanReadableMsg, "division by zero")]
+    `shouldThrow` pgErrorMustContain "select 1/0" [(ErrorCode, "22012"), (ErrorHumanReadableMsg, "division by zero")]
   queryWith (rowParser @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
     `shouldReturn` [Only False, Only False]
 
@@ -619,7 +620,7 @@ runPipelineErrorSemantics conn = do
   -- It's impossible to fetch query results of queries if even one earlier query in
   -- the same pipeline failed. But we expect a good error message.
   (errCmd, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 1/0" <*> pipelineCmd "SELECT 3, 4" <*> pipelineCmd "SELECT 1"
-  errCmd `shouldThrow` pgErrorMustContain [(ErrorCode, "22012")]
+  errCmd `shouldThrow` pgErrorMustContain "SELECT 1/0" [(ErrorCode, "22012")]
   cmd2 `shouldThrow` irrecoverableErrorWithMsg "Another query in the same pipeline threw an error"
   cmd3 `shouldThrow` irrecoverableErrorWithMsg "Another query in the same pipeline threw an error"
 
@@ -636,8 +637,8 @@ runPipelineErrorSemanticsUnsupportedCaseStillBehavesWell conn = do
 runPipelineRunsInImplicitTransaction :: HPgConnection -> IO ()
 runPipelineRunsInImplicitTransaction conn = do
   cmds <- runPipeline conn (traverse pipelineCmd ["CREATE TABLE test()", "SELECT 3, 4", "SELECT (1/0)=42"])
-  sequenceA cmds `shouldThrow` pgErrorMustContain [(ErrorCode, "22012")] -- Division by zero
-  execute conn "SELECT COUNT(*) FROM test" `shouldThrow` pgErrorMustContain [(ErrorCode, "42P01"), (ErrorHumanReadableMsg, "relation \"test\" does not exist")]
+  sequenceA cmds `shouldThrow` pgErrorMustContain "SELECT (1/0)=42" [(ErrorCode, "22012")] -- Division by zero
+  execute conn "SELECT COUNT(*) FROM test" `shouldThrow` pgErrorMustContain "SELECT COUNT(*) FROM test" [(ErrorCode, "42P01"), (ErrorHumanReadableMsg, "relation \"test\" does not exist")]
 
 checkCommandCounts :: HPgConnection -> IO ()
 checkCommandCounts conn = withRollback conn $ do
@@ -660,7 +661,7 @@ queryTransactionStatusInAllTransactionStates conn = do
   -- Now a failure
   execute_ conn "BEGIN"
   connectionTransactionStatus conn `shouldReturn` TransInTrans
-  execute_ conn "SELECT 1/0" `shouldThrow` pgErrorMustContain []
+  execute_ conn "SELECT 1/0" `shouldThrow` pgErrorMustContain "SELECT 1/0" []
   connectionTransactionStatus conn `shouldReturn` TransInError
   execute_ conn "ROLLBACK"
   connectionTransactionStatus conn `shouldReturn` TransIdle
@@ -769,7 +770,7 @@ copyError conn = do
       conn
       "COPY employee FROM STDIN WITH (FORMAT CSV);"
       (putCopyData conn "5,Dracula,column-that-does-not-exist\n")
-      `shouldThrow` pgErrorMustContain [(ErrorSeverity, "ERROR"), (ErrorCode, "22P04"), (ErrorHumanReadableMsg, "extra data after last expected column")]
+      `shouldThrow` pgErrorMustContain "COPY employee FROM STDIN" [(ErrorSeverity, "ERROR"), (ErrorCode, "22P04"), (ErrorHumanReadableMsg, "extra data after last expected column")]
     connectionTransactionStatus conn `shouldReturn` TransInError
   execute_ conn "SELECT 1"
   connectionTransactionStatus conn `shouldReturn` TransIdle
@@ -887,8 +888,8 @@ connectingWithConnectTimeOptions = do
     execute_ conn "RESET ALL"
     query conn "SELECT current_setting('my.random_setting')" `shouldReturn` [Only ("4" :: Text)]
 
-pgErrorMustContain :: [(ErrorDetail, LBS.ByteString)] -> PostgresError -> Bool
-pgErrorMustContain expected (PostgresError {pgErrorDetails}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails
+pgErrorMustContain :: ByteString -> [(ErrorDetail, LBS.ByteString)] -> PostgresError -> Bool
+pgErrorMustContain expectedStmt expected (PostgresError {pgErrorDetails, failedStatement}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails && expectedStmt `BS.isInfixOf` failedStatement
 
 irrecoverableErrorMustContain :: [(ErrorDetail, LBS.ByteString)] -> IrrecoverableHpgsqlError -> Bool
 irrecoverableErrorMustContain expected (IrrecoverableHpgsqlError {pgErrorDetails}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails

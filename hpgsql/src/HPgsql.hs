@@ -103,6 +103,7 @@ data HPgConnection = HPgConnection
     -- transactions to commit when they are sent.
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     originalConnStr :: !ConnString,
+    connectedTo :: !AddrInfo,
     parameterStatusMap :: !(MVar (Map Text Text)),
     internalConnectionState :: !(TVar InternalConnectionState),
     connPid :: !Int32,
@@ -161,6 +162,7 @@ instance Show WeakThreadId where
 
 data QueryState = QueryState
   { queryIdentifier :: !QueryId,
+    queryText :: !ByteString,
     queryProtocol :: !QueryProtocol,
     queryOwner :: !(Maybe WeakThreadId),
     -- | Storing every single "control" (i.e. not `DataRow`) message received for each query
@@ -226,7 +228,7 @@ defaultConnectOpts =
 
 data InternalConnectOrCancelRequest a where
   Connect :: InternalConnectOrCancelRequest HPgConnection
-  CancelNotConnect :: CancelRequest -> InternalConnectOrCancelRequest ()
+  CancelNotConnect :: CancelRequest -> AddrInfo -> InternalConnectOrCancelRequest ()
 
 internalConnectOrCancel :: InternalConnectOrCancelRequest a -> ConnectOpts -> ConnString -> DiffTime -> IO a
 internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..} conntimeout = do
@@ -235,7 +237,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
   case sockOrTimeout of
     Nothing -> throwIrrecoverableError "Could not connect in the supplied timeout"
     -- TODO: It's still possible for an asynchronous exception to interrupt this before the `onException` handler is installed
-    Just sock -> flip onException (Socket.close sock) $ do
+    Just (sock, addrInfo) -> flip onException (Socket.close sock) $ do
       Socket.withFdSocket sock Socket.getNonBlock >>= \case
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
@@ -253,9 +255,12 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
               fundamentalCommunicationError = Nothing,
               notificationsReceived = notifQueue
             }
-      let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr connParams currentConnectionState 0 0 connOpts
+      let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr addrInfo connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
-        CancelNotConnect cancelRequest -> do
+        CancelNotConnect cancelRequest _ -> do
+          -- TODO: We need to store the IP address of the server and reuse that,
+          -- because name resolution might give us a different IP address and thus
+          -- a different server!
           nonAtomicSendMsg hpgConnPartialDoNotReturn cancelRequest
           -- We _must_ wait until the socket is closed _by the other end_ (PostgreSQL-the-server),
           -- because otherwise this cancellation request might be processed while the client sends
@@ -289,25 +294,28 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       addrInfo <- case resolvedAddr of
         Just addrInfo -> pure addrInfo
         Nothing ->
-          if "/" `List.isInfixOf` hostname
-            then
-              pure
-                AddrInfo
-                  { addrFlags = [],
-                    addrFamily = Socket.AF_UNIX,
-                    addrSocketType = Socket.Stream,
-                    addrProtocol = Socket.defaultProtocol,
-                    addrAddress = Socket.SockAddrUnix $ List.dropWhileEnd (== '/') hostname ++ "/.s.PGSQL." ++ show port,
-                    addrCanonName = Nothing
-                  }
-            else do
-              addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
-              case addrInfos of
-                [] -> throwIrrecoverableError "Could not resolve address"
-                addrInfo : _ -> pure addrInfo
+          case connectOrCancel of
+            CancelNotConnect _ addrInfo -> pure addrInfo
+            Connect ->
+              if "/" `List.isInfixOf` hostname
+                then
+                  pure
+                    AddrInfo
+                      { addrFlags = [],
+                        addrFamily = Socket.AF_UNIX,
+                        addrSocketType = Socket.Stream,
+                        addrProtocol = Socket.defaultProtocol,
+                        addrAddress = Socket.SockAddrUnix $ List.dropWhileEnd (== '/') hostname ++ "/.s.PGSQL." ++ show port,
+                        addrCanonName = Nothing
+                      }
+                else do
+                  addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
+                  case addrInfos of
+                    [] -> throwIrrecoverableError "Could not resolve address"
+                    addrInfo : _ -> pure addrInfo
       sock <- Socket.openSocket addrInfo
       Socket.connect sock (Socket.addrAddress addrInfo)
-      pure sock
+      pure (sock, addrInfo)
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
 getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
@@ -515,7 +523,7 @@ cancelAnyRunningStatement conn = do
         () -- Already cancelled, no need to send another
     Nothing ->
       internalConnectOrCancel
-        (CancelNotConnect $ CancelRequest (connPid conn) (cancelSecretKey conn))
+        (CancelNotConnect (CancelRequest (connPid conn) (cancelSecretKey conn)) (connectedTo conn))
         (connOpts conn)
         (originalConnStr conn)
         (secondsToDiffTime 30)
@@ -826,7 +834,7 @@ consumeResults conn qryId = do
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()
     receiveReadyForQueryIfNecessary thisThreadId = void $ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
 
-newtype PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteString}
+data PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteString, failedStatement :: !ByteString}
   deriving stock (Show)
 
 instance Exception PostgresError
@@ -837,11 +845,18 @@ data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: Strin
 
 instance Exception IrrecoverableHpgsqlError
 
-throwPostgresError :: ErrorResponse -> IO a
-throwPostgresError (ErrorResponse errDetailMap) = throw $ PostgresError errDetailMap
+throwPostgresError :: ByteString -> ErrorResponse -> IO a
+throwPostgresError stmtText (ErrorResponse errDetailMap) = throw $ PostgresError {pgErrorDetails = errDetailMap, failedStatement = stmtText}
 
 throwIrrecoverableError :: (MonadThrow m) => String -> m a
 throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty}
+
+lookupQueryText :: HPgConnection -> QueryId -> IO ByteString
+lookupQueryText conn qryId = STM.atomically $ do
+  st <- STM.readTVar (internalConnectionState conn)
+  pure $ case List.find ((== qryId) . queryIdentifier) (currentPipeline st) of
+    Just qs -> queryText qs
+    Nothing -> ""
 
 -- | Returns the count of affected rows of the given query.
 execute :: HPgConnection -> Query -> IO Int64
@@ -853,10 +868,11 @@ execute_ conn qry = void $ execute conn qry
 
 consumeResultsIgnoreRows :: HPgConnection -> QueryId -> IO Int64
 consumeResultsIgnoreRows conn qryId = do
+  qText <- lookupQueryText conn qryId
   (_mRowDesc, resultsStream) <- consumeResults conn qryId
   results <- S.effects resultsStream
   case results of
-    Left err -> throwPostgresError err
+    Left err -> throwPostgresError qText err
     Right (CommandComplete n) -> pure n
 
 -- | Returns the count of affected rows only of the supplied
@@ -887,14 +903,14 @@ getMyWeakThreadId = do
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
 -- if it can't do that. Then runs the continuation.
-atomicallyInitiatePipelineOrPanicAndThenConsumeResults :: HPgConnection -> NonEmpty QueryProtocol -> [SomeMessage] -> (NonEmpty QueryId -> IO a) -> IO a
+atomicallyInitiatePipelineOrPanicAndThenConsumeResults :: HPgConnection -> NonEmpty (ByteString, QueryProtocol) -> [SomeMessage] -> (NonEmpty QueryId -> IO a) -> IO a
 atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent allMsgs continuation = do
   thisWeakThreadId <- getMyWeakThreadId
   qryIds <- loopUntilNoPipeline conn (getUniqueQueryStatesForNewPipeline thisWeakThreadId queriesBeingSent) $ \(nextId, lastId) -> do
     -- If this thread is interrupted now, it is ok: only `totalQueriesSent` was bumped, but `currentPipeline`
     -- is still empty (it will be modified once we send all control messages to postgres).
     -- This is Note [Only modify totalQueriesSent]
-    let newPipeline = zipWith (\queryIdentifier queryProtocol -> QueryState {queryIdentifier, queryOwner = Just thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
+    let newPipeline = zipWith (\queryIdentifier (queryText, queryProtocol) -> QueryState {queryIdentifier, queryText, queryOwner = Just thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
     atomicallySendControlMsgs_
       conn
       ( allMsgs,
@@ -907,8 +923,8 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
     pure $ fmap queryIdentifier (NE.fromList newPipeline)
   continuation qryIds
   where
-    getUniqueQueryStatesForNewPipeline :: WeakThreadId -> NonEmpty QueryProtocol -> STM (QueryId, QueryId)
-    getUniqueQueryStatesForNewPipeline thisThreadId qryprotos = do
+    getUniqueQueryStatesForNewPipeline :: WeakThreadId -> NonEmpty (ByteString, QueryProtocol) -> STM (QueryId, QueryId)
+    getUniqueQueryStatesForNewPipeline thisThreadId (fmap snd -> qryprotos) = do
       let sttv = internalConnectionState conn
       st <- STM.readTVar sttv
       when (any ((== Just thisThreadId) . queryOwner) (currentPipeline st)) $ throwIrrecoverableError "Bug in Hpgsql: the pipeline should be empty due to loopUntilNoPipeline"
@@ -1081,12 +1097,13 @@ runPipeline conn (Pipeline (NE.fromList -> queries) run) = do
         ]
   atomicallyInitiatePipelineOrPanicAndThenConsumeResults
     conn
-    (fmap (const ExtendedQuery) queries)
+    (fmap (\(SingleQuery {queryString}, _) -> (queryString, ExtendedQuery)) queries)
     (concatMap toMessages queries ++ [SomeMessage Sync])
     $ \qryIds -> pure $ run conn (NE.toList qryIds)
 
 consumeStreamingResults :: RowParser a -> HPgConnection -> QueryId -> (Stream (Of a) IO ())
 consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryId = S.effect $ do
+  qText <- lookupQueryText conn qryId
   (mERowDesc, rowsStream) <- consumeResults conn qryId
   case mERowDesc of
     Nothing -> do
@@ -1095,7 +1112,7 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
       rowCount :> res <- S.length rowsStream
       when (rowCount > 0) $ throwIrrecoverableError "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
       case res of
-        Left err -> throwPostgresError err
+        Left err -> throwPostgresError qText err
         Right _cmd -> throwIrrecoverableError "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
     Just (Left3 _noData) -> throwIrrecoverableError "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
     Just (Right3 _copyInResponse) -> throwIrrecoverableError "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
@@ -1115,7 +1132,7 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
             )
             rowsStream
         S.effect $ case errOrCmdComplete of
-          Left err -> throwPostgresError err
+          Left err -> throwPostgresError qText err
           Right _cmdComplete -> pure mempty
 
 query :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO [a]
@@ -1130,7 +1147,7 @@ withCopy conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) copyFn
   thisThreadId <- getMyWeakThreadId
   atomicallyInitiatePipelineOrPanicAndThenConsumeResults
     conn
-    (CopyQuery StillCopying :| [])
+    ((queryString, CopyQuery StillCopying) :| [])
     [ SomeMessage $ Parse queryString (map fst queryParams),
       SomeMessage $ Bind {paramsValuesInOrder = map snd queryParams, resultColumnFmts = []},
       -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
@@ -1157,10 +1174,11 @@ copyEnd conn qryId = do
           [q@QueryState {queryProtocol = CopyQuery StillCopying}] -> STM.writeTVar sttv $ st {currentPipeline = [q {queryProtocol = CopyQuery CopyDoneAndSyncSent}]}
           _ -> throwIrrecoverableError "putCopyEnd called but there was no active COPY statement"
     )
+  qText <- lookupQueryText conn qryId
   (_, stream) <- consumeResults conn qryId
   res <- S.effects stream
   case res of
-    Left err -> throwPostgresError err
+    Left err -> throwPostgresError qText err
     Right (CommandComplete n) -> pure n
 
 -- | A simpler version of `atomicallySendControlMsgs`.

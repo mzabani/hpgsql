@@ -1,0 +1,64 @@
+cabal-version: 2.0
+
+name:           hpgsql-simple-compat-tests
+version:        0.1.0
+description:    Tests for hpgsql-simple-compat
+homepage:       https://github.com/mzabani/hpgsql#readme
+bug-reports:    https://github.com/mzabani/hpgsql/issues
+author:         Marcelo Zabani
+maintainer:     mzabani@gmail.com
+copyright:      2025 Marcelo Zabani
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+  results/malformed-input.expected
+  results/unique-constraint-violation.expected
+
+source-repository head
+  type: git
+  location: https://github.com/mzabani/hpgsql
+
+flag threaded
+  description: Build with the threaded runtime
+  default: True
+  manual: True
+
+executable hpgsql-simple-compat-tests
+  main-is: Main.hs
+  other-modules:
+      Common
+      Exception
+      Interval
+      Notify
+      Serializable
+      Time
+  hs-source-dirs:
+      .
+  default-language: Haskell2010
+  default-extensions:
+      NamedFieldPuns
+      OverloadedStrings
+      PatternGuards
+      Rank2Types
+      RecordWildCards
+      ScopedTypeVariables
+  ghc-options: -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind
+  if flag(threaded)
+    ghc-options: -threaded
+  build-depends:
+      aeson
+    , base
+    , bytestring
+    , case-insensitive
+    , containers
+    , cryptohash-md5
+    , filepath
+    , hpgsql
+    , hpgsql-simple-compat
+    , tasty
+    , tasty-golden
+    , tasty-hunit
+    , text
+    , time-compat
+    , vector

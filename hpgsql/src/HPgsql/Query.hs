@@ -31,7 +31,11 @@ newtype Query = Query (NonEmpty SingleQuery)
   deriving newtype (Eq, Semigroup, Show)
 
 data SingleQuery = SingleQuery {queryString :: ByteString, queryParams :: [(Maybe Oid, Maybe LBS.ByteString)]}
-  deriving stock (Eq, Show)
+  deriving stock (Eq)
+
+instance Show SingleQuery where
+  -- Careful not exposing query arguments
+  show (SingleQuery {queryString}) = show queryString
 
 instance IsString Query where
   fromString s =

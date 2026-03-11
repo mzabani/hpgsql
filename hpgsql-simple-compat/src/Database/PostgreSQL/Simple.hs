@@ -148,6 +148,8 @@ import Database.PostgreSQL.Simple.Types
     (:.) (..),
   )
 import qualified HPgsql
+import qualified HPgsql.Field as HPgsql
+import qualified HPgsql.Query as HPgsql
 import qualified Streaming
 
 -- | Format a query string with a variable number of rows.
@@ -163,7 +165,7 @@ import qualified Streaming
 --
 -- Throws 'FormatError' if the query string could not be formatted
 -- correctly.
-formatMany :: (ToRow q) => Connection -> Query -> [q] -> IO ByteString
+formatMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO ByteString
 formatMany _ q [] = fmtError "no rows supplied" q []
 formatMany conn q@(Query template) qs = error "TODO Hpgsql"
 
@@ -269,12 +271,12 @@ parseTemplate template =
 --
 -- Throws 'FormatError' if the query could not be formatted correctly, or
 -- a 'SqlError' exception if the backend returns an error.
-execute :: (ToRow q) => Connection -> Query -> q -> IO Int64
+execute :: (HPgsql.ToPgRow q) => Connection -> Query -> q -> IO Int64
 execute conn template qs = do
   HPgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
 
-toHpgsqlQuery :: (ToRow q) => Query -> q -> HPgsql.Query
-toHpgsqlQuery (Query qry) _params = fromString $ T.unpack $ TE.decodeUtf8 qry
+toHpgsqlQuery :: (HPgsql.ToPgRow q) => Query -> q -> HPgsql.Query
+toHpgsqlQuery (Query qry) params = HPgsql.mkQueryWithQuestionMarks qry params
 
 -- | Execute a multi-row @INSERT@, @UPDATE@, or other SQL query that is not
 -- expected to return results.
@@ -305,7 +307,7 @@ toHpgsqlQuery (Query qry) _params = fromString $ T.unpack $ TE.decodeUtf8 qry
 --      WHERE sometable.x = upd.x
 --  |] [(1, \"hello\"),(2, \"world\")]
 -- @
-executeMany :: (ToRow q) => Connection -> Query -> [q] -> IO Int64
+executeMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO Int64
 executeMany _ _ [] = return 0
 executeMany conn q qs = do
   qry <- formatMany conn q qs
@@ -349,7 +351,7 @@ returningWith parser conn q qs = error "TODO HPgsql"
 --
 -- * 'SqlError':  the postgresql backend returned an error,  e.g.
 --   a syntax or type error,  or an incorrect table or column name.
-query :: (ToRow q, HPgsql.FromPgRow r) => Connection -> Query -> q -> IO [r]
+query :: (HPgsql.ToPgRow q, HPgsql.FromPgRow r) => Connection -> Query -> q -> IO [r]
 query conn q qs = queryWith HPgsql.rowParser conn q qs
 
 -- | A version of 'query' that does not perform query substitution.
@@ -357,7 +359,7 @@ query_ :: (HPgsql.FromPgRow r) => Connection -> Query -> IO [r]
 query_ conn q = query conn q ()
 
 -- | A version of 'query' taking parser as argument
-queryWith :: (ToRow q) => HPgsql.RowParser r -> Connection -> Query -> q -> IO [r]
+queryWith :: (HPgsql.ToPgRow q) => HPgsql.RowParser r -> Connection -> Query -> q -> IO [r]
 queryWith parser conn template qs = HPgsql.queryWith parser (hpgConn conn) (toHpgsqlQuery template qs)
 
 -- | A version of 'query_' taking parser as argument
@@ -392,7 +394,7 @@ queryWith_ parser conn q = queryWith parser conn q ()
 -- * 'SqlError':  the postgresql backend returned an error,  e.g.
 --   a syntax or type error,  or an incorrect table or column name.
 fold ::
-  (HPgsql.FromPgRow row, ToRow params) =>
+  (HPgsql.FromPgRow row, HPgsql.ToPgRow params) =>
   Connection ->
   Query ->
   params ->
@@ -403,7 +405,7 @@ fold = foldWithOptions defaultFoldOptions
 
 -- | A version of 'fold' taking a parser as an argument
 foldWith ::
-  (ToRow params) =>
+  (HPgsql.ToPgRow params) =>
   HPgsql.RowParser row ->
   Connection ->
   Query ->
@@ -441,7 +443,7 @@ defaultFoldOptions =
 --   then the existing transaction is used and thus the 'transactionMode'
 --   option is ignored.
 foldWithOptions ::
-  (HPgsql.FromPgRow row, ToRow params) =>
+  (HPgsql.FromPgRow row, HPgsql.ToPgRow params) =>
   FoldOptions ->
   Connection ->
   Query ->
@@ -453,7 +455,7 @@ foldWithOptions opts = foldWithOptionsAndParser opts HPgsql.rowParser
 
 -- | A version of 'foldWithOptions' taking a parser as an argument
 foldWithOptionsAndParser ::
-  (ToRow params) =>
+  (HPgsql.ToPgRow params) =>
   FoldOptions ->
   HPgsql.RowParser row ->
   Connection ->
@@ -530,7 +532,7 @@ doFold FoldOptions {..} parser conn qry a0 f = do
 
 -- | A version of 'fold' that does not transform a state value.
 forEach ::
-  (ToRow q, HPgsql.FromPgRow r) =>
+  (HPgsql.ToPgRow q, HPgsql.FromPgRow r) =>
   Connection ->
   -- | Query template.
   Query ->
@@ -544,7 +546,7 @@ forEach = forEachWith HPgsql.rowParser
 
 -- | A version of 'forEach' taking a parser as an argument
 forEachWith ::
-  (ToRow q) =>
+  (HPgsql.ToPgRow q) =>
   HPgsql.RowParser r ->
   Connection ->
   Query ->

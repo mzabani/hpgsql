@@ -80,7 +80,7 @@ getTypeInfo' conn oid' oidmap =
           "SELECT oid, typcategory, typdelim, typname,\
           \ typelem, typrelid\
           \ FROM pg_type WHERE oid = ?"
-          (Only oid')
+          (Only $ toHpgsqlOid oid')
       (oidmap', typeInfo) <-
         case names of
           [] -> return $ throw (fatalError "invalid type oid")
@@ -97,7 +97,7 @@ getTypeInfo' conn oid' oidmap =
                     "SELECT rngsubtype\
                     \ FROM pg_range\
                     \ WHERE rngtypid = ?"
-                    (Only oid')
+                    (Only $ toHpgsqlOid oid')
                 case rngsubtypeOids of
                   [HPgsql.Only (fromHpgsqlOid -> rngsubtype_)] -> do
                     (oidmap', rngsubtype) <-

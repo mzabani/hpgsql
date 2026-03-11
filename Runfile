@@ -81,6 +81,6 @@ test-compat:
     
     for pg in "${PG[@]}"; do
         echo "Running tests on Postgres $pg"
-        cabal build -O0 hpgsql-simple-compat:test
+        cabal build hpgsql-simple-compat-tests
         nix-shell -A "shellPg${pg}" ./default.nix --run "./scripts/run-hpgsql-simple-compat-tests-db-internal.sh $TARGS"
     done

@@ -10,6 +10,7 @@ let
           hpgsql-tests = ../hpgsql-tests;
           hpgsql-benchmarks = ../hpgsql-benchmarks;
           hpgsql-simple-compat = ../hpgsql-simple-compat;
+          hpgsql-simple-compat-tests = ../hpgsql-simple-compat-tests;
         };
         dontCheckOverrides = hsSelf: hsSuper:
           let maybeDisableThreaded = if disableThreaded
@@ -19,7 +20,8 @@ let
             hpgsql = final.haskell.lib.dontCheck hsSuper.hpgsql;
             hpgsql-tests = maybeDisableThreaded (final.haskell.lib.dontCheck hsSuper.hpgsql-tests);
             hpgsql-benchmarks = maybeDisableThreaded (final.haskell.lib.dontCheck hsSuper.hpgsql-benchmarks);
-            hpgsql-simple-compat = maybeDisableThreaded (final.haskell.lib.dontCheck hsSuper.hpgsql-simple-compat);
+            hpgsql-simple-compat = final.haskell.lib.dontCheck hsSuper.hpgsql-simple-compat;
+            hpgsql-simple-compat-tests = maybeDisableThreaded (final.haskell.lib.dontCheck hsSuper.hpgsql-simple-compat-tests);
           };
       in {
         haskell = prev.haskell // {
