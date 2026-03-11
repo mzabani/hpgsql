@@ -393,6 +393,12 @@ instance ToPgField String where
   -- TODO: What about client_encoding?
   toPgField = toPgField . Text.pack
 
+instance ToPgField Aeson.Value where
+  -- Maybe we shouldn't specify an oid so postgres can infer the best type?
+  -- But json and jsonb might have different binary representations..
+  toTypeOid _ = Just jsonbOid
+  toPgField v = Just $ LBS.cons 1 (Aeson.encode v)
+
 instance (ToPgField a) => ToPgField (Maybe a) where
   toTypeOid _ = toTypeOid (Proxy @a)
   toPgField Nothing = Nothing
@@ -437,6 +443,9 @@ instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgF
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
   toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g), (toTypeOid (Proxy @h), toPgField h), (toTypeOid (Proxy @i), toPgField i), (toTypeOid (Proxy @j), toPgField j), (toTypeOid (Proxy @k), toPgField k)]
+
+instance (ToPgField a) => ToPgRow [a] where
+  toPgParams colValues = let typOid = toTypeOid (Proxy @a) in map (\v -> (typOid, toPgField v)) colValues
 
 -- | The OID for `Data.Int`, which is machine dependent.
 haskellIntOid :: Oid

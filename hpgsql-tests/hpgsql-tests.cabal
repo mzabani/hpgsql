@@ -28,6 +28,7 @@ executable hpgsql-tests
       DbUtils
       HPgsqlSpec
       ParsingSpec
+      TestUtils
   hs-source-dirs:
       .
   default-extensions:

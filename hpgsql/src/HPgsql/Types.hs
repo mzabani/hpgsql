@@ -1,4 +1,4 @@
-module HPgsql.Newtypes
+module HPgsql.Types
   ( Aeson (..),
     PgJson,
   )
@@ -49,7 +49,7 @@ instance (FromJSON a) => FromPgField (Aeson a) where
       Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type"
 
 instance (ToJSON a) => ToPgField (Aeson a) where
-  -- \| Explicitly don't choose json or jsonb to avoid type checking errors
-  -- in postgres.
-  toTypeOid _ = Nothing
-  toPgField (Aeson a) = Just $ Aeson.encode a
+  -- Maybe we shouldn't specify an oid so postgres can infer the best type?
+  -- But json and jsonb might have different binary representations..
+  toTypeOid _ = Just jsonbOid
+  toPgField (Aeson v) = Just $ LBS.cons 1 (Aeson.encode v)

@@ -28,7 +28,7 @@ library
       HPgsql
       HPgsql.Connection
       HPgsql.Field
-      HPgsql.Newtypes
+      HPgsql.Types
       HPgsql.Parsing
       HPgsql.Query
       HPgsql.TypeInfo

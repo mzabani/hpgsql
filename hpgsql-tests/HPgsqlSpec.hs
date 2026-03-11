@@ -50,6 +50,7 @@ import System.Mem (performGC)
 import System.Timeout (timeout)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
+import TestUtils (genJsonValue)
 
 spec :: Spec
 spec = do
@@ -109,6 +110,9 @@ spec = do
     it
       "Numeric extreme values round-trip"
       numericExtremeValuesRoundTrip
+    it
+      "Json values round-trip"
+      jsonValuesRoundTrip
 
     it
       "Date decoding"
@@ -489,8 +493,8 @@ valuesRoundTrip conn = do
   -- TODO: Test floats, timestamptz and other very granular but discrete type in the regions of values
   --       close to `minBound`, 0, and `maxBound`, with e.g. microsecond precision/fractional values
   -- TODO: Test +-Infinity and NaN for floats and doubles
-  let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row) `shouldReturn` [row]
+  let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Aeson.Null)
+  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
 
 byteaValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 byteaValuesRoundTrip conn = hedgehog $ do
@@ -570,6 +574,13 @@ numericExtremeValuesRoundTrip conn = do
     negInfFloat = ((-1) / 0) :: Float
     posInfDouble = (1 / 0) :: Double
     negInfDouble = ((-1) / 0) :: Double
+
+jsonValuesRoundTrip :: HPgConnection -> PropertyT IO ()
+jsonValuesRoundTrip conn = hedgehog $ do
+  jsonVal :: Aeson.Value <- Gen.forAll genJsonValue
+  let row = Only jsonVal
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1" row)
+  res === [row]
 
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do

@@ -11,6 +11,7 @@ where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.String (IsString (..))
@@ -53,7 +54,7 @@ mkQueryWithQuestionMarks queryTemplate r =
   where
     processStatement :: SqlStatement -> (ByteString, Int)
     processStatement (SqlStatement blocks) =
-      let (finalN, textParts) = foldl' processBlock (1, []) blocks
+      let (finalN, textParts) = List.foldl' processBlock (1, []) blocks
        in (encodeUtf8 $ Text.concat (reverse textParts), finalN - 1)
 
     processBlock :: (Int, [Text]) -> BlockOrNotBlock -> (Int, [Text])
