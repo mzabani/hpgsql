@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 
 ------------------------------------------------------------------------------
 
@@ -40,6 +41,7 @@ import qualified Data.ByteString as B
 import Data.ByteString.Builder (stringUtf8)
 import Data.Foldable (toList)
 import Data.Hashable (Hashable (hashWithSalt))
+import Data.Proxy (Proxy (..))
 import Data.Semigroup
 import Data.String (IsString (..))
 import Data.Text (Text)
@@ -48,6 +50,7 @@ import Data.Tuple.Only (Only (..))
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.Compat (toByteString)
+import HPgsql.Field (ToPgField (..))
 import qualified HPgsql.Field as HPgsql
 
 -- | A placeholder for the SQL @NULL@ value.
@@ -152,6 +155,10 @@ newtype Binary a = Binary {fromBinary :: a}
 
 instance HPgsql.FromPgField (Binary ByteString) where
   fieldParser = Binary <$> HPgsql.fieldParser
+
+instance ToPgField (Binary ByteString) where
+  toTypeOid _ = toTypeOid (Proxy @ByteString)
+  toPgField (Binary v) = toPgField v
 
 -- | Wrap text for use as sql identifier, i.e. a table or column name.
 newtype Identifier = Identifier {fromIdentifier :: Text}

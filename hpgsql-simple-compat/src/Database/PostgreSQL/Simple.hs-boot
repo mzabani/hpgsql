@@ -11,7 +11,6 @@ where
 
 import Data.Int (Int64)
 import Database.PostgreSQL.Simple.Internal
-import {-# SOURCE #-} Database.PostgreSQL.Simple.ToRow
 import Database.PostgreSQL.Simple.Types
 import HPgsql.Field (FromPgRow, ToPgRow)
 
