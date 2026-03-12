@@ -1,6 +1,8 @@
 module HPgsql.Types
   ( Aeson (..),
-    PgJson,
+    PgJson, -- Do not export ctor
+    Values (..),
+    valuesToQuery,
   )
 where
 
@@ -9,11 +11,34 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Encoding as AesonInternal
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.List.NonEmpty as NE
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Data.Typeable (Typeable)
-import HPgsql.Field (FromPgField (..), ToPgField (..), parsePgType)
+import HPgsql.Field (FromPgField (..), ToPgField (..), ToPgRow (..), parsePgType)
+import HPgsql.Query (Query (..), SingleQuery (..))
 import HPgsql.TypeInfo (Format (..), jsonOid, jsonbOid)
 
 -- TODO: Write tests for these types!
+
+data Values a = Values [a]
+
+-- | Generates a query like @VALUES ($1,$2), ($3,$4)@ from a list of rows.
+-- Can be embedded inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:
+--
+-- > [sql| INSERT INTO emp(id,name) ^{valuesToQuery (Values rows)} ON CONFLICT DO NOTHING |]
+valuesToQuery :: (ToPgRow a) => Values a -> Query
+valuesToQuery (Values []) = Query $ NE.singleton $ SingleQuery "" []
+valuesToQuery (Values rows@(firstRow : _)) =
+  let allParams = concatMap toPgParams rows
+      numCols = length (toPgParams firstRow)
+      rowPlaceholder :: Int -> Text
+      rowPlaceholder startIdx =
+        "(" <> Text.intercalate ", " ["$" <> Text.pack (show (startIdx + i)) | i <- [0 .. numCols - 1]] <> ")"
+      valuesClause = Text.intercalate ", " [rowPlaceholder (rowIdx * numCols + 1) | rowIdx <- [0 .. length rows - 1]]
+      fullSql = encodeUtf8 $ "VALUES " <> valuesClause
+   in Query $ NE.singleton $ SingleQuery fullSql allParams
 
 -- | A JSON type that does not incur the costs of deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates
