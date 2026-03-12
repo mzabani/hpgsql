@@ -12,11 +12,11 @@ module HPgsql.Query
 where
 
 import Control.Applicative (some, (<|>))
-import Data.Char (isDigit)
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as A
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Char (isDigit)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
@@ -28,6 +28,7 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql.Field (ToPgField (..), ToPgRow (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), parseSql, sqlStatementText)
 import HPgsql.TypeInfo (Oid)
+import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
 
@@ -36,7 +37,8 @@ import Language.Haskell.TH.Quote
 data SqlFragment
   = NonInterpolatedSqlFragment !Text
   | InterpolatedHaskellExpr !Text
-  | EmbeddedQueryExpr !Text -- ^ @^{expr}@ where @expr :: Query@
+  | -- | @^{expr}@ where @expr :: Query@
+    EmbeddedQueryExpr !Text
   deriving stock (Eq)
 
 newtype Query = Query (NonEmpty SingleQuery)
@@ -255,6 +257,8 @@ proxyOf _ = Proxy
 
 -- | Generate a parameter expression for a captured variable
 generateParamExp :: Text -> Q Exp
-generateParamExp haskellExpr =
-  let name = mkName (Text.unpack haskellExpr)
-   in [|(toTypeOid (proxyOf $(varE name)), toPgField $(varE name))|]
+generateParamExp (Text.unpack -> haskellExpr) =
+  case parseExp haskellExpr of
+    Left err -> error $ "Could not parse Haskell expression '" ++ haskellExpr ++ "': " ++ err
+    Right expr ->
+      [|(toTypeOid (proxyOf $(pure expr)), toPgField $(pure expr))|]

@@ -19,8 +19,7 @@ source-repository head
   location: https://github.com/mzabani/hpgsql
 
 tested-with:
-  GHC ==9.6.7
-   || ==9.8.4
+  GHC ==9.8.4
    || ==9.10.3
 
 library
@@ -79,6 +78,7 @@ library
     , cereal
     , bytestring
     , containers
+    , haskell-src-meta
     , network
     , network-uri
     , Only

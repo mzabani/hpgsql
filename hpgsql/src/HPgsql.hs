@@ -72,7 +72,6 @@ import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 import Data.Word (Word64)
-import GHC.Clock (getMonotonicTime)
 import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Field (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
@@ -1264,14 +1263,16 @@ debugPrint :: String -> IO ()
 debugPrint _ = pure ()
 
 -- debugPrint str = modifyMVar_ _globalLock $ const $ putStrLn str
+{-# INLINE timeDebugNonBlockingOperation #-}
 timeDebugNonBlockingOperation :: String -> IO a -> IO a
--- timeDebugNonBlockingOperation _ f = f
-timeDebugNonBlockingOperation opName f = do
-  t1 <- getMonotonicTime
-  ret <- f
-  t2 <- getMonotonicTime
-  when (t2 - t1 > 0.001) $ putStrLn $ opName ++ " took more than 1ms: " ++ show (t2 - t1)
-  pure ret
+timeDebugNonBlockingOperation _ f = f
+
+-- timeDebugNonBlockingOperation opName f = do
+--   t1 <- getMonotonicTime
+--   ret <- f
+--   t2 <- getMonotonicTime
+--   when (t2 - t1 > 0.01) $ putStrLn $ opName ++ " took more than 10ms: " ++ show (t2 - t1)
+--   pure ret
 
 lastMaybe :: [a] -> Maybe a
 lastMaybe [] = Nothing
