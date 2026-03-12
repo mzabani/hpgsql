@@ -25,10 +25,16 @@ executable hpgsql-tests
   main-is: Main.hs
   other-modules:
       AllSpecs
+      BasicTestsSpec
+      ConnectivitySpec
+      CopySpec
       DbUtils
-      HPgsqlSpec
+      EncodingDecodingSpec
+      NotificationsSpec
       ParsingSpec
+      PipelineSpec
       TestUtils
+      ThreadSafetySpec
   hs-source-dirs:
       .
   default-extensions:
