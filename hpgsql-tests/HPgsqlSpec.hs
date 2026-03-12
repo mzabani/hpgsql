@@ -40,6 +40,7 @@ import HPgsql
 import HPgsql.Field (AllowNull (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import HPgsql.Query (Query (..), SingleQuery (..), sql)
 import HPgsql.TypeInfo (Oid)
+import HPgsql.Types (PgJson)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
@@ -577,10 +578,14 @@ numericExtremeValuesRoundTrip conn = do
 
 jsonValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 jsonValuesRoundTrip conn = hedgehog $ do
-  jsonVal :: Aeson.Value <- Gen.forAll genJsonValue
-  let row = Only jsonVal
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1" row)
-  res === [row]
+  jsonVal1 :: Aeson.Value <- Gen.forAll genJsonValue
+  jsonVal2 :: Aeson.Value <- Gen.forAll genJsonValue
+  jsonVal3 :: Aeson.Value <- Gen.forAll genJsonValue
+  let row = (jsonVal1, jsonVal2, jsonVal3)
+  [(v1, v2, v3) :: (Aeson.Value, PgJson, PgJson)] <- liftIO $ queryWith rowParser conn [sql|SELECT #{jsonVal1}, #{jsonVal2}::json, #{jsonVal3}::jsonb|]
+  v1 === jsonVal1
+  Aeson.toJSON v2 === jsonVal2
+  Aeson.toJSON v3 === jsonVal3
 
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do
