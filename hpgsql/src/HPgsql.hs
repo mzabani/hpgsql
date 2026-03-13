@@ -46,8 +46,8 @@ module HPgsql
 where
 
 import Control.Applicative (Alternative (..))
-import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, myThreadId, threadDelay)
-import Control.Concurrent.MVar (MVar, modifyMVar_, newMVar, readMVar)
+import Control.Concurrent (ThreadId, mkWeakThreadId, myThreadId, threadDelay)
+import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, bracket, bracketOnError, finally, mask, mask_, onException, throw, tryJust, withException)
@@ -59,6 +59,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
@@ -94,16 +95,13 @@ import System.Timeout (timeout)
 
 data HPgConnection = HPgConnection
   { socket :: !Socket,
-    -- | We use STM transactions to protect the buffer
-    -- against concurrent access, so maybe this MVar could be
-    -- an IORef? And all the other MVars, for that matter.
-    recvBuffer :: !(MVar LBS.ByteString),
+    recvBuffer :: !(IORef LBS.ByteString),
     -- | A buffer of messages to be sent and of internal state
     -- transactions to commit when they are sent.
-    sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
+    sendBuffer :: !(IORef [(LBS.ByteString, STM ())]),
     originalConnStr :: !ConnString,
     connectedTo :: !AddrInfo,
-    parameterStatusMap :: !(MVar (Map Text Text)),
+    parameterStatusMap :: !(IORef (Map Text Text)),
     internalConnectionState :: !(TVar InternalConnectionState),
     connPid :: !Int32,
     cancelSecretKey :: !Int32,
@@ -240,9 +238,9 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       Socket.withFdSocket sock Socket.getNonBlock >>= \case
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
-      recvBuffer <- newMVar mempty
-      sendBuffer <- newMVar mempty
-      connParams <- newMVar mempty
+      recvBuffer <- newIORef mempty
+      sendBuffer <- newIORef mempty
+      connParams <- newIORef mempty
       notifQueue <- STM.newTQueueIO
       currentConnectionState <-
         STM.newTVarIO $
@@ -317,7 +315,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       pure (sock, addrInfo)
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
-getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
+getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readIORef parameterStatusMap
 
 getBackendPid :: HPgConnection -> Int32
 getBackendPid HPgConnection {connPid} = connPid
@@ -464,33 +462,33 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               pure Nothing
             Just (Right3 (ParameterStatus {..})) -> do
               removeFirstBytesFromBufferOrThrow fullMessageLen
-              modifyMVar_ (parameterStatusMap conn) $ \paramMap -> pure $ Map.insert parameterName parameterValue paramMap
+              modifyIORef' (parameterStatusMap conn) $ \(!paramMap) -> Map.insert parameterName parameterValue paramMap
               pure Nothing
             Nothing -> Just <$> f (Left msgIdentChar)
 
     removeFirstBytesFromBufferOrThrow :: Int64 -> IO ()
-    removeFirstBytesFromBufferOrThrow nbytes =
-      modifyMVar_ recvBuffer $ \lbs -> do
-        if LBS.length lbs >= nbytes
-          then pure $ LBS.drop nbytes lbs
-          else
-            error "Bug in HPgsql. Internal buffer's bytes weren't filled enough"
+    removeFirstBytesFromBufferOrThrow nbytes = do
+      lbs <- readIORef recvBuffer
+      if LBS.length lbs >= nbytes
+        then writeIORef recvBuffer $ LBS.drop nbytes lbs
+        else
+          error "Bug in HPgsql. Internal buffer's bytes weren't filled enough"
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
     receiveUntilBufferHasAtLeast :: Int64 -> IO ()
     receiveUntilBufferHasAtLeast minBytesNecessary = do
-      nBytesInBuffer <- LBS.length <$> readMVar recvBuffer
+      nBytesInBuffer <- LBS.length <$> readIORef recvBuffer
       when (nBytesInBuffer < minBytesNecessary) $ mask $ \restore -> do
-        -- This takes from the kernel's recv buffer and appendds to our buffer atomically,
+        -- This takes from the kernel's recv buffer and appends to our buffer atomically,
         -- or an exception is thrown when receiving
         restore $ socketWaitRead socket
         someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-        modifyMVar_ recvBuffer (\lbs -> pure $ lbs <> LBS.fromStrict someBytes)
+        atomicModifyIORef' recvBuffer (\lbs -> (lbs <> LBS.fromStrict someBytes, ()))
         restore $ receiveUntilBufferHasAtLeast minBytesNecessary
 
     peekIntoBuffer :: Int64 -> IO LBS.ByteString
-    peekIntoBuffer n = LBS.take n <$> readMVar recvBuffer
+    peekIntoBuffer n = LBS.take n <$> readIORef recvBuffer
 
 -- | Cancels any running statements in the current connection, including COPY, or returns if there
 -- is no active query to cancel.
@@ -607,19 +605,22 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
         $ \restore -> do
           let go = do
                 restore $ socketWaitWrite socket
-                others <- modifyMVar (sendBuffer conn) $ \case
-                  [] -> pure ([], [])
+                buf <- readIORef (sendBuffer conn)
+                others <- case buf of
+                  [] -> pure []
                   ((msgs, afterSentTxn) : xs) ->
                     if LBS.null msgs
                       then do
                         -- debugPrint "Finished sending msgs"
                         STM.atomically afterSentTxn
-                        pure (xs, xs)
+                        writeIORef (sendBuffer conn) xs
+                        pure xs
                       else do
                         n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
                         -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
                         let fin = (LBS.drop n msgs, afterSentTxn) : xs
-                        pure (fin, fin)
+                        writeIORef (sendBuffer conn) fin
+                        pure fin
 
                 -- debugPrint $ show $ stop || null others
                 unless (null others) go
@@ -1182,7 +1183,7 @@ copyEnd conn qryId = do
 
 -- | A simpler version of `atomicallySendControlMsgs`.
 atomicallySendControlMsgs_ :: HPgConnection -> ([SomeMessage], STM ()) -> IO ()
-atomicallySendControlMsgs_ conn (msgs, stateUpdate) = atomicallySendControlMsgs conn (const $ pure ()) (const $ pure ()) (const $ pure ((), msgs, stateUpdate))
+atomicallySendControlMsgs_ conn (msgs, stateUpdate) = atomicallySendControlMsgs conn (const $ pure ()) (const $ pure ()) (const $ ((), msgs, stateUpdate))
 
 data SomeMessage = forall msg. (ToPgMessage msg) => SomeMessage msg
 
@@ -1198,18 +1199,17 @@ instance ToPgMessage SomeMessage where
 -- state will be updated once they're sent, and other callers calling this
 -- will wait for previous messages to be sent, so they see the same state
 -- they would under normal/error-free operation.
-atomicallySendControlMsgs :: HPgConnection -> (TVar InternalConnectionState -> STM a) -> (TVar InternalConnectionState -> STM ()) -> (a -> IO (b, [SomeMessage], STM ())) -> IO b
+atomicallySendControlMsgs :: HPgConnection -> (TVar InternalConnectionState -> STM a) -> (TVar InternalConnectionState -> STM ()) -> (a -> (b, [SomeMessage], STM ())) -> IO b
 atomicallySendControlMsgs conn acquire release f = do
   withControlMsgsLock
     conn
     acquire
     release
     $ \acqValue ->
-      modifyMVar (sendBuffer conn) $
-        \msgsInBuffer -> do
-          (ret, msgs, afterSentTxn) <- f acqValue
-          -- Use a DList for appends? Probably not worth it since there are so few control messages.
-          pure (msgsInBuffer ++ [(Builder.toLazyByteString (mconcat $ map toPgMessage msgs), afterSentTxn)], ret)
+      atomicModifyIORef' (sendBuffer conn) $ \msgsInBuffer ->
+        let (ret, msgs, afterSentTxn) = f acqValue
+         in -- Use a DList for appends? Probably not worth it since there are so few control messages.
+            (msgsInBuffer ++ [(Builder.toLazyByteString (mconcat $ map toPgMessage msgs), afterSentTxn)], ret)
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn (CopyData t)

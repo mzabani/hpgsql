@@ -7,7 +7,6 @@ import Control.Monad (replicateM)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
 import qualified Data.Attoparsec.Text as TextParsec
-import qualified Data.Serialize as Cereal
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.ByteString.Builder (Builder)
@@ -19,6 +18,7 @@ import Data.Int (Int16, Int32, Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
+import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
 import Data.Word (Word8)
@@ -140,7 +140,7 @@ instance Show Parse where
 data ParseComplete = ParseComplete
   deriving stock (Show)
 
-data ParameterStatus = ParameterStatus {parameterName :: Text, parameterValue :: Text}
+data ParameterStatus = ParameterStatus {parameterName :: !Text, parameterValue :: !Text}
   deriving stock (Show)
 
 -- | This replicates the postgresql-libpq constructor, because why not?
@@ -239,7 +239,7 @@ instance FromPgMessage CopyInResponse where
     _ -> Nothing
 
 instance FromPgMessage DataRow where
-  msgParser = PgMsgParser $ \c restOfMsg -> case c of
+  msgParser = PgMsgParser $ \c !restOfMsg -> case c of
     'D' -> Just $ DataRow {rowColumnData = LBS.drop 2 restOfMsg}
     _ -> Nothing
 
@@ -249,7 +249,7 @@ instance FromPgMessage NoData where
     _ -> Nothing
 
 instance FromPgMessage ParameterStatus where
-  msgParser = PgMsgParser $ \c restOfMsg -> case c of
+  msgParser = PgMsgParser $ \c !restOfMsg -> case c of
     'S' -> case LazyParsec.parseOnly (((,) <$> nulTerminatedCStringParser <*> nulTerminatedCStringParser) <* Parsec.endOfInput) restOfMsg of
       Left _ -> error "Failed parsing ParameterStatus"
       Right (parameterName, parameterValue) -> Just $ ParameterStatus {..}

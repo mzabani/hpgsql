@@ -29,9 +29,9 @@ executable hpgsql-benchmarks
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
   ghc-options: -O1 -rtsopts -Wall -Wpartial-fields -optP-Wno-nonportable-include-path
   if flag(threaded)
-    ghc-options: -threaded "-with-rtsopts=-N"
+    ghc-options: -threaded "-with-rtsopts=-N -T"
   else
-    ghc-options: -single-threaded
+    ghc-options: -single-threaded "-with-rtsopts=-T"
   default-extensions:
       BangPatterns
       DeriveAnyClass
