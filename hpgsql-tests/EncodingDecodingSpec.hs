@@ -26,11 +26,12 @@ import HPgsql
 import HPgsql.Field (AllowNull (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import HPgsql.Query (sql)
 import HPgsql.TypeInfo (Oid)
-import HPgsql.Types (PgJson)
+import HPgsql.Types (PgJson, Values (..), valuesToQuery)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
+import qualified Data.List as List
 import Data.Functor ((<&>))
 import Data.Time (NominalDiffTime)
 import Test.Hspec
@@ -76,6 +77,9 @@ spec = do
     it
       "Less usual types"
       lessUsualTypes
+    it
+      "Values type round-trip"
+      valuesTypeRoundTrip
   aroundConn $ describe "Custom types" $ do
     it "Composite type" queryCompositeType
     it
@@ -297,3 +301,10 @@ queryGenericallyDerivedTypes conn = withRollback conn $ do
   queryWith rowParser conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericRecord 13 EVal2 "Some text" True False]
   queryWith rowParser conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericProdType 13 EVal2 "Some text" True False]
   queryWith rowParser conn "SELECT 'eval1'::myenum, 'eval2'::myenum, 'eval3'::myenum" `shouldReturn` [(EVal1, EVal2, EVal3)]
+
+valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
+valuesTypeRoundTrip conn = hedgehog $ do
+  rows <- Gen.forAll $ Gen.list (Gen.linear 1 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
+  let valsQuery = valuesToQuery (Values rows)
+  results <- liftIO $ query conn [sql|WITH t AS (^{valsQuery}) SELECT * FROM t ORDER BY 1, 2|]
+  results === List.sort rows

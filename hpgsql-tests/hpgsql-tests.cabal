@@ -33,6 +33,7 @@ executable hpgsql-tests
       NotificationsSpec
       ParsingSpec
       PipelineSpec
+      SqlQuasiquoterSpec
       TestUtils
       ThreadSafetySpec
   hs-source-dirs:
