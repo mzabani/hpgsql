@@ -5,12 +5,21 @@ let threading = "+threaded";
 in
 { pkgs ? import ./nix/nixpkgs.nix { inherit threading; } }:
 let
-  postgres = pkgs.postgresql_16.withPackages (ps: with ps; [ pg_cron ]);
+  postgres = pkgs.postgresql_16.withPackages (ps: with ps; [ /* pg_cron */ ]);
 in
   pkgs.haskellPackages.shellFor {
     packages = p: with p; [ hpgsql hpgsql-tests hpgsql-benchmarks hpgsql-simple-compat hpgsql-simple-compat-tests ];
     withHoogle = true;
-    buildInputs = with pkgs; [ concurrently run postgres haskellPackages.cabal-install haskellPackages.ghcid haskellPackages.haskell-language-server haskellPackages.hlint ];
+    buildInputs = with pkgs; [
+     concurrently
+     haskellPackages.cabal-install
+     haskellPackages.ghcid
+     haskellPackages.haskell-language-server
+     haskellPackages.hlint
+     haskellPackages.hspec-discover
+     postgres
+     run
+    ];
 
   shellHook = ''
     source scripts/source-env.sh .env

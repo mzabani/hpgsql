@@ -5,7 +5,7 @@
   , pkgs ? import ./nix/nixpkgs.nix { inherit system threading; }
 }:
 let
-  addPgExtensions = postgres: postgres.withPackages (ps: [ ps.pg_cron ]);
+  addPgExtensions = postgres: postgres.withPackages (ps: [ /* ps.pg_cron */ ]);
   haskellPackages = builtins.getAttr ghc pkgs.haskell.packages;
 in
 rec {
@@ -18,6 +18,7 @@ rec {
   hpgsql-benchmarks = haskellPackages.hpgsql-benchmarks;
   inherit haskellPackages;
 
+  hpgsqlSimpleCompatTestsPg18 = { hspecArgs ? ""}: import ./nix/run-hpgsql-simple-compat-db-tests.nix { inherit pkgs hpgsql-simple-compat-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_18; };
   testsPg18 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_18; };
   testsPg17 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_17; };
   testsPg16 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_16; };

@@ -71,6 +71,10 @@ jobs:
         # TODO: also test with other GHCs. This is a library, after all.
         # scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18
 
+    - name: Run hpgsql-simple-compat tests
+      run: |
+        scripts/ci/run-tests-and-annotate-with-error.sh local/hpgsql-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg18
+
   build-aarch64-darwin:
     runs-on: macos-14
 
@@ -140,3 +144,7 @@ jobs:
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
         scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
+
+    - name: Run hpgsql-simple-compat tests
+      run: |
+        scripts/ci/run-tests-and-annotate-with-error.sh local/hpgsql-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg18

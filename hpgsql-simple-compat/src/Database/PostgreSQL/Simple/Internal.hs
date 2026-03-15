@@ -40,7 +40,9 @@ import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as B8
 import Data.IORef
 import Data.Int (Int64)
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.IntMap as IntMap
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.String
 import qualified Data.Text as T
@@ -56,7 +58,7 @@ import Database.PostgreSQL.Simple.TypeInfo.Types (TypeInfo)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import GHC.Generics
 import GHC.IO.Exception
-import HPgsql (HPgConnection)
+import HPgsql (ErrorDetail (..), HPgConnection, PostgresError (..))
 import qualified HPgsql
 import qualified HPgsql.Connection
 #if !defined(mingw32_HOST_OS)
@@ -344,9 +346,27 @@ oid2int :: Oid -> Int
 oid2int (Oid x) = fromIntegral x
 {-# INLINE oid2int #-}
 
+-- | Maps HPgsql's 'PostgresError' to postgresql-simple's 'SqlError'.
+postgresErrorToSqlError :: PostgresError -> SqlError
+postgresErrorToSqlError PostgresError {..} =
+  SqlError
+    { sqlState = lookupDetail ErrorCode,
+      sqlExecStatus = FatalError,
+      sqlErrorMsg = lookupDetail ErrorHumanReadableMsg,
+      sqlErrorDetail = lookupDetail ErrorDetail,
+      sqlErrorHint = lookupDetail ErrorHint
+    }
+  where
+    lookupDetail key = maybe "" LBS.toStrict (Map.lookup key pgErrorDetails)
+
+-- | Wraps an IO action to rethrow HPgsql's 'PostgresError' as postgresql-simple's 'SqlError'.
+mapHpgsqlErrors :: IO a -> IO a
+mapHpgsqlErrors = handle (throwIO . postgresErrorToSqlError)
+
 -- | A version of 'execute' that does not perform query substitution.
 execute_ :: Connection -> Query -> IO Int64
-execute_ conn (Query stmt) = HPgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 stmt)
+execute_ conn (Query stmt) = mapHpgsqlErrors $
+  HPgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 stmt)
 
 throwResultError :: ByteString -> PQ.Result -> PQ.ExecStatus -> IO a
 throwResultError _ result status = do

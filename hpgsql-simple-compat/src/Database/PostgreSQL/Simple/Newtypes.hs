@@ -13,7 +13,7 @@ import qualified Data.Aeson as Aeson
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.Simple.FromField (FromField (..), fromJSONField)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import HPgsql.Newtypes (Aeson (..))
+import HPgsql.Types (Aeson (..))
 
 -------------------------------------------------------------------------------
 -- aeson

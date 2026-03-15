@@ -62,8 +62,8 @@ tests env =
       -- to make hpgsql-simple-compat simply compile.
       -- We should bring them back little by little.
       [ -- testBytea,
-        -- testCase "ExecuteMany" . testExecuteMany
-        -- , testCase "Fold"                 . testFold
+        testCase "ExecuteMany" . testExecuteMany,
+        -- testCase "Fold"                 . testFold
         testCase "Notify" . testNotify,
         -- testCase "Serializable" . testSerializable
         testCase "Time" . testTime
@@ -454,22 +454,10 @@ testUnicode TestEnv {..} = do
   messages' <- query_ conn "SELECT сообщение FROM ру́сский"
   sort messages @?= sort messages'
 
+-- TODO: This test needs reworking for HPgsql since `execute` uses HPgsql.ToPgRow,
+-- not ToRow/ToField, so `Values` can't be used as a parameter directly.
 testValues :: TestEnv -> Assertion
-testValues TestEnv {..} = do
-  execute_ conn "CREATE TEMPORARY TABLE values_test (x int, y text)"
-  test (Values ["int4", "text"] [])
-  test (Values ["int4", "text"] [(1, "hello")])
-  test (Values ["int4", "text"] [(1, "hello"), (2, "world")])
-  test (Values ["int4", "text"] [(1, "hello"), (2, "world"), (3, "goodbye")])
-  test (Values [] [(1, "hello")])
-  test (Values [] [(1, "hello"), (2, "world")])
-  test (Values [] [(1, "hello"), (2, "world"), (3, "goodbye")])
-  where
-    test :: Values (Int, Text) -> Assertion
-    test table@(Values _ vals) = do
-      execute conn "INSERT INTO values_test ?" (Only table)
-      vals' <- query_ conn "DELETE FROM values_test RETURNING *"
-      sort vals @?= sort vals'
+testValues TestEnv {..} = error "TODO HPgsql"
 
 -- testCopy :: TestEnv -> Assertion
 -- testCopy TestEnv {..} = do

@@ -1,0 +1,31 @@
+{ postgres, pkgs, hpgsql-simple-compat-tests, hspecArgs }:
+let fs = pkgs.lib.fileset;
+in
+ pkgs.stdenv.mkDerivation {
+     name = "hpgsql-simple-compat-tests-with-db-results";
+     src = fs.toSource {
+      root = ../.;
+      fileset = fs.unions [ ../conf/test-db ../scripts/init-pg-cluster.sh ../scripts/wait-for-pg-ready.sh ];
+     };
+     nativeBuildInputs = [ postgres pkgs.bash pkgs.coreutils pkgs.glibcLocales ];
+     installPhase = ''
+      patchShebangs scripts/*.sh
+      mkdir "$out"
+      mkdir -p local/temp-pg-data
+      export LANG=en_US.UTF-8
+      export PGDATA="local/temp-pg-data"
+      export PGDATABASE="postgres"
+      export PGPORT="5434"
+      export PGHOST="/tmp"
+      export PGUSER="postgres"
+      export DATABASE_CONNSTRING="user=$PGUSER dbname=$PGDATABASE host=$PGHOST port=$PGPORT"
+      scripts/init-pg-cluster.sh ./conf/test-db
+      trap "pg_ctl stop || true" EXIT ERR
+      pg_ctl -l "$out/pg_ctl_init.log" start
+      scripts/wait-for-pg-ready.sh
+      ${hpgsql-simple-compat-tests}/bin/hpgsql-simple-compat-tests ${hspecArgs}
+      pg_ctl stop
+      trap - EXIT ERR
+    '';
+  }
+
