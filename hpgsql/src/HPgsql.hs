@@ -59,7 +59,6 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
@@ -95,18 +94,20 @@ import System.Timeout (timeout)
 
 data HPgConnection = HPgConnection
   { socket :: !Socket,
-    recvBuffer :: !(IORef LBS.ByteString),
-    -- | A buffer of messages to be sent and of internal state
-    -- transactions to commit when they are sent. This is still
-    -- an MVar, not an IORef, because aarch64's weak memory model
-    -- has caused real out-of-order query bugs before, which is
-    -- _really_ bad. Read the code that modifies it for more info.
+    -- | We've had weird CPU 100% stalls running tests when
+    -- this was an IORef (though it might've been something else;
+    -- I did not trace the behaviour back to its root cause), but
+    -- we've definitely had reproducible problems with out-of-order
+    -- message delivery in weakly ordered CPU architectures like aarch64.
+    -- The performance benefits of IORef in our benchmarks were ~1%, so
+    -- it does not feel worth the risk to use them.
+    -- See the test failures (if they're still available) at
+    -- https://github.com/mzabani/hpgsql/actions/runs/23076110595/job/67071616534
+    -- Failures were fairly consistent after a number of test retries.
+    recvBuffer :: !(MVar LBS.ByteString),
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     originalConnStr :: !ConnString,
     connectedTo :: !AddrInfo,
-    -- | Does not feel worth the risks of weak memory ordering to
-    -- use an IORef for parameter statuses, which gets read from
-    -- and updated so rarely.
     parameterStatusMap :: !(MVar (Map Text Text)),
     internalConnectionState :: !(TVar InternalConnectionState),
     connPid :: !Int32,
@@ -243,7 +244,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       Socket.withFdSocket sock Socket.getNonBlock >>= \case
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
-      recvBuffer <- newIORef mempty
+      recvBuffer <- newMVar mempty
       sendBuffer <- newMVar mempty
       connParams <- newMVar mempty
       notifQueue <- STM.newTQueueIO
@@ -417,7 +418,8 @@ receiveNextMsgWithMaskedContinuation conn parser f =
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either Char a -> IO b) -> IO b
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = do
   -- We need to preserve the invariant that the internal buffer's first byte is
-  -- always the first byte of a valid Message.
+  -- always the first byte of a valid Message, while keeping this function
+  -- interruptible.
   -- This means we can't extract a message partially from the internal buffer,
   -- even in face of asynchronous exceptions.
   -- So we append to the buffer up until the time to extract a message from the buffer,
@@ -472,9 +474,9 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
             Nothing -> Just <$> f (Left msgIdentChar)
 
     removeFirstBytesFromBufferOrThrow :: Int64 -> IO ()
-    removeFirstBytesFromBufferOrThrow nbytes = atomicModifyIORef' recvBuffer $ \lbs -> do
+    removeFirstBytesFromBufferOrThrow nbytes = modifyMVar recvBuffer $ \lbs -> do
       if LBS.length lbs >= nbytes
-        then (LBS.drop nbytes lbs, ())
+        then pure (LBS.drop nbytes lbs, ())
         else
           error "Bug in HPgsql. Internal buffer's bytes weren't filled enough"
 
@@ -482,17 +484,18 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
     -- until the buffer has at least N bytes.
     receiveUntilBufferHasAtLeast :: Int64 -> IO ()
     receiveUntilBufferHasAtLeast minBytesNecessary = do
-      nBytesInBuffer <- LBS.length <$> readIORef recvBuffer
-      when (nBytesInBuffer < minBytesNecessary) $ mask $ \restore -> do
+      nBytesInBuffer <- LBS.length <$> readMVar recvBuffer
+      when (nBytesInBuffer < minBytesNecessary) $ do
         -- This takes from the kernel's recv buffer and appends to our buffer atomically,
-        -- or an exception is thrown when receiving
-        restore $ socketWaitRead socket
-        someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-        atomicModifyIORef' recvBuffer (\lbs -> (lbs <> LBS.fromStrict someBytes, ()))
-        restore $ receiveUntilBufferHasAtLeast minBytesNecessary
+        -- or an exception is thrown when receiving.
+        modifyMVar recvBuffer $ \lbs -> mask $ \restore -> do
+          restore $ socketWaitRead socket
+          someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+          pure (lbs <> LBS.fromStrict someBytes, ())
+        receiveUntilBufferHasAtLeast minBytesNecessary
 
     peekIntoBuffer :: Int64 -> IO LBS.ByteString
-    peekIntoBuffer n = LBS.take n <$> readIORef recvBuffer
+    peekIntoBuffer n = LBS.take n <$> readMVar recvBuffer
 
 -- | Cancels any running statements in the current connection, including COPY, or returns if there
 -- is no active query to cancel.
@@ -605,16 +608,6 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
         $ mask
         $ \restore -> do
           let go = do
-                -- This section of code is why sendBuffer is an MVar and not
-                -- an IORef: we need to run IO inside, and atomicyModifyIORef'
-                -- doesn't let us.
-                -- We could possibly use readIORef + writeIORef and add a few
-                -- memory barriers, but I'm not experienced enough for that,
-                -- and the gains of IORef vs MVar have been around 1% only
-                -- in some benchmarks, so it doesn't feel worth it.
-                -- See the test failures (if they're still available) at
-                -- https://github.com/mzabani/hpgsql/actions/runs/23076110595/job/67071616534
-                -- Failures were fairly consistent after a number of test retries.
                 restore $ socketWaitWrite socket
                 others <- modifyMVar (sendBuffer conn) $ \case
                   [] -> pure ([], [])

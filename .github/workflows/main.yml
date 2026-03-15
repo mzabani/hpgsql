@@ -54,11 +54,11 @@ jobs:
       run: |
         nix-env -iA concurrently -f ./nix/nixpkgs.nix
         concurrently -g --timings --names pg18,pg17,pg16,pg15,pg14 \
-          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18' \
-          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17' \
-          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-tests.txt nix-build --no-out-link -A testsPg16' \
-          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15' \
-          'scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14'
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18' \
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17' \
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-tests.txt nix-build --no-out-link -A testsPg16' \
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15' \
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14'
 
     - name: Run tests with different combinations
       run: |
@@ -66,7 +66,7 @@ jobs:
         # to many things, and our library relies on a lot of ThreadId tracking,
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
-        scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
+        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
 
         # TODO: also test with other GHCs. This is a library, after all.
         # scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18
@@ -131,11 +131,11 @@ jobs:
         # postgres versions aren't enough to make it worth testing every version here too.
         # We don't run these concurrently because Nix does not have a sandbox in Macs, so it's
         # not worth the risk.
-        scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18
-        scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17
-        scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-tests.txt nix-build --no-out-link -A testsPg16
-        scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15
-        scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14
+        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18
+        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17
+        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-tests.txt nix-build --no-out-link -A testsPg16
+        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15
+        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14
 
     - name: Run tests with different combinations
       run: |
@@ -143,7 +143,7 @@ jobs:
         # to many things, and our library relies on a lot of ThreadId tracking,
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
-        scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
+        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
 
     - name: Run hpgsql-simple-compat tests
       run: |
