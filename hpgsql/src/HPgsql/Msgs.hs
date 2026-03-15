@@ -205,6 +205,7 @@ instance ToPgMessage CancelRequest where
 instance ToPgMessage CopyData where
   toPgMessage (CopyData bs) =
     -- TODO: Do we check if bytestring's length is too long or just continue ignoring the possibility?
+    -- TODO: Use a length-aware builder for performance if there is one
     Builder.char7 'd' <> Builder.int32BE (4 + fromIntegral (BS.length bs)) <> Builder.byteString bs
 
 instance ToPgMessage CopyFail where

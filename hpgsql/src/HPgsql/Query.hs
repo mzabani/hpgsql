@@ -45,6 +45,7 @@ newtype Query = Query (NonEmpty SingleQuery)
   deriving newtype (Eq, Semigroup, Show)
 
 data SingleQuery = SingleQuery {queryString :: ByteString, queryParams :: [(Maybe Oid, Maybe LBS.ByteString)]}
+  -- Not an auto-derived Semigroup because concatenation would require re-indexing query arguments
   deriving stock (Eq)
 
 instance Show SingleQuery where

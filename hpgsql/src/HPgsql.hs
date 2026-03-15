@@ -46,7 +46,7 @@ module HPgsql
 where
 
 import Control.Applicative (Alternative (..))
-import Control.Concurrent (ThreadId, mkWeakThreadId, myThreadId, threadDelay)
+import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, myThreadId, readMVar, threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
@@ -59,7 +59,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
-import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
@@ -97,11 +97,17 @@ data HPgConnection = HPgConnection
   { socket :: !Socket,
     recvBuffer :: !(IORef LBS.ByteString),
     -- | A buffer of messages to be sent and of internal state
-    -- transactions to commit when they are sent.
-    sendBuffer :: !(IORef [(LBS.ByteString, STM ())]),
+    -- transactions to commit when they are sent. This is still
+    -- an MVar, not an IORef, because aarch64's weak memory model
+    -- has caused real out-of-order query bugs before, which is
+    -- _really_ bad. Read the code that modifies it for more info.
+    sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     originalConnStr :: !ConnString,
     connectedTo :: !AddrInfo,
-    parameterStatusMap :: !(IORef (Map Text Text)),
+    -- | Does not feel worth the risks of weak memory ordering to
+    -- use an IORef for parameter statuses, which gets read from
+    -- and updated so rarely.
+    parameterStatusMap :: !(MVar (Map Text Text)),
     internalConnectionState :: !(TVar InternalConnectionState),
     connPid :: !Int32,
     cancelSecretKey :: !Int32,
@@ -239,8 +245,8 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
       recvBuffer <- newIORef mempty
-      sendBuffer <- newIORef mempty
-      connParams <- newIORef mempty
+      sendBuffer <- newMVar mempty
+      connParams <- newMVar mempty
       notifQueue <- STM.newTQueueIO
       currentConnectionState <-
         STM.newTVarIO $
@@ -315,7 +321,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       pure (sock, addrInfo)
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
-getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readIORef parameterStatusMap
+getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
 
 getBackendPid :: HPgConnection -> Int32
 getBackendPid HPgConnection {connPid} = connPid
@@ -462,15 +468,14 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               pure Nothing
             Just (Right3 (ParameterStatus {..})) -> do
               removeFirstBytesFromBufferOrThrow fullMessageLen
-              modifyIORef' (parameterStatusMap conn) $ \(!paramMap) -> Map.insert parameterName parameterValue paramMap
+              modifyMVar (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap, ())
               pure Nothing
             Nothing -> Just <$> f (Left msgIdentChar)
 
     removeFirstBytesFromBufferOrThrow :: Int64 -> IO ()
-    removeFirstBytesFromBufferOrThrow nbytes = do
-      lbs <- readIORef recvBuffer
+    removeFirstBytesFromBufferOrThrow nbytes = atomicModifyIORef' recvBuffer $ \lbs -> do
       if LBS.length lbs >= nbytes
-        then writeIORef recvBuffer $ LBS.drop nbytes lbs
+        then (LBS.drop nbytes lbs, ())
         else
           error "Bug in HPgsql. Internal buffer's bytes weren't filled enough"
 
@@ -604,23 +609,30 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
         $ mask
         $ \restore -> do
           let go = do
+                -- This section of code is why sendBuffer is an MVar and not
+                -- an IORef: we need to run IO inside, and atomicyModifyIORef'
+                -- doesn't let us.
+                -- We could possibly use readIORef + writeIORef and add a few
+                -- memory barriers, but I'm not experienced enough for that,
+                -- and the gains of IORef vs MVar have been around 1% only
+                -- in some benchmarks, so it doesn't feel worth it.
+                -- See the test failures (if they're still available) at
+                -- https://github.com/mzabani/hpgsql/actions/runs/23076110595/job/67071616534
+                -- Failures were fairly consistent after a number of test retries.
                 restore $ socketWaitWrite socket
-                buf <- readIORef (sendBuffer conn)
-                others <- case buf of
-                  [] -> pure []
+                others <- modifyMVar (sendBuffer conn) $ \case
+                  [] -> pure ([], [])
                   ((msgs, afterSentTxn) : xs) ->
                     if LBS.null msgs
                       then do
                         -- debugPrint "Finished sending msgs"
                         STM.atomically afterSentTxn
-                        writeIORef (sendBuffer conn) xs
-                        pure xs
+                        pure (xs, xs)
                       else do
                         n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
                         -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
                         let fin = (LBS.drop n msgs, afterSentTxn) : xs
-                        writeIORef (sendBuffer conn) fin
-                        pure fin
+                        pure (fin, fin)
 
                 -- debugPrint $ show $ stop || null others
                 unless (null others) go
@@ -1206,10 +1218,10 @@ atomicallySendControlMsgs conn acquire release f = do
     acquire
     release
     $ \acqValue ->
-      atomicModifyIORef' (sendBuffer conn) $ \msgsInBuffer ->
-        let (ret, msgs, afterSentTxn) = f acqValue
-         in -- Use a DList for appends? Probably not worth it since there are so few control messages.
-            (msgsInBuffer ++ [(Builder.toLazyByteString (mconcat $ map toPgMessage msgs), afterSentTxn)], ret)
+      let (!ret, !msgs, !afterSentTxn) = f acqValue
+       in modifyMVar (sendBuffer conn) $ \msgsInBuffer ->
+            -- Use a DList for appends? Probably not worth it since there are so few control messages.
+            pure (msgsInBuffer ++ [(Builder.toLazyByteString (mconcat $ map toPgMessage msgs), afterSentTxn)], ret)
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn (CopyData t)
