@@ -22,7 +22,7 @@ import HPgsql.TypeInfo (Format (..), jsonOid, jsonbOid)
 
 -- TODO: Write tests for these types!
 
-data Values a = Values [a]
+newtype Values a = Values [a]
 
 -- | Generates a query like @VALUES ($1,$2), ($3,$4)@ from a list of rows.
 -- Can be embedded inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:

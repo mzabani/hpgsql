@@ -202,7 +202,7 @@ connectionTransactionStatus conn = STM.atomically $ updateConnStateTxn conn $ \s
           TransInError
       | otherwise -> TransInTrans
 
-data ConnectOpts = ConnectOpts
+newtype ConnectOpts = ConnectOpts
   { -- | How long in ms HPgsql will sleep before re-checking if active queries have been orphaned
     -- from their issuing threads having died. The default is 500ms, and this is only relevant
     -- if you plan on concurrently issuing queries on a single connection, and even then only
@@ -218,10 +218,9 @@ connect =
   connectOpts defaultConnectOpts
 
 connectOpts :: ConnectOpts -> ConnString -> DiffTime -> IO HPgConnection
-connectOpts connOpts =
+connectOpts =
   internalConnectOrCancel
     Connect
-    connOpts
 
 defaultConnectOpts :: ConnectOpts
 defaultConnectOpts =
@@ -353,7 +352,7 @@ beforeReturningToPool conn@HPgConnection {internalConnectionState} mCleanOpts = 
   -- What if there are notifications in the socket buffer? It seems reasonable to assume that when
   -- running "UNLISTEN *" those would be received, so this might be fine as long as we
   -- clear the internal queue _after_ "UNLISTEN *".
-  executeMany_ conn $ (if (resetAll cleanOpts) then ["RESET ALL", "RESET ROLE"] else []) ++ (if unlistenAll cleanOpts then ["UNLISTEN *"] else [])
+  executeMany_ conn $ (if resetAll cleanOpts then ["RESET ALL", "RESET ROLE"] else []) ++ (if unlistenAll cleanOpts then ["UNLISTEN *"] else [])
   when (unlistenAll cleanOpts) clearInternalNotificationQueue
   where
     cleanOpts = fromMaybe PoolCleanup {resetAll = True, unlistenAll = True, checkTransactionState = True} mCleanOpts
@@ -558,18 +557,15 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
   flushSendBuffer
   thisThreadId <- fromThreadId <$> myThreadId
   bracket
-    ( do
-        acq <- STM.atomically $ updateConnStateTxn conn $ \sttv -> do
-          st <- STM.readTVar sttv
-          let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
-          newSt <- case blockedBy of
-            Nothing -> pure $ st {blockedForSendingOrReceivingMsgsAtomically {- traceShowWith ("Grabbing ",) $ -} = Just (thisThreadId, 1)}
-            Just (tid, nGrabs) ->
-              if tid == thisThreadId then pure $ st {blockedForSendingOrReceivingMsgsAtomically {- traceShowWith ("Grabbing ",) $ -} = Just (thisThreadId, nGrabs + 1)} else STM.retry
-          STM.writeTVar sttv newSt
-          acqStm sttv
-        -- debugPrint "Internal state: [Acquired control-msg-lock]."
-        pure acq
+    ( STM.atomically $ updateConnStateTxn conn $ \sttv -> do
+        st <- STM.readTVar sttv
+        let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
+        newSt <- case blockedBy of
+          Nothing -> pure $ st {blockedForSendingOrReceivingMsgsAtomically {- traceShowWith ("Grabbing ",) $ -} = Just (thisThreadId, 1)}
+          Just (tid, nGrabs) ->
+            if tid == thisThreadId then pure $ st {blockedForSendingOrReceivingMsgsAtomically {- traceShowWith ("Grabbing ",) $ -} = Just (thisThreadId, nGrabs + 1)} else STM.retry
+        STM.writeTVar sttv newSt
+        acqStm sttv
     )
     -- Release lock on success or error
     ( const $ do
@@ -651,12 +647,9 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
   withControlMsgsLock
     conn
     -- Check last received message and take lock before receiving next message
-    ( \_sttv -> do
-        queryState <- do
-          blockUntilQueryTurn
-          getQueryStateIfFirstOrThrow
-        -- debugPrint $ "Internal state: [Acquired receive-lock]. QueryId " ++ show qryId
-        pure queryState
+    ( const $ do
+        blockUntilQueryTurn
+        getQueryStateIfFirstOrThrow
     )
     (const $ pure ())
     $ \qryState -> do
@@ -866,9 +859,7 @@ throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails
 lookupQueryText :: HPgConnection -> QueryId -> IO ByteString
 lookupQueryText conn qryId = STM.atomically $ do
   st <- STM.readTVar (internalConnectionState conn)
-  pure $ case List.find ((== qryId) . queryIdentifier) (currentPipeline st) of
-    Just qs -> queryText qs
-    Nothing -> ""
+  pure $ maybe "" queryText $ List.find ((== qryId) . queryIdentifier) (currentPipeline st)
 
 -- | Returns the count of affected rows of the given query.
 execute :: HPgConnection -> Query -> IO Int64
@@ -975,7 +966,7 @@ loopUntilNoPipeline conn lockAcquireStm f = do
         threadDelay $ 1000 * intervalMs
         pure Nothing
       Right res -> do
-        debugPrint $ "+++ No active pipeline found"
+        debugPrint "+++ No active pipeline found"
         Just <$> f res
   case retOrRepeat of
     Nothing -> loopUntilNoPipeline conn lockAcquireStm f
@@ -1026,7 +1017,7 @@ drainOrphanedQueriesAndRunWithControlMsgLock conn = do
       debugPrint $ "+++ I am " ++ show thisThreadId ++ " and will look for orphaned queries to drain"
       withControlMsgsLock
         conn
-        (\sttv -> currentPipeline <$> STM.readTVar sttv)
+        (fmap currentPipeline . STM.readTVar)
         (const $ pure ())
         $ \activeQueries -> do
           -- TODO: We should either move the WeakThreadId owner into the full pipeline,
@@ -1076,7 +1067,7 @@ pipelineS rowparser@(RowParser _ _ expectedColFmts) (Query (lastAndInitNE -> (fi
     )
 
 pipelineL :: RowParser a -> Query -> Pipeline (IO [a])
-pipelineL rowparser q = join . fmap S.toList_ <$> pipelineS rowparser q
+pipelineL rowparser q = (S.toList_ =<<) <$> pipelineS rowparser q
 
 pipelineCmd :: Query -> Pipeline (IO Int64)
 pipelineCmd (Query qs) =
@@ -1095,14 +1086,12 @@ pipelineCmd (Query qs) =
 runPipeline :: HPgConnection -> Pipeline a -> IO a
 runPipeline conn (Pipeline [] run) = pure $ run conn []
 runPipeline conn (Pipeline (NE.fromList -> queries) run) = do
-  let toMessages (SingleQuery qryString qryParams, mRowInfo) =
+  let toMessages (SingleQuery qryString qryParams, mExpectedResultColFmts) =
         [ SomeMessage $ Parse qryString (map fst qryParams),
           SomeMessage $
             Bind
               { paramsValuesInOrder = map snd qryParams,
-                resultColumnFmts = case mRowInfo of
-                  Nothing -> [BinaryFmt]
-                  Just expectedColFmts -> expectedColFmts
+                resultColumnFmts = fromMaybe [BinaryFmt] mExpectedResultColFmts
               },
           SomeMessage Describe,
           SomeMessage Execute
@@ -1113,7 +1102,7 @@ runPipeline conn (Pipeline (NE.fromList -> queries) run) = do
     (concatMap toMessages queries ++ [SomeMessage Sync])
     $ \qryIds -> pure $ run conn (NE.toList qryIds)
 
-consumeStreamingResults :: RowParser a -> HPgConnection -> QueryId -> (Stream (Of a) IO ())
+consumeStreamingResults :: RowParser a -> HPgConnection -> QueryId -> Stream (Of a) IO ()
 consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryId = S.effect $ do
   qText <- lookupQueryText conn qryId
   (mERowDesc, rowsStream) <- consumeResults conn qryId
@@ -1195,7 +1184,7 @@ copyEnd conn qryId = do
 
 -- | A simpler version of `atomicallySendControlMsgs`.
 atomicallySendControlMsgs_ :: HPgConnection -> ([SomeMessage], STM ()) -> IO ()
-atomicallySendControlMsgs_ conn (msgs, stateUpdate) = atomicallySendControlMsgs conn (const $ pure ()) (const $ pure ()) (const $ ((), msgs, stateUpdate))
+atomicallySendControlMsgs_ conn (msgs, stateUpdate) = atomicallySendControlMsgs conn (const $ pure ()) (const $ pure ()) (const ((), msgs, stateUpdate))
 
 data SomeMessage = forall msg. (ToPgMessage msg) => SomeMessage msg
 

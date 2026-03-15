@@ -37,7 +37,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Prelude hiding (takeWhile)
 
-data SqlStatement = SqlStatement ![BlockOrNotBlock]
+newtype SqlStatement = SqlStatement [BlockOrNotBlock]
   deriving stock (Show, Eq)
 
 -- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which

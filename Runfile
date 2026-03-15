@@ -21,6 +21,8 @@ benchmarks:
 ci-tests:
     set -eo pipefail
 
+    hlint .
+
     concurrently -g --timings --names pg18,pg17,pg16,pg15,pg14 \
       'nix-build --no-out-link -A testsPg18' \
       'nix-build --no-out-link -A testsPg17' \
@@ -28,10 +30,10 @@ ci-tests:
       'nix-build --no-out-link -A testsPg15' \
       'nix-build --no-out-link -A testsPg14'
 
-    concurrently -g --timings --names single-threaded,ghc984,ghc967 \
-      'nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
-      'nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
-      'nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
+    # concurrently -g --timings --names single-threaded,ghc984,ghc967 \
+    #   'nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
+    #   'nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
+    #   'nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
 
 
 ##

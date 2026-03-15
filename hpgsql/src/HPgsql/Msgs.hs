@@ -17,7 +17,7 @@ import Data.Functor (void)
 import Data.Int (Int16, Int32, Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (mapMaybe)
 import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
@@ -310,7 +310,7 @@ instance ToPgMessage Parse where
     let unnamedStatement = nulTermCString ""
         numParamsSpecified :: Int16 = fromIntegral $ length specifiedParameterTypes
         -- A 0 for an OID means "type unspecified", and is what we do for custom user types
-        paramOids = mconcat $ map (\mOid -> Builder.int32BE $ fromMaybe 0 $ fromIntegral <$> mOid) specifiedParameterTypes
+        paramOids = mconcat $ map (Builder.int32BE . maybe 0 fromIntegral) specifiedParameterTypes
         contents = unnamedStatement <> Builder.byteString queryString <> Builder.word8 0 <> Builder.int16BE numParamsSpecified <> paramOids
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
      in Builder.char7 'P' <> Builder.int32BE (4 + contentsLen) <> contents

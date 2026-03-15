@@ -38,6 +38,9 @@ jobs:
           substituters = https://cache.nixos.org https://mzabani.cachix.org https://cache.iog.io
           trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
+    - name: Run hlint
+      run: nix-shell -p '(import ./nix/nixpkgs.nix {}).haskellPackages.hlint' --run 'hlint .'
+
     - name: Build hpgsql
       run: nix-build --no-out-link -A hpgsql
 
@@ -106,6 +109,9 @@ jobs:
         getconf NAME_MAX /
         getconf PATH_MAX /
         ulimit -n # Max number of open file descriptors
+
+    - name: Run hlint
+      run: nix-shell -p '(import ./nix/nixpkgs.nix {}).haskellPackages.hlint' --run 'hlint .'
 
     - name: Build hpgsql
       run: nix-build --no-out-link -A hpgsql

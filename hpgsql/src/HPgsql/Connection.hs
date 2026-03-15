@@ -83,8 +83,8 @@ instance Show ConnString where
   show _ = "ConnectionString"
 
 parseConnString :: Text -> Either String ConnString
-parseConnString cstr =
-  parseOnly (connStringParser <* endOfInput) cstr
+parseConnString =
+  parseOnly (connStringParser <* endOfInput)
 
 -- | Parser that consumes any kind of Unicode space character, including \t, \n, \r, \f, \v.
 skipAllWhiteSpace :: Parser ()

@@ -22,7 +22,7 @@ module HPgsql.Field
   )
 where
 
-import Control.Monad (forM, replicateM, unless, when)
+import Control.Monad (replicateM, unless, when)
 import qualified Data.Aeson as Aeson
 import qualified Data.Attoparsec.ByteString.Lazy as Parsec
 import Data.ByteString (ByteString)
@@ -136,7 +136,7 @@ instance Applicative RowParser where
 singleColRowParser :: FieldParser a -> RowParser a
 singleColRowParser (FieldParser {..}) =
   RowParser
-    { fullRowParser = \colTypes -> case colTypes of
+    { fullRowParser = \case
         [singleTypOid] ->
           let decode = fieldValueParser singleTypOid
            in do
@@ -171,7 +171,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
   case nullCheck of
     DisallowNull ->
       FieldParser
-        { fieldValueParser = \_compositeTypeOid -> \mbs -> case mbs of
+        { fieldValueParser = \_compositeTypeOid -> \case
             Nothing -> Left "Got NULL in composite type but it was not allowed"
             Just bs -> Parsec.parseOnly (parserForRecord <* Parsec.endOfInput) bs,
           allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
@@ -179,7 +179,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
         }
     AllowNull ->
       FieldParser
-        { fieldValueParser = \_compositeTypeOid -> \mbs -> case mbs of
+        { fieldValueParser = \_compositeTypeOid -> \case
             Nothing -> Right Nothing
             Just bs -> Just <$> Parsec.parseOnly (parserForRecord <* Parsec.endOfInput) bs,
           allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
@@ -193,7 +193,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
       numCols <- fromIntegral <$> int32Parser
       let numColsExpected = length resultColumnsFmts
       unless (numCols == numColsExpected) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numColsExpected
-      cols <- forM [1 .. numCols] $ const $ do
+      cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
         (LBS.fromStrict -> sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
         !bs <- LBS.fromStrict <$> Parsec.take (max 0 size)
@@ -378,7 +378,7 @@ instance ToPgField Text where
 
   -- TODO: What about client_encoding?
   -- TODO: Some unsafe Text->LazyByteString conversion function that is faster?
-  toPgField t = Just $ LBS.fromStrict $ encodeUtf8 $ t
+  toPgField t = Just $ LBS.fromStrict $ encodeUtf8 t
 
 instance ToPgField LT.Text where
   toTypeOid _ = Just textOid
@@ -497,7 +497,7 @@ parsePgType fieldFmt requiredTypeOids fieldValueParser =
 instance FromPgField () where
   fieldParser =
     FieldParser
-      { fieldValueParser = \_oid -> \mbs -> case mbs of
+      { fieldValueParser = \_oid -> \case
           Just "" -> Right ()
           Just bs -> Left $ "Invalid value '" ++ show bs ++ "' for postgres void type"
           Nothing -> Left "Cannot parse SQL null into Haskell () type. Use a `Maybe ()`",
@@ -510,7 +510,7 @@ instance FromPgField Int where
     FieldParser
       { fieldValueParser = \oid ->
           let !decode = binaryIntDecoder oid
-           in \mbs -> case mbs of
+           in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int type. Use a `Maybe Int`",
         fieldFmt = BinaryFmt,
@@ -522,7 +522,7 @@ instance FromPgField Int16 where
     FieldParser
       { fieldValueParser = \oid ->
           let !decode = binaryIntDecoder oid
-           in \mbs -> case mbs of
+           in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int16 type. Use a `Maybe Int16`",
         fieldFmt = BinaryFmt,
@@ -534,7 +534,7 @@ instance FromPgField Int32 where
     FieldParser
       { fieldValueParser = \oid ->
           let !decode = binaryIntDecoder oid
-           in \mbs -> case mbs of
+           in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int32 type. Use a `Maybe Int32`",
         fieldFmt = BinaryFmt,
@@ -546,7 +546,7 @@ instance FromPgField Int64 where
     FieldParser
       { fieldValueParser = \oid ->
           let !decode = binaryIntDecoder oid
-           in \mbs -> case mbs of
+           in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Int64 type. Use a `Maybe Int64`",
         fieldFmt = BinaryFmt,
@@ -558,7 +558,7 @@ instance FromPgField Integer where
     FieldParser
       { fieldValueParser = \oid ->
           let !decodeInt = binaryIntDecoder @Int64 oid
-           in \mbs -> case mbs of
+           in \case
                 Just bs
                   | oid /= numericOid -> fromIntegral <$> decodeInt bs
                   | otherwise -> case Parsec.parseOnly (scientificDecoder True <* Parsec.endOfInput) bs of
@@ -574,7 +574,7 @@ instance FromPgField Integer where
 instance FromPgField Oid where
   fieldParser =
     FieldParser
-      { fieldValueParser = \_ -> \mbs -> case mbs of
+      { fieldValueParser = \_ -> \case
           -- Oids are just int4
           Just bs -> Oid <$> binaryIntDecoder int4Oid bs
           Nothing -> Left "Cannot parse SQL null into Haskell Oid type. Use a `Maybe Oid`",
@@ -594,7 +594,7 @@ instance FromPgField Double where
           let !decoder
                 | oid == float8Oid = binaryFloat8Decoder
                 | otherwise = float2Double . binaryFloat4Decoder
-           in \mbs -> case mbs of
+           in \case
                 Just bs -> Right $ decoder bs
                 Nothing -> Left "Cannot parse SQL null into Haskell Double type. Use a `Maybe Double`",
         fieldFmt = BinaryFmt,
@@ -609,7 +609,7 @@ instance FromPgField Double where
 anyTypeDecoder :: FieldParser LBS.ByteString
 anyTypeDecoder =
   FieldParser
-    { fieldValueParser = \_oid -> \mbs -> case mbs of
+    { fieldValueParser = \_oid -> \case
         Nothing -> Left "Cannot parse SQL null with `anyTypeDecoder`."
         Just bs -> Right bs,
       fieldFmt = TextFmt,
@@ -639,7 +639,7 @@ instance FromPgField Scientific where
     FieldParser
       { fieldValueParser = \oid ->
           let !decodeInt = binaryIntDecoder @Int64 oid
-           in \mbs -> case mbs of
+           in \case
                 Just bs ->
                   -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
                   -- float4Oid and float8Oid here?
@@ -742,7 +742,7 @@ instance FromPgField CalendarDiffTime where
   fieldParser = parsePgType BinaryFmt [intervalOid] $ \case
     Just bs -> do
       (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decodeLazy bs
-      Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime ((fromIntegral nDays) * 86400) + realToFrac (picosecondsToDiffTime ((fromIntegral nMicrosecs) * 1_000_000))}
+      Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
     Nothing -> Left "Cannot parse SQL null into Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
 
 instance FromPgField Aeson.Value where
@@ -769,7 +769,7 @@ instance forall a. (FromPgField a) => FromPgField (Vector a) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   fieldParser =
     FieldParser
-      { fieldValueParser = \_oid -> \mbs -> case mbs of
+      { fieldValueParser = \_oid -> \case
           Nothing -> Left "Cannot parse SQL null into Haskell Vector type. Use a `Maybe (Vector a)`"
           Just bs -> Parsec.parseOnly (arrayParser <* Parsec.endOfInput) bs,
         fieldFmt = BinaryFmt, -- TODO: What happens for decoder that are TextFmt?
