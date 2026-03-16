@@ -42,11 +42,12 @@ module HPgsql
     getBackendPid,
     getNotification,
     getNotificationNonBlocking,
+    _globalDebugLock, -- Stop exporting this
   )
 where
 
 import Control.Applicative (Alternative (..))
-import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, myThreadId, readMVar, threadDelay)
+import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, modifyMVar_, myThreadId, readMVar, threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
@@ -444,7 +445,8 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
       case parsePgMessage msgIdentChar restOfMsg parser of
         Just msg -> do
           removeFirstBytesFromBufferOrThrow fullMessageLen
-          debugPrint $ "Received " ++ show msg
+          sttv <- STM.atomically $ STM.readTVar (internalConnectionState conn)
+          debugPrint $ "Received " ++ show msg ++ "for QueryId " ++ show (currentPipeline sttv)
           Just <$> f (Right msg)
         Nothing -> do
           -- This could be a Notification, NOTICE or a ParameterStatus message, since these
@@ -469,14 +471,14 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               pure Nothing
             Just (Right3 (ParameterStatus {..})) -> do
               removeFirstBytesFromBufferOrThrow fullMessageLen
-              modifyMVar (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap, ())
+              modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
               pure Nothing
             Nothing -> Just <$> f (Left msgIdentChar)
 
     removeFirstBytesFromBufferOrThrow :: Int64 -> IO ()
-    removeFirstBytesFromBufferOrThrow nbytes = modifyMVar recvBuffer $ \lbs -> do
+    removeFirstBytesFromBufferOrThrow nbytes = modifyMVar_ recvBuffer $ \lbs -> do
       if LBS.length lbs >= nbytes
-        then pure (LBS.drop nbytes lbs, ())
+        then pure (LBS.drop nbytes lbs)
         else
           error "Bug in HPgsql. Internal buffer's bytes weren't filled enough"
 
@@ -486,14 +488,14 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
     receiveUntilBufferHasAtLeast :: Int64 -> IO Int64
     receiveUntilBufferHasAtLeast minBytesNecessary = do
       nBytesInBuffer <- LBS.length <$> readMVar recvBuffer
-      if (nBytesInBuffer < minBytesNecessary)
+      if nBytesInBuffer < minBytesNecessary
         then do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
-          modifyMVar recvBuffer $ \lbs -> mask $ \restore -> do
+          modifyMVar_ recvBuffer $ \lbs -> mask $ \restore -> do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            pure (lbs <> LBS.fromStrict someBytes, ())
+            pure (lbs <> LBS.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
         else
           pure nBytesInBuffer
@@ -1256,14 +1258,14 @@ whenJust m f = case m of
   Nothing -> pure ()
   Just v -> f v
 
-{-# NOINLINE _globalLock #-}
-_globalLock :: MVar ()
-_globalLock = unsafePerformIO $ newMVar ()
+{-# NOINLINE _globalDebugLock #-}
+_globalDebugLock :: MVar Bool
+_globalDebugLock = unsafePerformIO $ newMVar False
 
 debugPrint :: String -> IO ()
-debugPrint _ = pure ()
+-- debugPrint _ = pure ()
+debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
 
--- debugPrint str = modifyMVar_ _globalLock $ const $ putStrLn str
 {-# INLINE timeDebugNonBlockingOperation #-}
 timeDebugNonBlockingOperation :: String -> IO a -> IO a
 timeDebugNonBlockingOperation _ f = f

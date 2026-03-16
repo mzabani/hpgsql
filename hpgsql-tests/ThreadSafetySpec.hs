@@ -3,7 +3,7 @@
 
 module ThreadSafetySpec where
 
-import Control.Concurrent (myThreadId, threadDelay)
+import Control.Concurrent (modifyMVar_, myThreadId, threadDelay)
 import Control.Concurrent.Async (Concurrently (..), cancel, mapConcurrently, wait, withAsync)
 import Control.Exception.Safe (SomeException, try)
 import Control.Monad (forM_, void, when)
@@ -194,12 +194,15 @@ queryCancellationInTheFuture = do
 -- is a blocking and risky process.
 exerciseInterruptionSafety :: HPgConnection -> IO ()
 exerciseInterruptionSafety conn = do
+  modifyMVar_ _globalDebugLock $ const (pure True)
   let veryLongTxtString :: String = take 10000 $ repeat 'x'
   forM_ [0_001 :: Int .. 2_000] $ \i -> do
     withAsync (execute conn [sql|select #{veryLongTxtString}, pg_sleep(0.1) FROM generate_series(1, 100000)|]) $ \queryAsync -> do
       threadDelay i
+      putStrLn $ "Killing thread, time: " ++ show i
       cancel queryAsync
     execute conn "SELECT 1" `shouldReturn` 1
+  modifyMVar_ _globalDebugLock $ const (pure False)
 
 queryThatErrorsDueToBadFromPgFieldImplementation1 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = do
