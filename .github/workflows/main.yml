@@ -101,6 +101,9 @@ jobs:
           substituters = https://cache.nixos.org https://mzabani.cachix.org https://cache.iog.io
           trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
+    - name: Install basic software
+      run: nix-env -iA coreutils -f ./nix/nixpkgs.nix # for the timeout CLI
+
     - name: List locales
       run: locale -a
 

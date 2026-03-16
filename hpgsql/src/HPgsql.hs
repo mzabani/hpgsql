@@ -424,12 +424,12 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
   -- even in face of asynchronous exceptions.
   -- So we append to the buffer up until the time to extract a message from the buffer,
   -- at which point we use masking.
-  receiveUntilBufferHasAtLeast 5
+  bufLen <- receiveUntilBufferHasAtLeast 5
   charAndLength <- peekIntoBuffer 5
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
       lenLeftToFetch :: Int64 = fromIntegral $ either error id (Cereal.decodeLazy @Int32 lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
-  receiveUntilBufferHasAtLeast fullMessageLen
+  when (bufLen < fullMessageLen) $ void $ receiveUntilBufferHasAtLeast fullMessageLen
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMessageLen
   -- We don't let `go` recursively call itself or even `receivedNoticeOrParameterSoTryAgain`
   -- because it would inherit its own masking, which would be bad!
@@ -482,17 +482,21 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
-    receiveUntilBufferHasAtLeast :: Int64 -> IO ()
+    -- Returns the final buffer's length.
+    receiveUntilBufferHasAtLeast :: Int64 -> IO Int64
     receiveUntilBufferHasAtLeast minBytesNecessary = do
       nBytesInBuffer <- LBS.length <$> readMVar recvBuffer
-      when (nBytesInBuffer < minBytesNecessary) $ do
-        -- This takes from the kernel's recv buffer and appends to our buffer atomically,
-        -- or an exception is thrown when receiving.
-        modifyMVar recvBuffer $ \lbs -> mask $ \restore -> do
-          restore $ socketWaitRead socket
-          someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-          pure (lbs <> LBS.fromStrict someBytes, ())
-        receiveUntilBufferHasAtLeast minBytesNecessary
+      if (nBytesInBuffer < minBytesNecessary)
+        then do
+          -- This takes from the kernel's recv buffer and appends to our buffer atomically,
+          -- or an exception is thrown when receiving.
+          modifyMVar recvBuffer $ \lbs -> mask $ \restore -> do
+            restore $ socketWaitRead socket
+            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+            pure (lbs <> LBS.fromStrict someBytes, ())
+          receiveUntilBufferHasAtLeast minBytesNecessary
+        else
+          pure nBytesInBuffer
 
     peekIntoBuffer :: Int64 -> IO LBS.ByteString
     peekIntoBuffer n = LBS.take n <$> readMVar recvBuffer
@@ -611,7 +615,6 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
         $ mask
         $ \restore -> do
           let go = do
-                restore $ socketWaitWrite socket
                 others <- modifyMVar (sendBuffer conn) $ \case
                   [] -> pure ([], [])
                   ((msgs, afterSentTxn) : xs) ->
@@ -621,6 +624,7 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
                         STM.atomically afterSentTxn
                         pure (xs, xs)
                       else do
+                        restore $ socketWaitWrite socket
                         n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
                         -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
                         let fin = (LBS.drop n msgs, afterSentTxn) : xs
