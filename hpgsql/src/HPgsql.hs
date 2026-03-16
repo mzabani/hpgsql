@@ -554,13 +554,10 @@ withControlMsgsLock ::
   (a -> IO c) ->
   IO c
 withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
-  -- To make sure any messages sent by threads killed before
-  -- we even look a internal connection state have their effects
-  -- on internal state, we flush the send buffer.
-  flushSendBuffer
   thisThreadId <- fromThreadId <$> myThreadId
   bracket
-    ( STM.atomically $ updateConnStateTxn conn $ \sttv -> do
+    ( STM.atomically $ do
+        let sttv = internalConnectionState conn
         st <- STM.readTVar sttv
         let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
         newSt <- case blockedBy of
@@ -568,30 +565,36 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
           Just (tid, nGrabs) ->
             if tid == thisThreadId then pure $ st {blockedForSendingOrReceivingMsgsAtomically {- traceShowWith ("Grabbing ",) $ -} = Just (thisThreadId, nGrabs + 1)} else STM.retry
         STM.writeTVar sttv newSt
-        acqStm sttv
     )
     -- Release lock on success or error
-    ( const $ do
-        void $ STM.atomically $ updateConnStateTxn conn $ \sttv -> do
-          st <- STM.readTVar sttv
-          let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
-          newSt <- case blockedBy of
-            Nothing -> throwIrrecoverableError "Impossible: should have been blocked but was not!"
-            Just (tid, nGrabs) ->
-              let newLockState = {- traceShowWith ("Releasing ",) $ -} if nGrabs <= 1 then Nothing else Just (thisThreadId, nGrabs - 1)
-               in if tid == thisThreadId then pure st {blockedForSendingOrReceivingMsgsAtomically = newLockState} else throwIrrecoverableError "Impossible: Lock of a different thread!"
-          STM.writeTVar sttv newSt
-          relStm sttv
-          -- debugPrint "Internal state: [Released control-msg-lock]."
+    ( const $ void $ STM.atomically $ do
+        let sttv = internalConnectionState conn
+        st <- STM.readTVar sttv
+        let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
+        newSt <- case blockedBy of
+          Nothing -> throwIrrecoverableError "Impossible: should have been blocked but was not!"
+          Just (tid, nGrabs) ->
+            let newLockState = {- traceShowWith ("Releasing ",) $ -} if nGrabs <= 1 then Nothing else Just (thisThreadId, nGrabs - 1)
+             in if tid == thisThreadId then pure st {blockedForSendingOrReceivingMsgsAtomically = newLockState} else throwIrrecoverableError "Impossible: Lock of a different thread!"
+        STM.writeTVar sttv newSt
+        -- debugPrint "Internal state: [Released control-msg-lock]."
     )
-    ( \acq -> do
-        res <- f acq
-        -- Flush the send buffer that `f` may have populated and
-        -- apply all internal connection state changes before we
-        -- let the release STM transaction look at it.
-        flushSendBuffer
-        pure res
-    )
+    $ \() -> do
+      -- The STM lock is acquired, now we run flushSendBuffer
+      -- so the caller will only see internal state after previous
+      -- messages were sent
+      flushSendBuffer
+      bracket
+        (STM.atomically $ updateConnStateTxn conn acqStm)
+        (const $ void $ STM.atomically $ updateConnStateTxn conn relStm)
+        ( \acq -> do
+            res <- f acq
+            -- Flush the send buffer that `f` may have populated and
+            -- apply all internal connection state changes before we
+            -- let the release STM transaction look at it.
+            flushSendBuffer
+            pure res
+        )
   where
     flushSendBuffer :: IO ()
     flushSendBuffer =

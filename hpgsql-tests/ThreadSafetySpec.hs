@@ -195,8 +195,8 @@ queryCancellationInTheFuture = do
 exerciseInterruptionSafety :: HPgConnection -> IO ()
 exerciseInterruptionSafety conn = do
   let veryLongTxtString :: String = take 10000 $ repeat 'x'
-  forM_ [1_000 :: Int .. 2_000] $ \i -> do
-    withAsync (execute conn [sql|select #{veryLongTxtString}, pg_sleep(0.5) FROM generate_series(1, 100000)|]) $ \queryAsync -> do
+  forM_ [0_001 :: Int .. 2_000] $ \i -> do
+    withAsync (execute conn [sql|select #{veryLongTxtString}, pg_sleep(0.1) FROM generate_series(1, 100000)|]) $ \queryAsync -> do
       threadDelay i
       cancel queryAsync
     execute conn "SELECT 1" `shouldReturn` 1
