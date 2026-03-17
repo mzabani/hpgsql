@@ -509,6 +509,14 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
 -- behaviour is undefined. That means if you had a Stream result and you run this function, you should
 -- not further inspect the Stream, and if you had sent a pipeline with multiple queries and you run this
 -- function, you should not try to consume the results of any query in that pipeline.
+-- Also, PostgreSQL's protocol specifies cancellation requests require opening a new connection to the
+-- server, which means parallelism can introduce non-determinism, as such:
+--
+--     forkIO $ query conn "SELECT ..."
+--     cancelAnyRunningStatement conn
+--
+-- That the cancellation request _can_ arrive before the query even arrives, so it won't be cancelled,
+-- and this _can_ happen even if all the messages of the "SELECT ..." query are sent first.
 cancelAnyRunningStatement :: HPgConnection -> IO ()
 cancelAnyRunningStatement conn = do
   copyState <-
@@ -995,8 +1003,18 @@ drainOrphanedQueriesAndRunWithControlMsgLock conn = do
   unless (null queriesToDrain) $ do
     debugPrint $ "Going to take control-msg lock to drain " ++ show queriesToDrain
     withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ const $ do
-      -- cancelling statements is idempotent in our tests, so it's ok if
-      -- this thread is interrupted and some other thread runs it again
+      -- It is possible not just in theory for the cancellation request to
+      -- arrive/be processed by postgres _before_ the previous statement was
+      -- event sent, since cancellation requests go through a different
+      -- connection, so there's no guarantee of delivery in order.
+      -- Even if the cancellation request arrives later at the server machine,
+      -- the kernel can still deliver them in different order, and postgres
+      -- itself can process them in different order, at least due to the
+      -- kernel's scheduler not giving guarantees.
+      -- We've seen it happen in our tests (i.e. "Exercise interruption safety"),
+      -- so this is not merely hypothetical.
+      -- What we do here is fire a cancellation request every 0.5 seconds to cover
+      -- for that.
       debugPrint "Cancelling active statement to drain"
       cancelAnyRunningStatement conn
       debugPrint $ "Draining " ++ show queriesToDrain
@@ -1009,7 +1027,16 @@ drainOrphanedQueriesAndRunWithControlMsgLock conn = do
             case eErrorOrCmdComplete of
               Right _cmdComplete -> drainUntilError qs
               Left _err -> pure ()
-      drainUntilError queriesToDrain
+          alternateDrainingWithCancelReqs qs = do
+            drained <- timeout 500_000 $ drainUntilError qs
+            case drained of
+              Just () -> pure ()
+              Nothing -> do
+                debugPrint $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
+                cancelAnyRunningStatement conn
+                leftToDrain <- acquireOwnershipOfOrphanedQueries
+                alternateDrainingWithCancelReqs leftToDrain
+      alternateDrainingWithCancelReqs queriesToDrain
   where
     -- \| Returns queries that have been taken possession of by this thread for cancellation and draining
     -- or an empty list if there's no need for that.
