@@ -226,7 +226,11 @@ queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = d
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
   when cancelQueryExplicitly $ cancelAnyRunningStatement conn
+  -- modifyMVar_ _globalDebugLock $ const (pure True)
+  putStrLn "AAAAAAAAAAAAA"
   execute conn "select true" `shouldReturn` 1
+  modifyMVar_ _globalDebugLock $ const (pure False)
+  putStrLn "BBBBBBBBBBBB"
   queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
 
 -- Note [`timeout` uses the same ThreadId]

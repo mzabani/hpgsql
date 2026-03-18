@@ -13,6 +13,7 @@ import qualified Data.Map.Strict as Map
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Debug.Trace
 import HPgsql (ConnString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), defaultConnectOpts, execute, execute_, withConnection, withConnectionOpts)
 import System.Environment (getEnv)
 import System.Mem (performGC)
@@ -30,8 +31,10 @@ aroundConn :: SpecWith HPgConnection -> Spec
 aroundConn = around $ \act -> do
   connstr <- testConnInfo
   -- Use use a very low polling interval to hopefully exercise code paths
-  -- where polling does not detect dead threads in the very first check
-  withConnectionOpts defaultConnectOpts {killedThreadPollIntervalMs = 1} connstr 10 act
+  -- where polling does not detect dead threads in the very first check,
+  -- and a very low cancellation request resend interval also to test more
+  -- aggressive interruption of our code, and to make tests run faster.
+  withConnectionOpts defaultConnectOpts {killedThreadPollIntervalMs = 1, cancellationRequestResendIntervalMs = 10} connstr 10 act
 
 pgErrorMustContain :: ByteString -> [(ErrorDetail, LBS.ByteString)] -> PostgresError -> Bool
 pgErrorMustContain expectedStmt expected (PostgresError {pgErrorDetails, failedStatement}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails && expectedStmt `BS.isInfixOf` failedStatement
@@ -40,7 +43,7 @@ irrecoverableErrorMustContain :: [(ErrorDetail, LBS.ByteString)] -> Irrecoverabl
 irrecoverableErrorMustContain expected (IrrecoverableHpgsqlError {pgErrorDetails}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails
 
 irrecoverableErrorWithMsg :: String -> IrrecoverableHpgsqlError -> Bool
-irrecoverableErrorWithMsg expectedInfixMsg (IrrecoverableHpgsqlError {hpgsqlDetails}) = expectedInfixMsg `List.isInfixOf` hpgsqlDetails
+irrecoverableErrorWithMsg expectedInfixMsg (IrrecoverableHpgsqlError {hpgsqlDetails}) = traceShowId expectedInfixMsg `List.isInfixOf` traceShowId hpgsqlDetails
 
 withRollback :: HPgConnection -> IO a -> IO a
 withRollback conn f = do
