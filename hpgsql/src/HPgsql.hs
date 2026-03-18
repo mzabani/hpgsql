@@ -726,7 +726,7 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
           throwIrrecoverableErrorWithoutConn $ "QueryId " <> show qryId <> " does not exist. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
         (splitQueries -> (earlierQueries, _))
           | any queryInError earlierQueries -> throwIrrecoverableErrorWithoutConn "Another query in the same pipeline threw an error"
-          | any ((/= (Just thisThreadId)) . queryOwner) earlierQueries -> throwIrrecoverableErrorWithoutConn "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
+          | any ((/= Just thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableErrorWithoutConn "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
           | not (all queryComplete earlierQueries) -> STM.retry
           | otherwise -> pure ()
 
@@ -812,7 +812,7 @@ consumeResults conn qryId = do
   thisThreadId <- getMyWeakThreadId
   let receiveUntilTimeToReceiveRows :: IO (Maybe (Either3 NoData RowDescription CopyInResponse), Either3 ErrorResponse (Maybe DataRow) CommandComplete)
       receiveUntilTimeToReceiveRows = do
-        (traceShowId -> nextMsg) <- receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
+        nextMsg <- receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
         case nextMsg of
           (Just (RespDataRow dr), RowDescriptionOrNoDataOrCopyInResponseReceived noDataOrRowDesc) -> pure (Just noDataOrRowDesc, Middle3 $ Just dr)
           (Just (RespDataRow _), _) -> throwIrrecoverableError conn "Impossible: Got DataRow but did not have RowDescOrNoData before?"
@@ -1083,14 +1083,15 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
             -- of other queries as the whole pipeline is trashed
             case eErrorOrCmdComplete of
               Right _cmdComplete -> drainUntilError qs
-              Left _err -> putStrLn "Got error, stopping draining" >> pure ()
+              -- Left _err -> putStrLn "Got error, stopping draining" >> pure ()
+              Left _err -> pure ()
           alternateDrainingWithCancelReqs qs = do
             drained <- timeout (1000 * cancellationRequestResendIntervalMs connOpts) $ drainUntilError qs
             case drained of
               Just () -> pure ()
               Nothing -> do
                 debugPrint $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
-                putStrLn $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
+                -- putStrLn $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
                 sendCancellationRequest conn
                 leftToDrain <- acquireOwnershipOfOrphanedQueries
                 alternateDrainingWithCancelReqs leftToDrain
@@ -1122,7 +1123,7 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
                 STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = Just thisThreadId}) $ currentPipeline st}
               let owner = map queryOwner activeQueries
               debugPrint $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
-              putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
+              -- putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
               pure $ map queryIdentifier activeQueries
             else pure []
     threadDoesNotExist :: WeakThreadId -> IO Bool

@@ -43,7 +43,7 @@ irrecoverableErrorMustContain :: [(ErrorDetail, LBS.ByteString)] -> Irrecoverabl
 irrecoverableErrorMustContain expected (IrrecoverableHpgsqlError {pgErrorDetails}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails
 
 irrecoverableErrorWithMsg :: String -> IrrecoverableHpgsqlError -> Bool
-irrecoverableErrorWithMsg expectedInfixMsg (IrrecoverableHpgsqlError {hpgsqlDetails}) = traceShowId expectedInfixMsg `List.isInfixOf` traceShowId hpgsqlDetails
+irrecoverableErrorWithMsg expectedInfixMsg (IrrecoverableHpgsqlError {hpgsqlDetails}) = expectedInfixMsg `List.isInfixOf` hpgsqlDetails
 
 withRollback :: HPgConnection -> IO a -> IO a
 withRollback conn f = do

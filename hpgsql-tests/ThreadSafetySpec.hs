@@ -194,15 +194,16 @@ queryCancellationInTheFuture = do
 -- is a blocking and risky process.
 exerciseInterruptionSafety :: HPgConnection -> IO ()
 exerciseInterruptionSafety conn = do
-  modifyMVar_ _globalDebugLock $ const (pure True)
+  -- modifyMVar_ _globalDebugLock $ const (pure True)
   let veryLongTxtString :: String = take 10000 $ repeat 'x'
   forM_ [0_001 :: Int .. 2_000] $ \i -> do
     withAsync (execute conn [sql|select #{veryLongTxtString}, pg_sleep(0.1) FROM generate_series(1, 100000)|]) $ \queryAsync -> do
       threadDelay i
-      putStrLn $ "Killing thread, time: " ++ show i
+      -- putStrLn $ "Killing thread, time: " ++ show i
       cancel queryAsync
     execute conn "SELECT 1" `shouldReturn` 1
-  modifyMVar_ _globalDebugLock $ const (pure False)
+
+-- modifyMVar_ _globalDebugLock $ const (pure False)
 
 queryThatErrorsDueToBadFromPgFieldImplementation1 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = do
@@ -227,10 +228,10 @@ queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = d
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
   when cancelQueryExplicitly $ cancelAnyRunningStatement conn
   -- modifyMVar_ _globalDebugLock $ const (pure True)
-  putStrLn "AAAAAAAAAAAAA"
+  -- putStrLn "AAAAAAAAAAAAA"
   execute conn "select true" `shouldReturn` 1
-  modifyMVar_ _globalDebugLock $ const (pure False)
-  putStrLn "BBBBBBBBBBBB"
+  -- modifyMVar_ _globalDebugLock $ const (pure False)
+  -- putStrLn "BBBBBBBBBBBB"
   queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
 
 -- Note [`timeout` uses the same ThreadId]
