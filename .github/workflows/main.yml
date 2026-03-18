@@ -27,10 +27,6 @@ jobs:
       with:
         submodules: recursive
 
-    - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
-      with:
-        tool-cache: true
-    
     - uses: cachix/install-nix-action@526118121621777ccd86f79b04685a9319637641 # 31.3.30
       with:
         nix_path: nixpkgs=channel:nixos-unstable
@@ -83,17 +79,6 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Recover disk space
-      run: |
-          df -h
-          ls /Applications
-          brew uninstall google-chrome
-          sudo rm -rf /Users/runner/Library/Android
-          sudo rm -rf /Applications/Xcode*
-          sudo rm -rf /Applications/Python*
-          ls /Applications
-          df -h
-    
     - uses: cachix/install-nix-action@526118121621777ccd86f79b04685a9319637641 # 31.3.30
       with:
         nix_path: nixpkgs=channel:nixos-unstable
