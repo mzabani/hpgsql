@@ -154,16 +154,18 @@ data ResponseMsg = RespParseComplete ParseComplete | RespBindComplete BindComple
 data ResponseMsgsReceived = NoMsgsReceived | ParseCompleteReceived ParseComplete | BindCompleteReceived BindComplete | RowDescriptionOrNoDataOrCopyInResponseReceived (Either3 NoData RowDescription CopyInResponse) | ErrorResponseReceived (Maybe (Either3 NoData RowDescription CopyInResponse)) ErrorResponse | CommandCompleteReceived (Either3 NoData RowDescription CopyInResponse) CommandComplete | ReadyForQueryReceived (Either ErrorResponse CommandComplete) ReadyForQuery
   deriving stock (Show)
 
+-- | From the docs, "in GHC, if you have a ThreadId, you essentially have a pointer to the thread itself. This means the thread itself can't be garbage collected until you drop the ThreadId. This misfeature will hopefully be corrected at a later date.".
+-- And as per https://hackage-content.haskell.org/package/base-4.22.0.0/docs/Control-Concurrent.html#v:mkWeakThreadId even BlockedIndefinitely exceptions aren't delivered if we held a ThreadId directly, so we only keep a WeakThreadId.
 data WeakThreadId = WeakThreadId (Weak ThreadId) Word64
 
 instance Eq WeakThreadId where
   WeakThreadId _ t1 == WeakThreadId _ t2 = t1 == t2
 
-instance Ord WeakThreadId where
-  compare (WeakThreadId _ t1) (WeakThreadId _ t2) = compare t1 t2
-
 instance Show WeakThreadId where
   show (WeakThreadId _ threadIdentifier) = "WeakThreadId " ++ show threadIdentifier
+
+instance Show WeakThreadId where
+  show _ = "SomeWeakThreadId"
 
 data QueryState = QueryState
   { queryIdentifier :: !QueryId,
@@ -676,13 +678,7 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
   withControlMsgsLock
     conn
     -- Check last received message and take lock before receiving next message
-    ( const $ do
-        -- TODO: blockUntilQueryTurn could probably be merged
-        -- into getQueryStateIfFirstOrThrow as they're basically
-        -- a bunch of assertions on the pipeline at this point
-        blockUntilQueryTurn
-        getQueryStateIfFirstOrThrow
-    )
+    (const $ getQueryStateIfFirstOrThrow)
     (const $ pure ())
     $ \qryState -> do
       case responseMsgsState qryState of
@@ -718,23 +714,14 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
     getQueryStateIfFirstOrThrow = updateConnStateTxn conn $ \sttv -> do
       st <- STM.readTVar sttv
       case currentPipeline st of
-        [] -> throwIrrecoverableErrorWithoutConn "Bug in HPgsql. No queries for getQueryStateIfFirstOrThrow"
-        (splitQueries -> (earlierQueries, thisQuery))
-          | not (all queryComplete earlierQueries) -> throwIrrecoverableErrorWithoutConn "Bug in HPgsql. Should not be receiving control messages for a query with the wrong turn"
-          | otherwise -> pure thisQuery
-    blockUntilQueryTurn :: STM ()
-    blockUntilQueryTurn = updateConnStateTxn conn $ \sttv -> do
-      st <- STM.readTVar sttv
-      case currentPipeline st of
-        [] ->
-          throwIrrecoverableErrorWithoutConn $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
+        [] -> throwIrrecoverableErrorWithoutConn $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
         queries
           | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableErrorWithoutConn $ "Bug in HPgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
-        (splitQueries -> (earlierQueries, _))
-          | any queryInError earlierQueries -> throwIrrecoverableErrorWithoutConn "Another query in the same pipeline threw an error"
+        (splitQueries -> (earlierQueries, thisQuery))
           | any ((/= Just thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableErrorWithoutConn "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
-          | not (all queryComplete earlierQueries) -> throwIrrecoverableErrorWithoutConn "Are you trying to consume a query's results after getting an irrecoverable error? If so, HPgsql does not support that. If not, please file a bug report."
-          | otherwise -> pure ()
+          | any queryInError earlierQueries -> throwIrrecoverableErrorWithoutConn "Another query in the same pipeline threw an error"
+          | not (all queryComplete earlierQueries) -> throwIrrecoverableErrorWithoutConn "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
+          | otherwise -> pure thisQuery
 
     splitQueries :: [QueryState] -> ([QueryState], QueryState)
     splitQueries qs = case List.span ((< qryId) . queryIdentifier) qs of
@@ -955,7 +942,7 @@ getMyWeakThreadId = do
 atomicallyInitiatePipelineOrPanicAndThenConsumeResults :: HPgConnection -> NonEmpty (ByteString, QueryProtocol) -> [SomeMessage] -> (NonEmpty QueryId -> IO a) -> IO a
 atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent allMsgs continuation = do
   thisWeakThreadId <- getMyWeakThreadId
-  qryIds <- loopUntilNoPipeline conn (getUniqueQueryStatesForNewPipeline queriesBeingSent) $ \(nextId, lastId) -> do
+  qryIds <- waitUntilPipelineIsReadyForNewQuery conn (getUniqueQueryStatesForNewPipeline queriesBeingSent) $ \(nextId, lastId) -> do
     -- If this thread is interrupted now, it is ok: only `totalQueriesSent` was bumped, but `currentPipeline`
     -- is still empty (it will be modified once we send all control messages to postgres).
     -- This is Note [Only modify totalQueriesSent]
@@ -987,10 +974,11 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
 -- | Checks there is no active pipeline and runs the supplied function with the control-msg lock when there
 -- isn't one. If there is an active pipeline, waits until it's done executing (and cancels-drains it if it
 -- has been orphaned) until it can run the supplied function.
--- The supplied function runs while the control-msg lock is held, and the supplied STM transaction is used
--- in the acquire-resource phase of 'withControlMsgsLock'.
-loopUntilNoPipeline :: forall a b. HPgConnection -> STM a -> (a -> IO b) -> IO b
-loopUntilNoPipeline conn lockAcquireStm f = do
+-- The supplied STM transaction runs while the control-msg lock is held.
+-- DO NOT CALL THIS FUNCTION WHILE HOLDING THE CONTROL-MSGS-LOCK, because it needs to wait/block
+-- until the pipeline is ready, which won't happen if we're holding the control-msgs-lock.
+waitUntilPipelineIsReadyForNewQuery :: forall a b. HPgConnection -> STM a -> (a -> IO b) -> IO b
+waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
   thisWeakThreadId@(WeakThreadId _ wtidWord64) <- getMyWeakThreadId
   cancelAnyRunningStatement conn
   retOrRepeat <- withControlMsgsLock
@@ -1009,22 +997,20 @@ loopUntilNoPipeline conn lockAcquireStm f = do
         Right <$> f acq
   case retOrRepeat of
     Left existingPipelineOwnerThread -> do
-      -- If there is a pipeline, we wait some time before trying again
-      -- to avoid a tight loop. And we must wait while _not_ holding
+      -- If there is a pipeline, we must wait while _not_ holding
       -- the control-msgs lock so the other pipeline can reach
-      -- completion.
+      -- completion. Also, we resume immediately if the pipeline
+      -- state changes, as it's important to resume quickly to avoid introducing
+      -- N * intervalMs delays for a concurrent workload with N
+      -- threads blocked waiting on each other.
       let intervalMs = killedThreadPollIntervalMs $ connOpts conn
       let randomTime :: Int = fromIntegral $ wtidWord64 `mod` 10
       debugPrint $ "There is a pipeline owned by a different thread (" ++ show existingPipelineOwnerThread ++ ") so we (" ++ show thisWeakThreadId ++ ") will try again in " ++ show (intervalMs + randomTime * 5) ++ "ms. Pipeline contains: "
-      -- Resume immediately if the pipeline state changes,
-      -- wait some time otherwise to avoid busy-looping.
-      -- It's important to resume quickly to avoid introducing
-      -- N * intervalMs delays for a concurrent workload with N
-      -- threads blocked waiting on each other.
+      --
       void $ timeout (1000 * intervalMs) $ STM.atomically $ do
         st <- STM.readTVar (internalConnectionState conn)
         when (isLeft $ connectionReadyForNewPipeline st) STM.retry
-      loopUntilNoPipeline conn lockAcquireStm f
+      waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f
     Right ret -> pure ret
 
 -- | Cancels any running statements in the current connection, including COPY, or returns if there
@@ -1316,7 +1302,7 @@ getNotification conn =
   -- This implementation blocks concurrency in some cases, but should be optimised
   -- for the most common case of no concurrency, and should be correct.
   getNonBlockingOr $
-    loopUntilNoPipeline conn (pure ()) $ \() ->
+    waitUntilPipelineIsReadyForNewQuery conn (pure ()) $ \() ->
       -- Another query might have filled our internal notification queue while we were
       -- draining, so check that first.
       getNonBlockingOr $
