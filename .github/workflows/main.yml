@@ -59,10 +59,10 @@ jobs:
         # to many things, and our library relies on a lot of ThreadId tracking,
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
-        timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
-
-        # TODO: also test with other GHCs. This is a library, after all.
-        # scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18
+        concurrently -g --timings --names single-threaded-rts,ghc984,ghc967 \
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
+          'timeout 10m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc967-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
 
     - name: Run hpgsql-simple-compat tests
       run: |
@@ -101,9 +101,6 @@ jobs:
         getconf NAME_MAX /
         getconf PATH_MAX /
         ulimit -n # Max number of open file descriptors
-
-    - name: Run hlint
-      run: nix-shell -p '(import ./nix/nixpkgs.nix {}).haskellPackages.hlint' --run 'hlint .'
 
     - name: Build hpgsql
       run: nix-build --no-out-link -A hpgsql

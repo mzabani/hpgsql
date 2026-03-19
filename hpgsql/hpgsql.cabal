@@ -40,6 +40,7 @@ library
   hs-source-dirs:
       src
   default-extensions:
+      CPP
       BangPatterns
       DataKinds
       DefaultSignatures

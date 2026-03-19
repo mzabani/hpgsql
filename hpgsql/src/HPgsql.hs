@@ -73,8 +73,12 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
+#if MIN_VERSION_base(4,19,0)
 import Data.Word (Word64)
 import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
+#else
+import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
+#endif
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Field (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
@@ -127,7 +131,7 @@ data InternalConnectionState = InternalConnectionState
     -- thread without running into deadlocks. This might no longer be useful after
     -- some refactors, but it generally allows us not to worry about function
     -- composition.
-    blockedForSendingOrReceivingMsgsAtomically :: !(Maybe (Word64, Int)),
+    blockedForSendingOrReceivingMsgsAtomically :: !(Maybe (WeakThreadId, Int)),
     -- | We support only one pipeline sent to the backend at a time
     -- (i.e. we don't send any messages to the backend after a `Sync` and until all query results
     -- are fully consumed, or while there's a COPY statement running) because otherwise we'd not
@@ -156,16 +160,24 @@ data ResponseMsgsReceived = NoMsgsReceived | ParseCompleteReceived ParseComplete
 
 -- | From the docs, "in GHC, if you have a ThreadId, you essentially have a pointer to the thread itself. This means the thread itself can't be garbage collected until you drop the ThreadId. This misfeature will hopefully be corrected at a later date.".
 -- And as per https://hackage-content.haskell.org/package/base-4.22.0.0/docs/Control-Concurrent.html#v:mkWeakThreadId even BlockedIndefinitely exceptions aren't delivered if we held a ThreadId directly, so we only keep a WeakThreadId.
-data WeakThreadId = WeakThreadId (Weak ThreadId) Word64
+#if MIN_VERSION_base(4,19,0)
+data WeakThreadId = WeakThreadId !(Weak ThreadId) !Word64
+#else
+-- fromThreadId is not available in GHC 9.6 and below, so
+-- we rely on the String obtained from showThreadId instead
+data WeakThreadId = WeakThreadId !(Weak ThreadId) !String
+#endif
 
 instance Eq WeakThreadId where
   WeakThreadId _ t1 == WeakThreadId _ t2 = t1 == t2
 
+#if MIN_VERSION_base(4,19,0)
 instance Show WeakThreadId where
   show (WeakThreadId _ threadIdentifier) = "WeakThreadId " ++ show threadIdentifier
-
+#else
 instance Show WeakThreadId where
-  show _ = "SomeWeakThreadId"
+  show (WeakThreadId _ threadIdentifier) = "WeakThreadId " ++ threadIdentifier
+#endif
 
 data QueryState = QueryState
   { queryIdentifier :: !QueryId,
@@ -587,7 +599,7 @@ withControlMsgsLock ::
   (a -> IO c) ->
   IO c
 withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
-  thisThreadId <- fromThreadId <$> myThreadId
+  thisThreadId <- getMyWeakThreadId
   bracket
     ( STM.atomically $ do
         let sttv = internalConnectionState conn
@@ -678,7 +690,7 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
   withControlMsgsLock
     conn
     -- Check last received message and take lock before receiving next message
-    (const $ getQueryStateIfFirstOrThrow)
+    (const getQueryStateIfFirstOrThrow)
     (const $ pure ())
     $ \qryState -> do
       case responseMsgsState qryState of
@@ -935,7 +947,12 @@ getMyWeakThreadId = do
   -- It's explained somewhere in hackage.
   tid <- myThreadId
   wtid <- mkWeakThreadId tid
+#if MIN_VERSION_base(4,19,0)
   pure $ WeakThreadId wtid (fromThreadId tid)
+#else
+  let tidStr = showThreadId tid
+  pure $ WeakThreadId wtid tidStr
+#endif
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
 -- if it can't do that. Then runs the continuation.
@@ -979,7 +996,7 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
 -- until the pipeline is ready, which won't happen if we're holding the control-msgs-lock.
 waitUntilPipelineIsReadyForNewQuery :: forall a b. HPgConnection -> STM a -> (a -> IO b) -> IO b
 waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
-  thisWeakThreadId@(WeakThreadId _ wtidWord64) <- getMyWeakThreadId
+  thisWeakThreadId <- getMyWeakThreadId
   cancelAnyRunningStatement conn
   retOrRepeat <- withControlMsgsLock
     conn
@@ -1004,9 +1021,7 @@ waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
       -- N * intervalMs delays for a concurrent workload with N
       -- threads blocked waiting on each other.
       let intervalMs = killedThreadPollIntervalMs $ connOpts conn
-      let randomTime :: Int = fromIntegral $ wtidWord64 `mod` 10
-      debugPrint $ "There is a pipeline owned by a different thread (" ++ show existingPipelineOwnerThread ++ ") so we (" ++ show thisWeakThreadId ++ ") will try again in " ++ show (intervalMs + randomTime * 5) ++ "ms. Pipeline contains: "
-      --
+      debugPrint $ "There is a pipeline owned by a different thread (" ++ show existingPipelineOwnerThread ++ ") so we (" ++ show thisWeakThreadId ++ ") will try again in " ++ show intervalMs ++ "ms. Pipeline contains: "
       void $ timeout (1000 * intervalMs) $ STM.atomically $ do
         st <- STM.readTVar (internalConnectionState conn)
         when (isLeft $ connectionReadyForNewPipeline st) STM.retry

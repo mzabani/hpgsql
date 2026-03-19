@@ -3,7 +3,7 @@
 ##########################
 
 - arguments:
-  - --cpp-simple
+  - "--cpp-define=MIN_VERSION_base(a,b,c)=1"
   - "--ignore-glob=hpgsql-tests/**"
   - "--ignore-glob=hpgsql-benchmarks/**"
   - "--ignore-glob=hpgsql-simple-compat/**"
