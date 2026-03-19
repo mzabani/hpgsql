@@ -95,6 +95,7 @@ errorStmts =
 
 runVariedPipelines :: HPgConnection -> PropertyT IO ()
 runVariedPipelines conn = hedgehog $ do
+  -- TODO: Use concurrency: run different pipelines in different threads!
   SomeRowReturningStatementTest (RowsStatement (rp1, qry1, check1, expectedLen1)) <- Gen.forAll $ Gen.element exampleStmt
   SomeRowReturningStatementTest (RowsStatement (rp2, qry2, check2, expectedLen2)) <- Gen.forAll $ Gen.element exampleStmt
   SomeRowReturningStatementTest (RowsStatement (rp3, qry3, check3, expectedLen3)) <- Gen.forAll $ Gen.element exampleStmt
@@ -186,12 +187,8 @@ runPipelineErrorSemanticsUnsupportedCaseStillBehavesWell conn = do
   -- or do something gnarly, and preferrably we throw an informative exception.
   (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineL (rowParser @(Only Bool)) "SELECT 1" <*> pipelineL (rowParser @(Int, Int)) "SELECT 3, 4"
   goodCmd `shouldReturn` 1
-  -- parserErrCmd `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
-  parserErrCmd `shouldThrow` irrecoverableErrorWithMsg "Query"
-
--- The next exception doesn't throw the most informative exception,
--- but for now we don't care.
--- otherCmd `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+  parserErrCmd `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+  otherCmd `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a query's results after getting an irrecoverable error? If so, HPgsql does not support that. If not, please file a bug report."
 
 runPipelineRunsInImplicitTransaction :: HPgConnection -> IO ()
 runPipelineRunsInImplicitTransaction conn = do

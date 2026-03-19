@@ -11,14 +11,14 @@ module HPgsql
     IrrecoverableHpgsqlError (..),
     ErrorDetail (..),
     RowParser (..),
-    HPgConnection, -- No ctor exposed
-    Query, -- No ctor exposed
+    HPgConnection, -- Don't expose constructor
+    Query, -- Don't expose constructor
     TransactionStatus (..),
     Only (..),
     FromPgRow (..),
     FromPgField (..),
     NotificationResponse (..),
-    Pipeline, -- Don't expose Pipeline's constructor!
+    Pipeline, -- Don't expose constructor
     PoolCleanup (..),
     beforeReturningToPool,
     cancelAnyRunningStatement,
@@ -60,7 +60,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
@@ -74,7 +74,6 @@ import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 import Data.Word (Word64)
-import Debug.Trace
 import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Field (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
@@ -723,19 +722,21 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
       st <- STM.readTVar sttv
       case currentPipeline st of
         [] ->
-          throwIrrecoverableErrorWithoutConn $ "QueryId " <> show qryId <> " does not exist. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
+          throwIrrecoverableErrorWithoutConn $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
+        queries
+          | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableErrorWithoutConn $ "Bug in HPgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
         (splitQueries -> (earlierQueries, _))
           | any queryInError earlierQueries -> throwIrrecoverableErrorWithoutConn "Another query in the same pipeline threw an error"
           | any ((/= Just thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableErrorWithoutConn "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
-          | not (all queryComplete earlierQueries) -> STM.retry
+          | not (all queryComplete earlierQueries) -> throwIrrecoverableErrorWithoutConn "Are you trying to consume a query's results after getting an irrecoverable error? If so, HPgsql does not support that. If not, please file a bug report."
           | otherwise -> pure ()
 
     splitQueries :: [QueryState] -> ([QueryState], QueryState)
     splitQueries qs = case List.span ((< qryId) . queryIdentifier) qs of
-      (_, []) -> error "Could not find query with right Id"
+      (_, []) -> error $ "Could not find query with right Id: " ++ show (qs, qryId)
       (as, firstQuery : _others)
         | queryIdentifier firstQuery == qryId -> (as, firstQuery)
-        | otherwise -> error "Could not find query right Id (part 2)"
+        | otherwise -> error $ "Could not find query right Id (part 2): " ++ show (qs, qryId)
 
     queryComplete :: QueryState -> Bool
     queryComplete QueryState {responseMsgsState} = case responseMsgsState of
@@ -961,7 +962,6 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
       ( allMsgs,
         do
           st <- STM.readTVar (internalConnectionState conn)
-          -- TODO: Rethrow exception if there is an exception in the state
           STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = newPipeline}
       )
     debugPrint $ "+++ Sent QueryIds " ++ show [nextId .. lastId]
@@ -1105,27 +1105,29 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
       debugPrint $ "+++ I am " ++ show thisThreadId ++ " and will look for orphaned queries to drain"
       withControlMsgsLock
         conn
-        (fmap currentPipeline . STM.readTVar)
+        (STM.readTVar)
         (const $ pure ())
-        $ \activeQueries -> do
-          -- TODO: We should either move the WeakThreadId owner into the full pipeline,
-          -- or change this to a `takeWhile` because the internal model allows different
-          -- queries to have different owners, even if in practice that shouldn't happen.
-          mustTakeOwnership <- fmap (List.foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} -> case queryOwner of
-            Nothing -> pure True
-            -- See Note [`timeout` uses the same ThreadId] for why having the same ThreadId _still_ means
-            -- we need to cancel and drain those queries
-            Just tid -> if tid == thisThreadId then pure True else threadDoesNotExist tid
-          if mustTakeOwnership
-            then do
-              STM.atomically $ do
-                st <- STM.readTVar (internalConnectionState conn)
-                STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = Just thisThreadId}) $ currentPipeline st}
-              let owner = map queryOwner activeQueries
-              debugPrint $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
-              -- putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
-              pure $ map queryIdentifier activeQueries
-            else pure []
+        $ \st -> do
+          if isRight (connectionReadyForNewPipeline st)
+            then pure []
+            else do
+              -- TODO: We should either move the WeakThreadId owner into the full pipeline,
+              -- or change this to a `takeWhile` because the internal model allows different
+              -- queries to have different owners, even if in practice that shouldn't happen.
+              let activeQueries = currentPipeline st
+              mustTakeOwnership <- fmap (List.foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} -> case queryOwner of
+                Nothing -> pure True
+                -- See Note [`timeout` uses the same ThreadId] for why having the same ThreadId _still_ means
+                -- we need to cancel and drain those queries
+                Just tid -> if tid == thisThreadId then pure True else threadDoesNotExist tid
+              if mustTakeOwnership
+                then do
+                  STM.atomically $ STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = Just thisThreadId}) $ currentPipeline st}
+                  let owner = map queryOwner activeQueries
+                  debugPrint $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
+                  -- putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
+                  pure $ map queryIdentifier activeQueries
+                else pure []
     threadDoesNotExist :: WeakThreadId -> IO Bool
     threadDoesNotExist (WeakThreadId wtid _) =
       deRefWeak wtid >>= \case
@@ -1340,19 +1342,18 @@ nonAtomicSendMsg HPgConnection {socket} msg = do
   SocketLBS.sendAll socket $ Builder.toLazyByteString $ toPgMessage msg
   debugPrint $ "Sent " ++ show msg
 
-whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
-whenJust m f = case m of
-  Nothing -> pure ()
-  Just v -> f v
+-- whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
+-- whenJust m f = case m of
+--   Nothing -> pure ()
+--   Just v -> f v
 
 {-# NOINLINE _globalDebugLock #-}
 _globalDebugLock :: MVar Bool
-_globalDebugLock = unsafePerformIO $ newMVar False
+_globalDebugLock = unsafePerformIO $ newMVar True
 
 debugPrint :: String -> IO ()
 debugPrint _ = pure ()
 
--- debugPrint str = modifyMVar_ _globalDebugLock $ \p -> pure p
 -- debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
 
 {-# INLINE timeDebugNonBlockingOperation #-}

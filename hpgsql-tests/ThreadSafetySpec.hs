@@ -4,7 +4,7 @@
 module ThreadSafetySpec where
 
 import Control.Concurrent (modifyMVar_, myThreadId, threadDelay)
-import Control.Concurrent.Async (Concurrently (..), cancel, mapConcurrently, wait, withAsync)
+import Control.Concurrent.Async (Concurrently (..), cancel, forConcurrently, forConcurrently_, mapConcurrently, wait, withAsync)
 import Control.Exception.Safe (SomeException, try)
 import Control.Monad (forM_, void, when)
 import Data.Containers.ListUtils (nubOrd)
@@ -145,7 +145,7 @@ cancelAnyRunningStatementIsIdempotent conn = do
   cancelAnyRunningStatement conn
 
 sendQueriesConcurrently :: HPgConnection -> IO ()
-sendQueriesConcurrently conn = do
+sendQueriesConcurrently conn = forConcurrently_ [1 .. 100] $ const $ do
   (res1, res2, res3) <-
     runConcurrently $
       (,,)
