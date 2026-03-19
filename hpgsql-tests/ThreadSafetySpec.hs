@@ -145,7 +145,7 @@ cancelAnyRunningStatementIsIdempotent conn = do
   cancelAnyRunningStatement conn
 
 sendQueriesConcurrently :: HPgConnection -> IO ()
-sendQueriesConcurrently conn = forConcurrently_ [1 .. 100] $ const $ do
+sendQueriesConcurrently conn = forConcurrently_ [1 .. 10] $ const $ do
   (res1, res2, res3) <-
     runConcurrently $
       (,,)

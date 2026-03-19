@@ -47,7 +47,7 @@ module HPgsql
 where
 
 import Control.Applicative (Alternative (..))
-import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, modifyMVar_, myThreadId, readMVar, threadDelay)
+import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, modifyMVar_, myThreadId, readMVar)
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
@@ -187,10 +187,10 @@ data QueryState = QueryState
 newtype QueryId = QueryId Integer
   deriving newtype (Enum, Eq, Num, Ord, Show)
 
--- | Returns a Left if connection is not ready for a new pipeline, a Right
+-- | Returns a Left with the current pipeline if connection is not ready for a new pipeline, a Right
 -- with the current transaction status otherwise.
-connectionReadyForNewPipeline :: InternalConnectionState -> Either () TransactionStatus
-connectionReadyForNewPipeline (currentPipeline -> pipeline)
+connectionReadyForNewPipeline :: InternalConnectionState -> Either (NonEmpty QueryState) TransactionStatus
+connectionReadyForNewPipeline (currentPipeline -> pipeline) =
   -- You can tell there are two ways to represent no active pipeline, aka being ready
   -- to send a new query: and empty pipeline and a pipeline with a ReadyForQuery received.
   -- This might seem silly, but it really helps resuming interrupted execution from a point
@@ -198,15 +198,16 @@ connectionReadyForNewPipeline (currentPipeline -> pipeline)
   -- with a QueryId.
   -- The empty list should only exist immediately after connecting and before the very first
   -- query is sent. After that it's never empty again as new pipelines replace old ones.
-  | null pipeline = Right TransIdle
-  | otherwise = case headMaybe $
+  case pipeline of
+    [] -> Right TransIdle
+    (q1 : qs) -> case headMaybe $
       mapMaybe
-        ( \qs -> case responseMsgsState qs of
+        ( \qstate -> case responseMsgsState qstate of
             ReadyForQueryReceived _ (ReadyForQuery s) -> Just s
             _ -> Nothing
         )
         pipeline of
-      Nothing -> Left ()
+      Nothing -> Left (q1 :| qs)
       Just st -> Right st
 
 connectionTransactionStatus :: HPgConnection -> IO TransactionStatus
@@ -214,20 +215,19 @@ connectionTransactionStatus conn = STM.atomically $ updateConnStateTxn conn $ \s
   st <- STM.readTVar sttv
   case connectionReadyForNewPipeline st of
     Right s -> pure s
-    Left () ->
-      case currentPipeline st of
-        [] -> throwIrrecoverableErrorWithoutConn "Bug in Hpgsql: connectionReadyForNewPipeline should have handled an empty list"
-        qs
-          | any
-              ( ( \case
-                    ErrorResponseReceived _ _ -> True
-                    _ -> False
-                )
-                  . responseMsgsState
-              )
-              qs ->
-              pure TransInError
-          | otherwise -> pure TransInTrans
+    Left pipeline ->
+      pure $
+        if any
+          ( ( \case
+                ErrorResponseReceived _ _ -> True
+                _ -> False
+            )
+              . responseMsgsState
+          )
+          pipeline
+          then
+            TransInError
+          else TransInTrans
 
 data ConnectOpts = ConnectOpts
   { -- | How long in ms HPgsql will sleep before re-checking if active queries have been orphaned
@@ -474,8 +474,10 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
       case parsePgMessage msgIdentChar restOfMsg parser of
         Just msg -> do
           removeFirstBytesFromBufferOrThrow fullMessageLen
-          sttv <- STM.atomically $ STM.readTVar (internalConnectionState conn)
-          debugPrint $ "Received " ++ show msg ++ "for pipeline " ++ show (currentPipeline sttv)
+          debugPrint $ "Received " ++ show msg
+          -- sttv <- STM.atomically $ STM.readTVar (internalConnectionState conn)
+          -- debugPrint $ "Received " ++ show msg ++ "for pipeline " ++ show (currentPipeline sttv)
+          -- putStrLn $ "Received " ++ show msg
           Just <$> f (Right msg)
         Nothing -> do
           -- This could be a Notification, NOTICE or a ParameterStatus message, since these
@@ -675,6 +677,9 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
     conn
     -- Check last received message and take lock before receiving next message
     ( const $ do
+        -- TODO: blockUntilQueryTurn could probably be merged
+        -- into getQueryStateIfFirstOrThrow as they're basically
+        -- a bunch of assertions on the pipeline at this point
         blockUntilQueryTurn
         getQueryStateIfFirstOrThrow
     )
@@ -827,9 +832,7 @@ consumeResults conn qryId = do
   firstMsg <- receiveUntilTimeToReceiveRows
   case firstMsg of
     (mERowDesc, Left3 err) -> do
-      -- putStrLn "before receiveReadyForQueryIfNecessary"
       receiveReadyForQueryIfNecessary thisThreadId
-      -- putStrLn "AFTER receiveReadyForQueryIfNecessary"
       pure (mERowDesc, pure $ Left err)
     (mERowDesc, Right3 cmd) -> do
       receiveReadyForQueryIfNecessary thisThreadId
@@ -988,49 +991,41 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
 -- in the acquire-resource phase of 'withControlMsgsLock'.
 loopUntilNoPipeline :: forall a b. HPgConnection -> STM a -> (a -> IO b) -> IO b
 loopUntilNoPipeline conn lockAcquireStm f = do
-  thisWeakThreadId <- getMyWeakThreadId
+  thisWeakThreadId@(WeakThreadId _ wtidWord64) <- getMyWeakThreadId
   cancelAnyRunningStatement conn
   retOrRepeat <- withControlMsgsLock
     conn
-    (const $ checkIfCanContinue thisWeakThreadId)
+    ( \sttv -> do
+        st <- STM.readTVar sttv
+        case connectionReadyForNewPipeline st of
+          Left p -> pure $ Left p
+          Right _ -> Right <$> lockAcquireStm
+    )
     (const $ pure ())
     $ \case
-      Left activePipeline@(QueryState {queryOwner} :| _) -> do
-        -- If there is a pipeline, we wait some time before trying again
-        -- to avoid a tight loop.
-        let intervalMs = killedThreadPollIntervalMs $ connOpts conn
-        debugPrint $ "There is a pipeline owned by a different thread (" ++ show queryOwner ++ ") so we (" ++ show thisWeakThreadId ++ ") will try again in " ++ show intervalMs ++ "ms. Pipeline contains: "
-        debugPrint $ show activePipeline
-        -- TODO: Wait 1s or until internal state changes, whatever comes first.
-        threadDelay $ 1000 * intervalMs
-        pure Nothing
-      Right res -> do
+      Left (QueryState {queryOwner} :| _) -> pure $ Left queryOwner
+      Right acq -> do
         debugPrint "+++ No active pipeline found"
-        Just <$> f res
+        Right <$> f acq
   case retOrRepeat of
-    Nothing -> loopUntilNoPipeline conn lockAcquireStm f
-    Just ret -> pure ret
-  where
-    -- \| Returns a `Nothing` if connection state has an active pipeline.
-    checkIfCanContinue :: WeakThreadId -> STM (Either (NonEmpty QueryState) a)
-    checkIfCanContinue thisThreadId = do
-      let sttv = internalConnectionState conn
-      st <- STM.readTVar sttv
-      case currentPipeline st of
-        -- To be able to send new pipelines, either no query has ever been sent
-        -- or the existing pipeline has already received ReadyForQuery
-        [] -> Right <$> lockAcquireStm
-        allQueries@(q1 : qs)
-          | any
-              ( \qry -> case responseMsgsState qry of
-                  ReadyForQueryReceived {} -> True
-                  _ -> False
-              )
-              allQueries ->
-              Right <$> lockAcquireStm
-          | otherwise -> do
-              when (any ((== Just thisThreadId) . queryOwner) (currentPipeline st)) $ throwIrrecoverableErrorWithoutConn "A previous query's results from this thread have not been fully consumed, so you must consume results to clear the pipeline"
-              pure (Left $ q1 :| qs) -- This is ESSENTIAL! If multiple threads are blocked on each other, some of them can die and STM won't know when that happens. So we need manual retry mechanisms, which means returning a special value here.
+    Left existingPipelineOwnerThread -> do
+      -- If there is a pipeline, we wait some time before trying again
+      -- to avoid a tight loop. And we must wait while _not_ holding
+      -- the control-msgs lock so the other pipeline can reach
+      -- completion.
+      let intervalMs = killedThreadPollIntervalMs $ connOpts conn
+      let randomTime :: Int = fromIntegral $ wtidWord64 `mod` 10
+      debugPrint $ "There is a pipeline owned by a different thread (" ++ show existingPipelineOwnerThread ++ ") so we (" ++ show thisWeakThreadId ++ ") will try again in " ++ show (intervalMs + randomTime * 5) ++ "ms. Pipeline contains: "
+      -- Resume immediately if the pipeline state changes,
+      -- wait some time otherwise to avoid busy-looping.
+      -- It's important to resume quickly to avoid introducing
+      -- N * intervalMs delays for a concurrent workload with N
+      -- threads blocked waiting on each other.
+      void $ timeout (1000 * intervalMs) $ STM.atomically $ do
+        st <- STM.readTVar (internalConnectionState conn)
+        when (isLeft $ connectionReadyForNewPipeline st) STM.retry
+      loopUntilNoPipeline conn lockAcquireStm f
+    Right ret -> pure ret
 
 -- | Cancels any running statements in the current connection, including COPY, or returns if there
 -- is no active query to cancel.
@@ -1105,7 +1100,7 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
       debugPrint $ "+++ I am " ++ show thisThreadId ++ " and will look for orphaned queries to drain"
       withControlMsgsLock
         conn
-        (STM.readTVar)
+        STM.readTVar
         (const $ pure ())
         $ \st -> do
           if isRight (connectionReadyForNewPipeline st)

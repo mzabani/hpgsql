@@ -3,6 +3,7 @@
 
 module PipelineSpec where
 
+import Control.Concurrent.Async (forConcurrently_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Int (Int64)
 import DbUtils
@@ -104,33 +105,34 @@ runVariedPipelines conn = hedgehog $ do
   CountReturningStatement (countQry3, countExpectedLen3) <- Gen.forAll $ Gen.element countReturningStmts
   liftIO $ withRollback conn $ do
     execute_ conn "CREATE TEMPORARY TABLE some_data ON COMMIT DROP AS SELECT generate_series AS i FROM generate_series(1,100)"
-    (listRes1, listRes2, listRes3, streamRes1, streamRes2, streamRes3, countRes1, countRes2, countRes3, countStmtCountRes1, countStmtCountRes2, countStmtCountRes3) <-
-      runPipeline conn $
-        (,,,,,,,,,,,)
-          <$> pipelineL rp1 qry1
-          <*> pipelineL rp2 qry2
-          <*> pipelineL rp3 qry3
-          <*> pipelineS rp1 qry1
-          <*> pipelineS rp2 qry2
-          <*> pipelineS rp3 qry3
-          <*> pipelineCmd qry1
-          <*> pipelineCmd qry2
-          <*> pipelineCmd qry3
-          <*> pipelineCmd countQry1
-          <*> pipelineCmd countQry2
-          <*> pipelineCmd countQry3
-    listRes1 >>= check1
-    listRes2 >>= check2
-    listRes3 >>= check3
-    streamRes1 >>= Streaming.toList_ >>= check1
-    streamRes2 >>= Streaming.toList_ >>= check2
-    streamRes3 >>= Streaming.toList_ >>= check3
-    countRes1 >>= (`shouldBe` expectedLen1)
-    countRes2 >>= (`shouldBe` expectedLen2)
-    countRes3 >>= (`shouldBe` expectedLen3)
-    countStmtCountRes1 >>= (`shouldBe` countExpectedLen1)
-    countStmtCountRes2 >>= (`shouldBe` countExpectedLen2)
-    countStmtCountRes3 >>= (`shouldBe` countExpectedLen3)
+    forConcurrently_ [(1 :: Int) .. 10] $ const $ do
+      (listRes1, listRes2, listRes3, streamRes1, streamRes2, streamRes3, countRes1, countRes2, countRes3, countStmtCountRes1, countStmtCountRes2, countStmtCountRes3) <-
+        runPipeline conn $
+          (,,,,,,,,,,,)
+            <$> pipelineL rp1 qry1
+            <*> pipelineL rp2 qry2
+            <*> pipelineL rp3 qry3
+            <*> pipelineS rp1 qry1
+            <*> pipelineS rp2 qry2
+            <*> pipelineS rp3 qry3
+            <*> pipelineCmd qry1
+            <*> pipelineCmd qry2
+            <*> pipelineCmd qry3
+            <*> pipelineCmd countQry1
+            <*> pipelineCmd countQry2
+            <*> pipelineCmd countQry3
+      listRes1 >>= check1
+      listRes2 >>= check2
+      listRes3 >>= check3
+      streamRes1 >>= Streaming.toList_ >>= check1
+      streamRes2 >>= Streaming.toList_ >>= check2
+      streamRes3 >>= Streaming.toList_ >>= check3
+      countRes1 >>= (`shouldBe` expectedLen1)
+      countRes2 >>= (`shouldBe` expectedLen2)
+      countRes3 >>= (`shouldBe` expectedLen3)
+      countStmtCountRes1 >>= (`shouldBe` countExpectedLen1)
+      countStmtCountRes2 >>= (`shouldBe` countExpectedLen2)
+      countStmtCountRes3 >>= (`shouldBe` countExpectedLen3)
 
 runVariedPipelinesWithError :: HPgConnection -> PropertyT IO ()
 runVariedPipelinesWithError conn = hedgehog $ do
