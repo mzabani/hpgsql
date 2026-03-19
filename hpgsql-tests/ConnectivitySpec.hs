@@ -14,7 +14,7 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  describe "Connectivity" $ do
+  describe "Connectivity" $ parallel $ do
     it
       "Connecting to non-existing db"
       connectingToNonExistingDb

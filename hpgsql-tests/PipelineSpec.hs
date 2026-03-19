@@ -24,7 +24,7 @@ import Test.Hspec.Hedgehog
 
 spec :: Spec
 spec = do
-  aroundConn $ describe "Pipelining" $ do
+  aroundConn $ describe "Pipelining" $ parallel $ do
     it
       "runPipeline with multiple statements"
       runPipelineWithMultipleStatements
@@ -34,6 +34,9 @@ spec = do
     it
       "runPipeline error semantics - user error"
       runPipelineErrorSemanticsUnsupportedCaseStillBehavesWell
+    it
+      "runPipeline error semantics - user error by consuming statements out of order"
+      runPipelineErrorSemanticsQueriesConsumedOutOfOrder
     it
       "runPipeline runs statements in an implicit transaction"
       runPipelineRunsInImplicitTransaction
@@ -190,7 +193,17 @@ runPipelineErrorSemanticsUnsupportedCaseStillBehavesWell conn = do
   (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineL (rowParser @(Only Bool)) "SELECT 1" <*> pipelineL (rowParser @(Int, Int)) "SELECT 3, 4"
   goodCmd `shouldReturn` 1
   parserErrCmd `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
-  otherCmd `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a query's results after getting an irrecoverable error? If so, HPgsql does not support that. If not, please file a bug report."
+  otherCmd `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that."
+
+runPipelineErrorSemanticsQueriesConsumedOutOfOrder :: HPgConnection -> IO ()
+runPipelineErrorSemanticsQueriesConsumedOutOfOrder conn = do
+  (cmd1, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineL (rowParser @(Only Bool)) "SELECT TRUE" <*> pipelineL (rowParser @(Int, Int)) "SELECT 3, 4"
+  cmd1 `shouldReturn` 1
+  cmd3 `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that."
+  -- We don't promise users that they can consume a statement at
+  -- this stage, but so far this is what HPgsql does
+  cmd2 `shouldReturn` [Only True]
+  cmd3 `shouldReturn` [(3, 4)]
 
 runPipelineRunsInImplicitTransaction :: HPgConnection -> IO ()
 runPipelineRunsInImplicitTransaction conn = do

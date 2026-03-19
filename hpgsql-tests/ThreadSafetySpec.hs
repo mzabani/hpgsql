@@ -26,41 +26,46 @@ import Test.Hspec
 spec :: Spec
 spec = do
   describe "Thread safety and trickier error semantics" $ do
-    it
-      "Query cancellation in the future"
-      queryCancellationInTheFuture
+    parallel $ do
+      it
+        "Query cancellation in the future"
+        queryCancellationInTheFuture
+      aroundConn $ do
+        it
+          "Exercise interruption safety"
+          exerciseInterruptionSafety
+        it
+          "Send queries concurrently"
+          sendQueriesConcurrently
+        it
+          "Cancel active streaming query then try to consume its results"
+          cancelStreamingQueryThenTryToConsumeResults
+        forM_ [False, True] $ \cancelQueryExplicitly -> do
+          it
+            ("Query that errors due to bad FromPgField implementation - " ++ show cancelQueryExplicitly)
+            (queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly)
+          it
+            ("Query that errors due to bad FromPgField implementation - streaming - " ++ show cancelQueryExplicitly)
+            ( queryThatErrorsDueToBadFromPgFieldImplementation2
+                cancelQueryExplicitly
+            )
+        forM_ [False, True] $ \useTimeout -> do
+          it
+            ("Can send query after thread killed - useTimeout " ++ show useTimeout)
+            (sendQueryAfterThreadKilled useTimeout)
+        it
+          "Assumptions about ThreadId behaviour"
+          assumptionsAboutThreadIdBehaviour
+        it
+          "cancelAnyRunningStatement does not require any queries to be running and is idempotent"
+          cancelAnyRunningStatementIsIdempotent
+
+    -- Tests below cannot run in parallel to itself for whatever reasons
     aroundConn $ do
-      it
-        "Exercise interruption safety"
-        exerciseInterruptionSafety
-      it
-        "Send queries concurrently"
-        sendQueriesConcurrently
-      it
-        "Cancel active streaming query then try to consume its results"
-        cancelStreamingQueryThenTryToConsumeResults
-      forM_ [False, True] $ \cancelQueryExplicitly -> do
-        it
-          ("Query that errors due to bad FromPgField implementation - " ++ show cancelQueryExplicitly)
-          (queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly)
-        it
-          ("Query that errors due to bad FromPgField implementation - streaming - " ++ show cancelQueryExplicitly)
-          ( queryThatErrorsDueToBadFromPgFieldImplementation2
-              cancelQueryExplicitly
-          )
       forM_ [False, True] $ \useTimeout -> do
-        it
-          ("Can send query after thread killed - useTimeout " ++ show useTimeout)
-          (sendQueryAfterThreadKilled useTimeout)
         it
           ("Can send query after COPY thread killed - useTimeout " ++ show useTimeout)
           (sendQueryAfterCopyKilled useTimeout)
-      it
-        "Assumptions about ThreadId behaviour"
-        assumptionsAboutThreadIdBehaviour
-      it
-        "cancelAnyRunningStatement does not require any queries to be running and is idempotent"
-        cancelAnyRunningStatementIsIdempotent
 
 -- | A function that behaves just like `timeout` except that `myThreadId` inside the time-limited
 -- action will be the same as the calling thread's if `useTimeout` is true (because it will use `timeout`)

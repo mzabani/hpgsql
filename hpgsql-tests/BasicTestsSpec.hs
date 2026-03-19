@@ -19,7 +19,7 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  aroundConn $ describe "HPgsql" $ do
+  aroundConn $ describe "HPgsql" $ parallel $ do
     it
       "Querying and returning a few rows"
       queryingAndReturningAFewRows
@@ -97,12 +97,12 @@ queryingStreamingSum conn = do
   S.sum_ (S.map fromOnly res) `shouldReturn` ((1 + 10000) * 5000)
 
 executingCountReturningStatements :: HPgConnection -> IO ()
-executingCountReturningStatements conn = do
+executingCountReturningStatements conn = withRollback conn $ do
   void $ execute conn "CREATE TABLE xyz();"
   void $ execute conn "DROP TABLE xyz;"
 
 executingMixedRowsAndCountReturningStatements :: HPgConnection -> IO ()
-executingMixedRowsAndCountReturningStatements conn = do
+executingMixedRowsAndCountReturningStatements conn = withRollback conn $ do
   executeMany conn ["SELECT 1", "CREATE TABLE xyz();", "DELETE FROM xyz;"] `shouldReturn` [1, 0, 0]
   execute_ conn "DROP TABLE xyz;"
 

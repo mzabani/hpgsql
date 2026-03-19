@@ -8,11 +8,13 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Functor ((<&>))
 import Data.Int (Int16, Int32, Int64)
+import qualified Data.List as List
 import Data.Maybe (isNothing)
 import Data.Scientific (Scientific)
 import Data.Text (Text)
-import Data.Time (Day, DiffTime, UTCTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
+import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
 import Data.Time.LocalTime (CalendarDiffTime (..))
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
@@ -31,15 +33,12 @@ import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
-import qualified Data.List as List
-import Data.Functor ((<&>))
-import Data.Time (NominalDiffTime)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import TestUtils (genJsonValue)
 
 spec :: Spec
-spec = do
+spec = parallel $ do
   aroundConn $ describe "Encoding and decoding" $ do
     it
       "Values round-trip"

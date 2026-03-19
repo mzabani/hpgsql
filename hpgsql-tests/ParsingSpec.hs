@@ -246,7 +246,7 @@ shouldReturnLeft mv =
 
 spec :: Spec
 spec = do
-  describe "Parsing tests" $ do
+  describe "Parsing tests" $ parallel $ do
     context "Simple query parsing tests" $ do
       it "parses SQL without interpolation" $ do
         let Query queries = [sql|SELECT * FROM users|]
