@@ -1,6 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 
-module HPgsql.Field
+module HPgsql.Encoding
   ( FromPgRow (..),
     FromPgField (..),
     ToPgField (..),

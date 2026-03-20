@@ -26,7 +26,7 @@ library
   exposed-modules:
       HPgsql
       HPgsql.Connection
-      HPgsql.Field
+      HPgsql.Encoding
       HPgsql.Types
       HPgsql.Parsing
       HPgsql.Query

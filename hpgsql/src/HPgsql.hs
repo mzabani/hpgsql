@@ -80,7 +80,7 @@ import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
 import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
 #endif
 import HPgsql.Connection (ConnString (..))
-import HPgsql.Field (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
+import HPgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)

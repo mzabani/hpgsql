@@ -25,7 +25,7 @@ import Data.String (IsString (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import HPgsql.Field (ToPgField (..), ToPgRow (..))
+import HPgsql.Encoding (ToPgField (..), ToPgRow (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), parseSql, sqlStatementText)
 import HPgsql.TypeInfo (Oid)
 import Language.Haskell.Meta.Parse (parseExp)

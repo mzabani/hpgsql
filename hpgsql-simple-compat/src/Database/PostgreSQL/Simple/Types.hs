@@ -50,8 +50,8 @@ import Data.Tuple.Only (Only (..))
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.Compat (toByteString)
-import HPgsql.Field (ToPgField (..))
-import qualified HPgsql.Field as HPgsql
+import HPgsql.Encoding (ToPgField (..))
+import qualified HPgsql.Encoding as HPgsql
 
 -- | A placeholder for the SQL @NULL@ value.
 data Null = Null

@@ -16,7 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Data.Typeable (Typeable)
-import HPgsql.Field (FromPgField (..), ToPgField (..), ToPgRow (..), parsePgType)
+import HPgsql.Encoding (FromPgField (..), ToPgField (..), ToPgRow (..), parsePgType)
 import HPgsql.Query (Query (..), SingleQuery (..))
 import HPgsql.TypeInfo (Format (..), jsonOid, jsonbOid)
 

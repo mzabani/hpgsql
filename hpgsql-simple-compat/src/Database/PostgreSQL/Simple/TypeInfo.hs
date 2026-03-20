@@ -44,7 +44,7 @@ import Database.PostgreSQL.Simple.TypeInfo.Static
 import Database.PostgreSQL.Simple.TypeInfo.Types
 import Database.PostgreSQL.Simple.Types
 import qualified HPgsql as HPgsql
-import HPgsql.Field ()
+import HPgsql.Encoding ()
 import qualified HPgsql.TypeInfo as HPgsql
 
 -- | Returns the metadata of the type with a particular oid.  To find

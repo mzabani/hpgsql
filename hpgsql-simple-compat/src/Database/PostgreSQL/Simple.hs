@@ -154,7 +154,7 @@ import Database.PostgreSQL.Simple.Types
     (:.) (..),
   )
 import qualified HPgsql
-import qualified HPgsql.Field as HPgsql
+import qualified HPgsql.Encoding as HPgsql
 import qualified HPgsql.Query as HPgsql
 import qualified Streaming
 

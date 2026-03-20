@@ -25,7 +25,7 @@ import DbUtils
 import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import HPgsql
-import HPgsql.Field (AllowNull (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
+import HPgsql.Encoding (AllowNull (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import HPgsql.Query (sql)
 import HPgsql.TypeInfo (Oid)
 import HPgsql.Types (PgJson, Values (..), valuesToQuery)

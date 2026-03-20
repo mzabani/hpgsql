@@ -42,7 +42,7 @@ import qualified Database.PostgreSQL.Simple.Transaction as ST
 import Database.PostgreSQL.Simple.Types (PGArray (..), Query (..), Values (..))
 import Exception (testExceptions)
 import GHC.Generics (Generic)
-import HPgsql.Field (FromPgField)
+import HPgsql.Encoding (FromPgField)
 import Interval
 import Notify
 import Serializable
