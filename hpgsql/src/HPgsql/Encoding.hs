@@ -6,7 +6,7 @@ module HPgsql.Encoding
     ToPgField (..),
     ToPgRow (..),
     Only (..),
-    FieldParser, -- TODO: Can we export ctor?
+    FieldParser(..), -- TODO: Can we export ctor?
     RowParser (..), -- TODO: Can we export ctor?
     AllowNull (..),
     LowerCasedPgEnum (..),

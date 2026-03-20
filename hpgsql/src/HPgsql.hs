@@ -51,7 +51,7 @@ import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, modifyMVar_, my
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (Exception (..), MonadThrow, bracket, bracketOnError, finally, mask, mask_, onException, throw, tryJust, withException)
+import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
@@ -140,7 +140,6 @@ data InternalConnectionState = InternalConnectionState
     -- and we send a cancellation request. By the time it arrives, the backend might be processing
     -- queries from the second pipeline, which we didn't want to cancel.
     currentPipeline :: ![QueryState],
-    fundamentalCommunicationError :: !(Maybe IrrecoverableHpgsqlError),
     notificationsReceived :: !(TQueue Msgs.NotificationResponse)
   }
 
@@ -285,11 +284,11 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
   -- TODO: Proper exception rethrowing when we fail to connect
   sockOrTimeout <- timeout (fromInteger $ diffTimeToPicoseconds conntimeout `div` 1_000_000) $ getConnectedSocket Nothing
   case sockOrTimeout of
-    Nothing -> throwIrrecoverableErrorWithoutConn "Could not connect in the supplied timeout"
+    Nothing -> throwIrrecoverableError "Could not connect in the supplied timeout"
     -- TODO: It's still possible for an asynchronous exception to interrupt this before the `onException` handler is installed
     Just (sock, addrInfo) -> flip onException (Socket.close sock) $ do
       Socket.withFdSocket sock Socket.getNonBlock >>= \case
-        False -> throwIrrecoverableErrorWithoutConn "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
+        False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
       recvBuffer <- newMVar mempty
       sendBuffer <- newMVar mempty
@@ -301,7 +300,6 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
             { totalQueriesSent = 0,
               blockedForSendingOrReceivingMsgsAtomically = Nothing,
               currentPipeline = [],
-              fundamentalCommunicationError = Nothing,
               notificationsReceived = notifQueue
             }
       let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr addrInfo connParams currentConnectionState 0 0 connOpts
@@ -323,11 +321,11 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
           -- TODO: Throw informative error for unimplemented authentication methods
           case errorOrBackendKeyData of
-            Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Socket connected but postgresql threw an error during connection startup handshake", pgErrorDetails = errDetails}
+            Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Socket connected but postgresql threw an error during connection startup handshake", pgErrorDetails = errDetails, innerException = Nothing}
             Right backendKeyData -> do
               readyForQueryOrError <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @ReadyForQuery <|> Left <$> msgParser @ErrorResponse
               case readyForQueryOrError of
-                Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", pgErrorDetails = errDetails}
+                Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", pgErrorDetails = errDetails, innerException = Nothing}
                 Right ReadyForQuery {} -> pure ()
               debugPrint $ "Connected with backend PID " ++ show (backendPid backendKeyData)
               pure $ hpgConnPartialDoNotReturn {connPid = backendPid backendKeyData, cancelSecretKey = backendSecretKey backendKeyData}
@@ -358,7 +356,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
                 else do
                   addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
                   case addrInfos of
-                    [] -> throwIrrecoverableErrorWithoutConn "Could not resolve address"
+                    [] -> throwIrrecoverableError "Could not resolve address"
                     addrInfo : _ -> pure addrInfo
       sock <- Socket.openSocket addrInfo
       Socket.connect sock (Socket.addrAddress addrInfo)
@@ -390,10 +388,10 @@ beforeReturningToPool ::
 beforeReturningToPool conn@HPgConnection {internalConnectionState} mCleanOpts = do
   STM.atomically $ do
     st <- STM.readTVar internalConnectionState
-    when (isLeft $ connectionReadyForNewPipeline st) $ throwIrrecoverableErrorWithoutConn "There are still active queries in progress. Make sure to close this connection with `closeForcefully` or consume all existing queries' results"
+    when (isLeft $ connectionReadyForNewPipeline st) $ throwIrrecoverableError "There are still active queries in progress. Make sure to close this connection with `closeForcefully` or consume all existing queries' results"
   when (checkTransactionState cleanOpts) $ do
     txnStatus <- connectionTransactionStatus conn
-    unless (txnStatus == TransIdle) $ throwIrrecoverableError conn $ "The connection's transaction was left in an invalid state: " ++ show txnStatus ++ ". Make sure to close this connection with `closeForcefully`"
+    unless (txnStatus == TransIdle) $ throwIrrecoverableError $ "The connection's transaction was left in an invalid state: " ++ show txnStatus ++ ". Make sure to close this connection with `closeForcefully`"
   -- What if there are notifications in the socket buffer? It seems reasonable to assume that when
   -- running "UNLISTEN *" those would be received, so this might be fine as long as we
   -- clear the internal queue _after_ "UNLISTEN *".
@@ -413,12 +411,7 @@ closeGracefully conn@(HPgConnection {socket}) = flip finally (Socket.close socke
   withControlMsgsLock
     conn
     (const $ pure ())
-    -- When done closing, put an error in case any orphaned threads from the user still
-    -- try to consume the connection
-    ( \sttv -> do
-        st <- STM.readTVar sttv
-        STM.writeTVar sttv $ st {fundamentalCommunicationError = Just $ IrrecoverableHpgsqlError {hpgsqlDetails = "Bug in HPgsql. Should not be in this state when receiving control msgs because firstPendingQry should have thrown in this case", pgErrorDetails = mempty}}
-    )
+    (const $ pure ())
     $ \() -> do
       nonAtomicSendMsg conn Terminate
 
@@ -450,7 +443,7 @@ receiveNextMsgWithMaskedContinuation :: (Show a) => HPgConnection -> PgMsgParser
 receiveNextMsgWithMaskedContinuation conn parser f =
   receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser $ \case
     Right p -> f p
-    Left msgIdentChar -> throwIrrecoverableError conn $ "Could not parse postgres message with ident char " ++ show msgIdentChar ++ ". This is an internal error in HPGsql. Please report it."
+    Left msgIdentChar -> throwIrrecoverableError $ "Could not parse postgres message with ident char " ++ show msgIdentChar ++ ". This is an internal error in HPGsql. Please report it."
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
 -- the internal buffer and the supplied function runs to completion.
@@ -460,7 +453,8 @@ receiveNextMsgWithMaskedContinuation conn parser f =
 -- CAREFUL: avoid doing networking or too much work in your supplied function. It must
 -- be really cheap!
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either Char a -> IO b) -> IO b
-receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = do
+receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = rethrowAsIrrecoverable $ do
+  -- \^ We rethrow as irrecoverable because an error here is likely a socket receiving error
   -- We need to preserve the invariant that the internal buffer's first byte is
   -- always the first byte of a valid Message, while keeping this function
   -- interruptible.
@@ -560,7 +554,7 @@ sendCancellationRequest conn = do
         st <- STM.readTVar sttv
         case currentPipeline st of
           [qs@QueryState {queryProtocol = CopyQuery StillCopying}] -> STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = [qs {queryProtocol = CopyQuery CopyFailAndSyncSent}]}
-          _ -> throwIrrecoverableErrorWithoutConn "Impossible: when marking CopyFail state was invalid"
+          _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
   case copyState of
     Just StillCopying ->
       atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail "COPY statement automatically cancelled by HPgsql because it was interrupted", SomeMessage Sync], markCopyFailSent)
@@ -585,10 +579,7 @@ isLastInPipeline conn qryId = STM.atomically $ updateConnStateTxn conn $ \sttv -
     Just q -> queryIdentifier q == qryId
 
 updateConnStateTxn :: HPgConnection -> (TVar InternalConnectionState -> STM a) -> STM a
-updateConnStateTxn conn f = do
-  -- st <- STM.readTVar $ internalConnectionState conn
-  -- whenJust (fundamentalCommunicationError st) throw
-  f (internalConnectionState conn)
+updateConnStateTxn conn f = f (internalConnectionState conn)
 
 withControlMsgsLock ::
   HPgConnection ->
@@ -617,10 +608,10 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
         st <- STM.readTVar sttv
         let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
         newSt <- case blockedBy of
-          Nothing -> throwIrrecoverableErrorWithoutConn "Impossible: should have been blocked but was not!"
+          Nothing -> throwIrrecoverableError "Impossible: should have been blocked but was not!"
           Just (tid, nGrabs) ->
             let newLockState = {- traceShowWith ("Releasing ",) $ -} if nGrabs <= 1 then Nothing else Just (thisThreadId, nGrabs - 1)
-             in if tid == thisThreadId then pure st {blockedForSendingOrReceivingMsgsAtomically = newLockState} else throwIrrecoverableErrorWithoutConn "Impossible: Lock of a different thread!"
+             in if tid == thisThreadId then pure st {blockedForSendingOrReceivingMsgsAtomically = newLockState} else throwIrrecoverableError "Impossible: Lock of a different thread!"
         STM.writeTVar sttv newSt
         -- debugPrint "Internal state: [Released control-msg-lock]."
     )
@@ -643,37 +634,30 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
   where
     flushSendBuffer :: IO ()
     flushSendBuffer =
-      flip
-        withException
-        -- An exception here could be a socket error or something
-        -- that forces us to discard the connection
-        ( \ex -> do
-            debugPrint $ "!!!!!!!!!!!!! Got synchronous exception: " ++ show ex
-            STM.atomically $ updateConnStateTxn conn $ \sttv -> do
-              st <- STM.readTVar sttv
-              STM.writeTVar (internalConnectionState conn) $ st {fundamentalCommunicationError = Just ex}
-        )
-        $ mask
-        $ \restore -> do
-          let go = do
-                others <- modifyMVar (sendBuffer conn) $ \case
-                  [] -> pure ([], [])
-                  ((msgs, afterSentTxn) : xs) ->
-                    if LBS.null msgs
-                      then do
-                        -- debugPrint "Finished sending msgs"
-                        STM.atomically afterSentTxn
-                        pure (xs, xs)
-                      else do
-                        restore $ socketWaitWrite socket
-                        n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
-                        -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
-                        let fin = (LBS.drop n msgs, afterSentTxn) : xs
-                        pure (fin, fin)
+      -- An exception here could be a socket error or something
+      -- that forces us to discard the connection
+      rethrowAsIrrecoverable $
+        mask $
+          \restore -> do
+            let go = do
+                  others <- modifyMVar (sendBuffer conn) $ \case
+                    [] -> pure ([], [])
+                    ((!msgs, afterSentTxn) : xs) ->
+                      if LBS.null msgs
+                        then do
+                          -- debugPrint "Finished sending msgs"
+                          STM.atomically afterSentTxn
+                          pure (xs, xs)
+                        else do
+                          restore $ socketWaitWrite socket
+                          n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
+                          -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
+                          let fin = (LBS.drop n msgs, afterSentTxn) : xs
+                          pure (fin, fin)
 
-                -- debugPrint $ show $ stop || null others
-                unless (null others) go
-          go
+                  -- debugPrint $ show $ stop || null others
+                  unless (null others) go
+            go
 
 -- | Receives the next response message for the given QueryId safely/atomically, updates
 -- internal connection state to reflect it, and returns the updated state alongside the
@@ -726,13 +710,13 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
     getQueryStateIfFirstOrThrow = updateConnStateTxn conn $ \sttv -> do
       st <- STM.readTVar sttv
       case currentPipeline st of
-        [] -> throwIrrecoverableErrorWithoutConn $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
+        [] -> throwIrrecoverableError $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
         queries
-          | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableErrorWithoutConn $ "Bug in HPgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
+          | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Bug in HPgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
         (splitQueries -> (earlierQueries, thisQuery))
-          | any ((/= Just thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableErrorWithoutConn "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
-          | any queryInError earlierQueries -> throwIrrecoverableErrorWithoutConn "Another query in the same pipeline threw an error"
-          | not (all queryComplete earlierQueries) -> throwIrrecoverableErrorWithoutConn "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
+          | any ((/= Just thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableError "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
+          | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
+          | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
           | otherwise -> pure thisQuery
 
     splitQueries :: [QueryState] -> ([QueryState], QueryState)
@@ -820,7 +804,7 @@ consumeResults conn qryId = do
         nextMsg <- receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
         case nextMsg of
           (Just (RespDataRow dr), RowDescriptionOrNoDataOrCopyInResponseReceived noDataOrRowDesc) -> pure (Just noDataOrRowDesc, Middle3 $ Just dr)
-          (Just (RespDataRow _), _) -> throwIrrecoverableError conn "Impossible: Got DataRow but did not have RowDescOrNoData before?"
+          (Just (RespDataRow _), _) -> throwIrrecoverableError "Impossible: Got DataRow but did not have RowDescOrNoData before?"
           (_, ErrorResponseReceived mNoDataOrRowDesc err) -> pure (mNoDataOrRowDesc, Left3 err)
           (_, CommandCompleteReceived noDataOrRowDesc cmd) -> pure (Just noDataOrRowDesc, Right3 cmd)
           (_, RowDescriptionOrNoDataOrCopyInResponseReceived noDataOrRowDesc) -> pure (Just noDataOrRowDesc, Middle3 Nothing)
@@ -857,7 +841,7 @@ consumeResults conn qryId = do
                           receiveReadyForQueryIfNecessary thisThreadId
                           pure $ Left $ Right cmd
                         ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
-                        _ -> throwIrrecoverableError conn "Internal error in HPgsql. After a DataRow we should get either an ErrorResponse or a CommandComplete message"
+                        _ -> throwIrrecoverableError "Internal error in HPgsql. After a DataRow we should get either an ErrorResponse or a CommandComplete message"
               )
               ()
           finalStream = case mDataRow of
@@ -876,7 +860,7 @@ data PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteSt
 instance Exception PostgresError
 
 -- | If you receive this exception, don't run any further SQL statements or use it for anything. Just close the connection with `closeForcefully` and discard it.
-data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: String, pgErrorDetails :: Map ErrorDetail LBS.ByteString}
+data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: String, pgErrorDetails :: Map ErrorDetail LBS.ByteString, innerException :: Maybe SomeException}
   deriving stock (Show)
 
 instance Exception IrrecoverableHpgsqlError
@@ -884,22 +868,8 @@ instance Exception IrrecoverableHpgsqlError
 throwPostgresError :: ByteString -> ErrorResponse -> IO a
 throwPostgresError stmtText (ErrorResponse errDetailMap) = throw $ PostgresError {pgErrorDetails = errDetailMap, failedStatement = stmtText}
 
-throwIrrecoverableError :: HPgConnection -> String -> IO a
-throwIrrecoverableError conn errMsg = do
-  let ex = IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty}
-  STM.atomically $ do
-    -- We override the last irrecoverable error if there is one.
-    -- This feels sensible: in the non-recommended case that a user
-    -- handles an irrecoverable exception and tries something else,
-    -- they get a new error in their next attempt, that is likely
-    -- to better explain what's happening at that time
-    let sttv = internalConnectionState conn
-    st <- STM.readTVar sttv
-    STM.writeTVar sttv $ st {fundamentalCommunicationError = Just ex}
-  throw ex
-
-throwIrrecoverableErrorWithoutConn :: (MonadThrow m) => String -> m a
-throwIrrecoverableErrorWithoutConn errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty}
+throwIrrecoverableError :: (MonadThrow m) => String -> m a
+throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty, innerException = Nothing}
 
 lookupQueryText :: HPgConnection -> QueryId -> IO ByteString
 lookupQueryText conn qryId = STM.atomically $ do
@@ -979,7 +949,7 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
     getUniqueQueryStatesForNewPipeline (fmap snd -> qryprotos) = do
       let sttv = internalConnectionState conn
       st <- STM.readTVar sttv
-      when (isLeft $ connectionReadyForNewPipeline st) $ throwIrrecoverableErrorWithoutConn "Bug in Hpgsql: the connection should be ready for a new pipeline due to loopUntilNoPipeline"
+      when (isLeft $ connectionReadyForNewPipeline st) $ throwIrrecoverableError "Bug in Hpgsql: the connection should be ready for a new pipeline due to loopUntilNoPipeline"
       -- Reserve N ids
       let nextId = QueryId $ totalQueriesSent st
           lastId = nextId + fromIntegral (length qryprotos) - 1
@@ -1198,17 +1168,17 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
       -- This is likely an error that happened when binding parameters (e.g. more/fewer params necessary than were sent)
       -- or a query that has no parameters and fails very early (e.g. "SELECT 1/0")
       rowCount :> res <- S.length rowsStream
-      when (rowCount > 0) $ throwIrrecoverableError conn "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
+      when (rowCount > 0) $ throwIrrecoverableError "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
       case res of
         Left err -> throwPostgresError qText err
-        Right _cmd -> throwIrrecoverableError conn "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
-    Just (Left3 _noData) -> throwIrrecoverableError conn "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
-    Just (Right3 _copyInResponse) -> throwIrrecoverableError conn "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
+        Right _cmd -> throwIrrecoverableError "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
+    Just (Left3 _noData) -> throwIrrecoverableError "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
+    Just (Right3 _copyInResponse) -> throwIrrecoverableError "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
     Just (Middle3 (RowDescription coltypes)) -> do
       let numResultColumns = length coltypes
           expectedNumCols = length expectedColFmts
-      unless (numResultColumns == expectedNumCols) $ throwIrrecoverableError conn $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
-      unless (rtypecheck coltypes) $ throwIrrecoverableError conn "Query result column types do not match expected column types"
+      unless (numResultColumns == expectedNumCols) $ throwIrrecoverableError $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
+      unless (rtypecheck coltypes) $ throwIrrecoverableError "Query result column types do not match expected column types"
       let rowparser = rparser coltypes <* Parsec.endOfInput
       pure $ do
         errOrCmdComplete <-
@@ -1216,7 +1186,7 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
             ( \(DataRow rowColumnData) ->
                 case LazyParsec.parseOnly rowparser rowColumnData of
                   Right row -> pure row
-                  Left err -> throwIrrecoverableError conn $ "Failed parsing a row: " ++ show err
+                  Left err -> throwIrrecoverableError $ "Failed parsing a row: " ++ show err
             )
             rowsStream
         S.effect $ case errOrCmdComplete of
@@ -1260,7 +1230,7 @@ copyEnd conn qryId = do
         st <- STM.readTVar sttv
         case currentPipeline st of
           [q@QueryState {queryProtocol = CopyQuery StillCopying}] -> STM.writeTVar sttv $ st {currentPipeline = [q {queryProtocol = CopyQuery CopyDoneAndSyncSent}]}
-          _ -> throwIrrecoverableErrorWithoutConn "putCopyEnd called but there was no active COPY statement"
+          _ -> throwIrrecoverableError "putCopyEnd called but there was no active COPY statement"
     )
   qText <- lookupQueryText conn qryId
   (_, stream) <- consumeResults conn qryId
@@ -1337,6 +1307,12 @@ nonAtomicSendMsg :: (ToPgMessage msg, Show msg) => HPgConnection -> msg -> IO ()
 nonAtomicSendMsg HPgConnection {socket} msg = do
   SocketLBS.sendAll socket $ Builder.toLazyByteString $ toPgMessage msg
   debugPrint $ "Sent " ++ show msg
+
+-- | Wraps an IO action to rethrow HPgsql's 'PostgresError' as postgresql-simple's 'SqlError'.
+rethrowAsIrrecoverable :: IO a -> IO a
+rethrowAsIrrecoverable = handle (throw . asIrrec)
+  where
+    asIrrec ex = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", pgErrorDetails = mempty, innerException = Just ex}
 
 -- whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
 -- whenJust m f = case m of
