@@ -10,6 +10,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -44,6 +45,9 @@ irrecoverableErrorMustContain expected (IrrecoverableHpgsqlError {pgErrorDetails
 
 irrecoverableErrorWithMsg :: String -> IrrecoverableHpgsqlError -> Bool
 irrecoverableErrorWithMsg expectedInfixMsg (IrrecoverableHpgsqlError {hpgsqlDetails}) = expectedInfixMsg `List.isInfixOf` hpgsqlDetails
+
+irrecoverableErrorWithMsgAndStmt :: ByteString -> String -> IrrecoverableHpgsqlError -> Bool
+irrecoverableErrorWithMsgAndStmt expectedInfixStmt expectedInfixMsg (IrrecoverableHpgsqlError {hpgsqlDetails, relatedStatement}) = expectedInfixMsg `List.isInfixOf` hpgsqlDetails && expectedInfixStmt `BS.isInfixOf` fromMaybe "" relatedStatement
 
 withRollback :: HPgConnection -> IO a -> IO a
 withRollback conn f = do

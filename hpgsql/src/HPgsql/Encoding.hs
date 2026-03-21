@@ -70,13 +70,15 @@ data FieldParser a = FieldParser
 
 data RowParser a = RowParser
   { fullRowParser :: [ColumnInfo] -> Parsec.Parser a,
-    rowColumnsTypeCheck :: [ColumnInfo] -> Bool,
+    -- | Returns the same colInfos with a boolean indicating if
+    -- the expected types match for each colInfo.
+    rowColumnsTypeCheck :: [ColumnInfo] -> [(ColumnInfo, Bool)],
     resultColumnsFmts :: ![Format]
   }
   deriving stock (Functor, Generic)
 
 instance Applicative RowParser where
-  pure v = RowParser (const $ pure v) (const True) []
+  pure v = RowParser (const $ pure v) (map (,True)) []
 
   -- TODO: We've changed `RowParser` quite a bit since this last proof.
   -- Prove it again. But try to prove that `(->) a b` is Applicative if `b` is, and that
@@ -131,7 +133,7 @@ instance Applicative RowParser where
   -- u' <*> pure y = pure ($ y) <*> u'
   -- And so left hand and right hand sides are equal, and Interchange applies!
 
-  RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in tc1 cols1 && tc2 cols2) (nc1 ++ nc2)
+  RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in tc1 cols1 ++ tc2 cols2) (nc1 ++ nc2)
 
 -- TODO: Monad instance because people do want to write
 -- <- (bind arrows) in their FromPgField instances..
@@ -144,8 +146,8 @@ singleColRowParser :: FieldParser a -> RowParser a
 singleColRowParser (FieldParser {..}) =
   RowParser
     { fullRowParser = \case
-        [singleTypOid] ->
-          let decode = fieldValueParser singleTypOid
+        [singleColInfo] ->
+          let decode = fieldValueParser singleColInfo
            in do
                 lenNextCol <- fromIntegral <$> int32Parser
                 nextColBs <-
@@ -160,8 +162,8 @@ singleColRowParser (FieldParser {..}) =
                   Left err -> fail err
         _ -> error "singleColRowParser expected a single column OID but got 0 or >1",
       rowColumnsTypeCheck = \case
-        [singleTypOid] -> allowedPgTypes singleTypOid
-        _ -> False,
+        [singleColInfo] -> [(singleColInfo, allowedPgTypes singleColInfo)]
+        _ -> error "singleColRowParser's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
       resultColumnsFmts = [fieldFmt]
     }
 
@@ -206,7 +208,8 @@ compositeTypeParser nullCheck (RowParser {..}) =
         (LBS.fromStrict -> sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
         !bs <- LBS.fromStrict <$> Parsec.take (max 0 size)
         pure (oid, sizeBs <> bs)
-      unless (rowColumnsTypeCheck (map (mkColInfo . fst) cols)) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
+      let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
+      unless (all snd typecheckedCols) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
       case Parsec.parseOnly (fullRowParser (map (mkColInfo . fst) cols) <* Parsec.endOfInput) (mconcat $ map snd cols) of
         Right v -> pure v
         Left err -> error $ "Error decoding composite type: " ++ show err

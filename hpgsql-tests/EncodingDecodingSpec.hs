@@ -11,6 +11,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Functor ((<&>))
 import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
+import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.Scientific (Scientific)
 import Data.Text (Text)
@@ -20,14 +21,15 @@ import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import DbUtils
   ( aroundConn,
+    irrecoverableErrorWithMsgAndStmt,
     withRollback,
   )
 import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import HPgsql
-import HPgsql.Encoding (AllowNull (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
+import HPgsql.Encoding (AllowNull (..), ColumnInfo (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import HPgsql.Query (sql)
-import HPgsql.TypeInfo (Oid)
+import HPgsql.TypeInfo (Oid, TypeInfo (..))
 import HPgsql.Types (PgJson, Values (..), valuesToQuery)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
@@ -257,6 +259,19 @@ instance FromPgField MyEnum where
           _ -> error "Invalid value for MyEnum"
      in convert <$> anyTypeDecoder
 
+myEnumFieldParserWithTypeInfoCheck :: FieldParser MyEnum
+myEnumFieldParserWithTypeInfoCheck =
+  let convert = \case
+        "val1" -> Val1
+        "val2" -> Val2
+        "val3" -> Val3
+        _ -> error "Invalid value for MyEnum"
+      base = convert <$> anyTypeDecoder
+   in base
+        { allowedPgTypes = \colInfo ->
+            (typeName <$> Map.lookup colInfo.typeOid colInfo.typeInfoCache) == Just "myenum"
+        }
+
 instance ToPgField MyEnum where
   toPgField =
     toPgField . \case
@@ -269,6 +284,12 @@ queryEnumTypes conn = withRollback conn $ do
   execute conn "CREATE TYPE myenum AS ENUM ('val1', 'val2', 'val3');"
   queryWith (rowParser @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn "SELECT 'val1'::myenum, 'val2'::myenum, 'val3'::myenum, NULL::myenum" `shouldReturn` [(Val1, Val2, Val3, Nothing)]
   queryWith (rowParser @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn (mkQuery "SELECT $1, $2, $3, $4" (Val1, Val2, Val3, Nothing :: Maybe MyEnum)) `shouldReturn` [(Val1, Val2, Val3, Nothing)]
+  -- The statement below will fail because the new myenum type is not in the typeCache
+  -- yet. Then we add it and it will pass
+  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
+    `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
+  refreshTypeInfoCache conn
+  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum" `shouldReturn` [Val2]
 
 data SomeGenericEnum = EVal1 | EVal2 | EVal3
   deriving stock (Eq, Generic, Show)

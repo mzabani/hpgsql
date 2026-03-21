@@ -42,7 +42,8 @@ module HPgsql
     getBackendPid,
     getNotification,
     getNotificationNonBlocking,
-    _globalDebugLock, -- Stop exporting this
+    refreshTypeInfoCache,
+    resetTypeInfoCache
   )
 where
 
@@ -332,11 +333,11 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
           -- TODO: Throw informative error for unimplemented authentication methods
           case errorOrBackendKeyData of
-            Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Socket connected but postgresql threw an error during connection startup handshake", pgErrorDetails = errDetails, innerException = Nothing}
+            Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Socket connected but postgresql threw an error during connection startup handshake", pgErrorDetails = errDetails, innerException = Nothing, relatedStatement = Nothing}
             Right backendKeyData -> do
               readyForQueryOrError <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @ReadyForQuery <|> Left <$> msgParser @ErrorResponse
               case readyForQueryOrError of
-                Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", pgErrorDetails = errDetails, innerException = Nothing}
+                Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", pgErrorDetails = errDetails, innerException = Nothing, relatedStatement = Nothing}
                 Right ReadyForQuery {} -> pure ()
               debugPrint $ "Connected with backend PID " ++ show (backendPid backendKeyData)
               let finalConn = hpgConnPartialDoNotReturn {connPid = backendPid backendKeyData, cancelSecretKey = backendSecretKey backendKeyData}
@@ -375,13 +376,13 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       Socket.connect sock (Socket.addrAddress addrInfo)
       pure (sock, addrInfo)
 
--- | Fetches custom types from the database and refreshes this connection's
--- internal type cache.
--- Note that builtin postgres types are always available in the type cache,
+-- | Fetches custom types from postgres and refreshes this connection's
+-- internal typeInfo cache with them.
+-- Note that builtin postgres types are always available in the typeInfo cache;
 -- this just refreshes any other custom types, including removing those that
 -- no longer exist and adding new ones.
--- Any custom types already in the cache stay there or are replaced with
--- more up-to-date types fetched from the pg_catalog.pg_type table.
+-- HPgsql runs this automatically for new connections unless you disable it.
+-- See `ConnectOpts` and `resetTypeInfoCache` for more.
 refreshTypeInfoCache :: HPgConnection -> IO ()
 refreshTypeInfoCache conn = do
   -- TODO: Expose as a Pipeline so users can batch it with other typical
@@ -390,6 +391,11 @@ refreshTypeInfoCache conn = do
   -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
   customTypes <- Map.fromList . map (second TypeInfo) <$> query conn "select oid, typname from pg_catalog.pg_type WHERE oid >= 16384"
   modifyMVar_ conn.typeInfoCache $ \_ -> pure $ customTypes `Map.union` builtinPgTypesMap
+
+-- | Useful to reset the connection's internal typeInfo cache
+-- to the builtin postgres types.
+resetTypeInfoCache :: HPgConnection -> IO ()
+resetTypeInfoCache conn = modifyMVar_ conn.typeInfoCache $ \_ -> pure builtinPgTypesMap
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
 getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
@@ -889,7 +895,7 @@ data PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteSt
 instance Exception PostgresError
 
 -- | If you receive this exception, don't run any further SQL statements or use it for anything. Just close the connection with `closeForcefully` and discard it.
-data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: String, pgErrorDetails :: Map ErrorDetail LBS.ByteString, innerException :: Maybe SomeException}
+data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: String, pgErrorDetails :: Map ErrorDetail LBS.ByteString, innerException :: Maybe SomeException, relatedStatement :: !(Maybe ByteString)}
   deriving stock (Show)
 
 instance Exception IrrecoverableHpgsqlError
@@ -898,7 +904,10 @@ throwPostgresError :: ByteString -> ErrorResponse -> IO a
 throwPostgresError stmtText (ErrorResponse errDetailMap) = throw $ PostgresError {pgErrorDetails = errDetailMap, failedStatement = stmtText}
 
 throwIrrecoverableError :: (MonadThrow m) => String -> m a
-throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty, innerException = Nothing}
+throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty, innerException = Nothing, relatedStatement = Nothing}
+
+throwIrrecoverableErrorWithStatement :: (MonadThrow m) => ByteString -> String -> m a
+throwIrrecoverableErrorWithStatement stmtText errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty, innerException = Nothing, relatedStatement = Just stmtText}
 
 lookupQueryText :: HPgConnection -> QueryId -> IO ByteString
 lookupQueryText conn qryId = STM.atomically $ do
@@ -1199,18 +1208,19 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
       when (rowCount > 0) $ throwIrrecoverableError "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
       case res of
         Left err -> throwPostgresError qText err
-        Right _cmd -> throwIrrecoverableError "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
-    Just (Left3 _noData) -> throwIrrecoverableError "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
-    Just (Right3 _copyInResponse) -> throwIrrecoverableError "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
+        Right _cmd -> throwIrrecoverableErrorWithStatement qText "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
+    Just (Left3 _noData) -> throwIrrecoverableErrorWithStatement qText "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
+    Just (Right3 _copyInResponse) -> throwIrrecoverableErrorWithStatement qText "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
     Just (Middle3 (RowDescription coltypes)) -> do
       typeInfoCache <- readMVar conn.typeInfoCache
       let numResultColumns = length coltypes
           expectedNumCols = length expectedColFmts
           mkColInfo oid = ColumnInfo oid typeInfoCache
           colInfos = map mkColInfo coltypes
-      unless (numResultColumns == expectedNumCols) $ throwIrrecoverableError $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
-      unless (rtypecheck colInfos) $ throwIrrecoverableError "Query result column types do not match expected column types"
-      let rowparser = rparser colInfos <* Parsec.endOfInput
+          typecheckedColInfos = rtypecheck colInfos
+      unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
+      unless (all snd typecheckedColInfos) $ throwIrrecoverableErrorWithStatement qText "Query result column types do not match expected column types"
+      let !rowparser = rparser colInfos <* Parsec.endOfInput
       pure $ do
         errOrCmdComplete <-
           S.mapM
@@ -1343,7 +1353,7 @@ nonAtomicSendMsg HPgConnection {socket} msg = do
 rethrowAsIrrecoverable :: IO a -> IO a
 rethrowAsIrrecoverable = handle (throw . asIrrec)
   where
-    asIrrec ex = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", pgErrorDetails = mempty, innerException = Just ex}
+    asIrrec ex = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", pgErrorDetails = mempty, innerException = Just ex, relatedStatement = Nothing}
 
 -- whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
 -- whenJust m f = case m of

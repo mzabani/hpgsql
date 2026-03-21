@@ -53,6 +53,7 @@ executable hpgsql-tests
       MultiParamTypeClasses
       NamedFieldPuns
       NumericUnderscores
+      OverloadedRecordDot
       OverloadedStrings
       RankNTypes
       RecordWildCards
