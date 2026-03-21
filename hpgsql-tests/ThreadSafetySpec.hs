@@ -40,6 +40,9 @@ spec = do
         it
           "Cancel active streaming query then try to consume its results"
           cancelStreamingQueryThenTryToConsumeResults
+        it
+          "Thread that sends pipeline must be the thread that consumes results"
+          threadThatSendsPipelinMustBeThreadThatConsumesResults
         forM_ [False, True] $ \cancelQueryExplicitly -> do
           it
             ("Query that errors due to bad FromPgField implementation - " ++ show cancelQueryExplicitly)
@@ -174,8 +177,13 @@ cancelStreamingQueryThenTryToConsumeResults conn = do
   -- Consuming the stream now will do what? For now it:
   -- 1. Might not throw if the query finished running in the server. Change 100000000 to 5 to see this test fail.
   -- 2. Might throw with "canceling statement due to user request", like in this test.
-  -- So we should document the behaviour when doing this as UNDEFINED!
   S.effects res `shouldThrow` pgErrorMustContain "generate_series(1,100000000)" [(ErrorCode, "57014")]
+
+threadThatSendsPipelinMustBeThreadThatConsumesResults :: HPgConnection -> IO ()
+threadThatSendsPipelinMustBeThreadThatConsumesResults conn = do
+  res <- queryWithStreaming (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10)"
+  withAsync (S.effects res) $ \otherThreadResults ->
+    wait otherThreadResults `shouldThrow` irrecoverableErrorWithMsg "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
 
 queryCancellationInTheFuture :: IO ()
 queryCancellationInTheFuture = do

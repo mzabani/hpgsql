@@ -2,6 +2,7 @@ module HPgsql
   ( query,
     queryWith,
     queryWithStreaming,
+    queryStreaming,
     putCopyData,
     withConnection,
     withConnectionOpts,
@@ -694,7 +695,7 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
                   unless (null others) go
             go
 
--- | Receives the next response message for the given QueryId safely/atomically, updates
+-- | Receives the next response message for the given QueryId atomically, updates
 -- internal connection state to reflect it, and returns the updated state alongside the
 -- received message.
 -- This also receives ReadyForQuery if the query is already in ErrorResponse or if it's the
@@ -703,8 +704,8 @@ withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
 -- without receiving any new messages. This is helpful if a thread is interrupted
 -- You don't want to use this for receiving DataRows in large scale, because the costs of
 -- STM transactions apply here.
-receiveOutstandingResponseMsgsSafely :: WeakThreadId -> HPgConnection -> QueryId -> IO (Maybe ResponseMsg, ResponseMsgsReceived)
-receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
+receiveOutstandingResponseMsgsAtomically :: WeakThreadId -> HPgConnection -> QueryId -> IO (Maybe ResponseMsg, ResponseMsgsReceived)
+receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
   -- debugPrint $ "Internal state: [Waiting] until ok to receive response control messages for QueryId " ++ show qryId
   withControlMsgsLock
     conn
@@ -748,8 +749,8 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
         [] -> throwIrrecoverableError $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
         queries
           | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Bug in HPgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
+          | any ((/= thisThreadId) . queryOwner) queries -> throwIrrecoverableError "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
         (splitQueries -> (earlierQueries, thisQuery))
-          | any ((/= thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableError "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
           | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
           | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
           | otherwise -> pure thisQuery
@@ -836,7 +837,7 @@ consumeResults conn qryId = do
   thisThreadId <- getMyWeakThreadId
   let receiveUntilTimeToReceiveRows :: IO (Maybe (Either3 NoData RowDescription CopyInResponse), Either3 ErrorResponse (Maybe DataRow) CommandComplete)
       receiveUntilTimeToReceiveRows = do
-        nextMsg <- receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
+        nextMsg <- receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
         case nextMsg of
           (Just (RespDataRow dr), RowDescriptionOrNoDataOrCopyInResponseReceived noDataOrRowDesc) -> pure (Just noDataOrRowDesc, Middle3 $ Just dr)
           (Just (RespDataRow _), _) -> throwIrrecoverableError "Impossible: Got DataRow but did not have RowDescOrNoData before?"
@@ -867,7 +868,7 @@ consumeResults conn qryId = do
                   case mRow of
                     Right row -> pure $ Right (row :> ())
                     Left _ -> do
-                      stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
+                      stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
                       case stateAfterNextMsg of
                         ErrorResponseReceived _ err -> do
                           receiveReadyForQueryIfNecessary thisThreadId
@@ -887,7 +888,7 @@ consumeResults conn qryId = do
       pure (mERowDesc, finalStream)
   where
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()
-    receiveReadyForQueryIfNecessary thisThreadId = void $ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
+    receiveReadyForQueryIfNecessary thisThreadId = void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
 
 data PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteString, failedStatement :: !ByteString}
   deriving stock (Show)
@@ -945,8 +946,19 @@ executeMany_ conn qry = void $ executeMany conn qry
 mkQuery :: (ToPgRow p) => ByteString -> p -> Query
 mkQuery qry p = Query $ NE.singleton $ SingleQuery qry (toPgParams p)
 
+-- | Streams results directly from the connection's socket, i.e. without using cursors.
+-- It is important to note the same thread that runs this must be the thread that
+-- consumes the returned Stream, and the returned Stream must be consumed completely
+-- (up to the last row or a postgres error) before you are able to run other queries.
 queryWithStreaming :: RowParser a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryWithStreaming rparser conn qry = join $ runPipeline conn $ pipelineS rparser qry
+
+-- | Streams results directly from the connection's socket, i.e. without using cursors.
+-- It is important to note the same thread that runs this must be the thread that
+-- consumes the returned Stream, and the returned Stream must be consumed completely
+-- (up to the last row or a postgres error) before you are able to run other queries.
+queryStreaming :: FromPgRow a => HPgConnection -> Query -> IO (Stream (Of a) IO ())
+queryStreaming = queryWithStreaming rowParser
 
 getMyWeakThreadId :: IO WeakThreadId
 getMyWeakThreadId = do
@@ -1050,6 +1062,7 @@ waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
 --
 -- That the cancellation request _can_ arrive before the query even arrives, so it won't be cancelled,
 -- and this _can_ happen even if all the messages of the "SELECT ..." query are sent first.
+-- The cancellation request can also arrive after the active query finishes.
 --
 -- Modulo the race condition mentioned above, the database connection should be in a healthy
 -- and usable state after this function returns.
@@ -1174,9 +1187,10 @@ pipelineCmd (Query qs) =
             consumeResultsIgnoreRows conn (fromMaybe (error "pipelineCmd internal bug: no mLastQry") mLastQry)
     )
 
--- | IMPORTANT: Do not consume query results from the same pipeline in different threads. The thread
--- that sends the pipeline must consume the results of every query in the pipeline itself, and in order.
--- Anything else is not officially supported by HPgsql and may result in deadlocks or worse: undefined behaviour.
+-- | Runs a pipeline of statements.
+-- Note that the thread that runs this must be the thread that consumes the
+-- results of every query in the supplied pipeline, and in order.
+-- Anything else is not officially supported by HPgsql and may result in deadlocks or undefined behaviour.
 runPipeline :: HPgConnection -> Pipeline a -> IO a
 runPipeline conn (Pipeline [] run) = pure $ run conn []
 runPipeline conn (Pipeline (NE.fromList -> queries) run) = do
@@ -1254,9 +1268,9 @@ withCopy conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) copyFn
       SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
     ]
     $ \(qryId :| _) -> do
-      void $ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId
+      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       copyFn
       copyEnd conn qryId
 
