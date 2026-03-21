@@ -16,7 +16,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Data.Typeable (Typeable)
-import HPgsql.Encoding (FromPgField (..), ToPgField (..), ToPgRow (..), parsePgType)
+import HPgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
 import HPgsql.Query (Query (..), SingleQuery (..))
 import HPgsql.TypeInfo (Format (..), jsonOid, jsonbOid)
 
@@ -56,9 +56,19 @@ instance ToJSON PgJson where
   toEncoding (PgJson bs) = AesonInternal.unsafeToEncoding (Builder.lazyByteString bs)
 
 instance FromPgField PgJson where
-  fieldParser = parsePgType TextFmt [jsonOid, jsonbOid] $ \case
-    Nothing -> Left "Cannot parse SQL null into Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls"
-    Just bs -> Right $ PgJson bs
+  fieldParser =
+    FieldParser
+      { fieldValueParser =
+          \ColumnInfo {typeOid} ->
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
+             in \mbs ->
+                  case mbs of
+                    Just bs -> Right $ PgJson $ fixJsonb bs
+                    Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
+        fieldFmt = BinaryFmt,
+        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
+      }
 
 -- | A newtype wrapper to decode a JSON value with Aeson
 -- into your type (from either json or jsonb), and to encode
@@ -67,14 +77,22 @@ newtype Aeson a = Aeson {getAeson :: a}
   deriving (Eq, Show, Read, Typeable, Functor)
 
 instance (FromJSON a) => FromPgField (Aeson a) where
-  fieldParser = parsePgType TextFmt [jsonOid, jsonbOid] $ \case
-    Nothing -> Left "Cannot parse SQL null into Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls"
-    Just bs -> case Aeson.decode bs of
-      Just v -> Right $ Aeson v
-      Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type"
+  fieldParser =
+    FieldParser
+      { fieldValueParser =
+          \ColumnInfo {typeOid} ->
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
+             in \mbs ->
+                  case mbs of
+                    Just bs -> case Aeson.decode $ fixJsonb bs of
+                      Just v -> Right $ Aeson v
+                      Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?"
+                    Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
+        fieldFmt = BinaryFmt,
+        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
+      }
 
 instance (ToJSON a) => ToPgField (Aeson a) where
-  -- Maybe we shouldn't specify an oid so postgres can infer the best type?
-  -- But json and jsonb might have different binary representations..
   toTypeOid _ = Just jsonbOid
   toPgField (Aeson v) = Just $ LBS.cons 1 (Aeson.encode v)

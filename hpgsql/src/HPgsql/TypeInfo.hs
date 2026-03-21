@@ -80,7 +80,14 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 
-data Format = TextFmt | BinaryFmt
+-- | The text format is not well supported because
+-- if you have e.g. a custom type made of types with
+-- mixed formats, it's hard to derive a FromPgField
+-- for it. And also for FromPgField (Vector a), we would
+-- have to implement two different parsers: one for binary
+-- and one for Text, which isn't great.
+-- We will likely remove support for the text format eventually.
+data Format = BadlySupportedTextFmt | BinaryFmt
   deriving stock (Eq, Show)
 
 newtype Oid = Oid Int32

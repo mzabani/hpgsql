@@ -245,7 +245,8 @@ queryArrayTypes conn = withRollback conn $ do
   queryWith (rowParser @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
   queryWith (rowParser @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
   queryWith (rowParser @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]
-  queryWith (rowParser @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
+  queryWith (rowParser @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
+  queryWith (rowParser @(Only (Vector Aeson.Value))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)) `shouldReturn` [Only $ Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]]
 
 data MyEnum = Val1 | Val2 | Val3
   deriving stock (Eq, Show)

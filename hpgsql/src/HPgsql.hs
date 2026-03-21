@@ -43,7 +43,7 @@ module HPgsql
     getNotification,
     getNotificationNonBlocking,
     refreshTypeInfoCache,
-    resetTypeInfoCache
+    resetTypeInfoCache,
   )
 where
 
@@ -1205,7 +1205,7 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
       -- This is likely an error that happened when binding parameters (e.g. more/fewer params necessary than were sent)
       -- or a query that has no parameters and fails very early (e.g. "SELECT 1/0")
       rowCount :> res <- S.length rowsStream
-      when (rowCount > 0) $ throwIrrecoverableError "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
+      when (rowCount > 0) $ throwIrrecoverableErrorWithStatement qText "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
       case res of
         Left err -> throwPostgresError qText err
         Right _cmd -> throwIrrecoverableErrorWithStatement qText "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
@@ -1227,7 +1227,7 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
             ( \(DataRow rowColumnData) ->
                 case LazyParsec.parseOnly rowparser rowColumnData of
                   Right row -> pure row
-                  Left err -> throwIrrecoverableError $ "Failed parsing a row: " ++ show err
+                  Left err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " ++ show err
             )
             rowsStream
         S.effect $ case errOrCmdComplete of

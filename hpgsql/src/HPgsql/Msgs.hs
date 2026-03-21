@@ -298,7 +298,7 @@ instance ToPgMessage Bind where
             map
               ( \case
                   BinaryFmt -> Builder.int16BE 1
-                  TextFmt -> Builder.int16BE 0
+                  BadlySupportedTextFmt -> Builder.int16BE 0
               )
               resultColumnFmts
         contents = unnamedDestPortal <> unnamedSourcePreparedStmt <> Builder.int16BE numParamFmtCodesAllBinary <> Builder.int16BE fmtCodesBinary <> Builder.int16BE numQryParams <> paramsLenAndVals <> Builder.int16BE numResultColumnsFmtCodes <> resultColumnsFmtCodes
