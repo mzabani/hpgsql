@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------
 
@@ -75,6 +76,7 @@ import Database.PostgreSQL.Simple.Time
 import {-# SOURCE #-} Database.PostgreSQL.Simple.ToRow
 import Database.PostgreSQL.Simple.Types
 import Foreign.C.Types (CUInt (..))
+import HPgsql.Encoding (ToPgField (..))
 import qualified HPgsql.TypeInfo as HPgsql
 
 -- | How to render an element when substituting it into a query.
@@ -424,3 +426,19 @@ instance (ToRow a) => ToField (Values a) where
           (litC ',')
           rest
           vals
+
+-- | This instance relies on rendering the Action to text bytes. Since hpgsql
+-- sends all parameters using binary format, this will not work correctly for
+-- most types at runtime. With OVERLAPPABLE, hpgsql's native ToPgField instances
+-- (which produce proper binary encodings) will take precedence for types that
+-- have them.
+instance {-# OVERLAPPABLE #-} (ToField a) => ToPgField a where
+  toTypeOid _ = Nothing
+  toPgField a = Just $ actionToLBS (toField a)
+
+actionToLBS :: Action -> LB.ByteString
+actionToLBS (Plain b) = LB.fromStrict (toByteString b)
+actionToLBS (Escape bs) = LB.fromStrict bs
+actionToLBS (EscapeByteA bs) = LB.fromStrict bs
+actionToLBS (EscapeIdentifier bs) = LB.fromStrict bs
+actionToLBS (Many actions) = LB.concat (map actionToLBS actions)

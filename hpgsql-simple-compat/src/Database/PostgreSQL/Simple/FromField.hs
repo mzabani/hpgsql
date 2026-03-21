@@ -7,6 +7,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- |
 -- Module:      Database.PostgreSQL.Simple.FromField
@@ -129,6 +130,8 @@ import qualified Data.CaseInsensitive as CI
 import Data.Functor.Identity (Identity (Identity))
 import Data.IORef (IORef, newIORef)
 import Data.Int (Int16, Int32, Int64)
+import qualified Data.IntMap as IntMap
+import qualified Data.Map.Strict as Map
 import Data.Ratio (Ratio)
 import Data.Scientific (Scientific)
 import qualified Data.Text as ST
@@ -151,6 +154,11 @@ import Database.PostgreSQL.Simple.TypeInfo as TI
 import qualified Database.PostgreSQL.Simple.TypeInfo.Static as TI
 import Database.PostgreSQL.Simple.Types
 import GHC.Real (infinity, notANumber)
+import HPgsql.Encoding (FromPgField (..))
+import qualified HPgsql.Encoding as HPgsql
+import HPgsql.TypeInfo (Format (..))
+import qualified HPgsql.TypeInfo as HPgsqlTI
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | Exception thrown if conversion from a SQL value to a Haskell
 -- value fails.
@@ -212,6 +220,52 @@ class FromField a where
   -- has already been copied out of the @LibPQ.'PQ.Result'@ before it has
   -- been passed to 'fromField'.  This is because for short strings, it's
   -- cheaper to copy the string than to set up a finalizer.
+
+-- | The instances derived here rely on unsafePerformIO and bottoms in lots
+-- of places. They should be fine for most commonly found FromField instances
+-- out there, but will crash and burn for others.
+-- This is also an orphan instance, but we choose to accept that in the name
+-- of pragmatism: users wanting to migrate to hpgsql will likely find this easier
+-- than alternatives.
+instance {-# OVERLAPPABLE #-} (FromField a) => FromPgField a where
+  fieldParser =
+    HPgsql.FieldParser
+      { HPgsql.fieldValueParser = \colInfo mbs ->
+          let field = Field {result = error "Field.result not available in hpgsql-simple-compat", column = error "Field.column not available in hpgsql-simple-compat", typeOid = fromHpgsqlOid $ HPgsql.typeOid colInfo}
+              strictBs = fmap LB.toStrict mbs
+           in unsafePerformIO $ do
+                -- Build a Connection with a pre-populated TypeInfoCache from
+                -- HPgsql's typeInfoCache. This allows 'typename', 'returnError',
+                -- and 'typeInfo' to work for any type in the cache.
+                connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (HPgsql.typeInfoCache colInfo)
+                let conn =
+                      Connection
+                        connectionObjects
+                        (error "Connection not available in FromField instances in hpgsql-simple-compat")
+                        (error "Connection not available in FromField instances in hpgsql-simple-compat")
+                ok <- runConversion (fromField field strictBs) conn
+                case ok of
+                  Ok a -> pure (Right a)
+                  Errors errs -> pure (Left (show errs)),
+        HPgsql.fieldFmt = BadlySupportedTextFmt,
+        HPgsql.allowedPgTypes = const True
+      }
+
+-- | Converts HPgsql's TypeInfo cache to one similar to postgresql-simple's, but
+-- with lots of bottoms everywhere because hpgsql's typeInfo cache is less complete.
+hpgsqlTypeInfoCacheToCompat :: Map.Map HPgsqlTI.Oid HPgsqlTI.TypeInfo -> TypeInfoCache
+hpgsqlTypeInfoCacheToCompat = IntMap.fromList . map convert . Map.toList
+  where
+    convert (hoid, ti) =
+      let pqOid = fromHpgsqlOid hoid
+       in ( oid2int pqOid,
+            Basic
+              { typoid = pqOid,
+                typcategory = error "typcategory not available in hpgsql-simple-compat",
+                typdelim = ',',
+                typname = ST.encodeUtf8 (HPgsqlTI.typeName ti)
+              }
+          )
 
 -- | Returns the data type name.  This is the preferred way of identifying
 --   types that do not have a stable type oid, such as types provided by

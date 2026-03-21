@@ -24,6 +24,7 @@
 -- client and server.
 module Database.PostgreSQL.Simple.TypeInfo
   ( getTypeInfo,
+    fromHpgsqlOid,
     TypeInfo (..),
     Attribute (..),
   )
