@@ -80,7 +80,7 @@ import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
 import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
 #endif
 import HPgsql.Connection (ConnString (..))
-import HPgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
+import HPgsql.Encoding (ColumnInfo (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
@@ -378,7 +378,8 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
 -- | Fetches custom types from the database and refreshes this connection's
 -- internal type cache.
 -- Note that builtin postgres types are always available in the type cache,
--- this just adds any other custom types.
+-- this just refreshes any other custom types, including removing those that
+-- no longer exist and adding new ones.
 -- Any custom types already in the cache stay there or are replaced with
 -- more up-to-date types fetched from the pg_catalog.pg_type table.
 refreshTypeInfoCache :: HPgConnection -> IO ()
@@ -387,8 +388,8 @@ refreshTypeInfoCache conn = do
   -- connection-setup statements?
   -- https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
   -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
-  customTypes <- Map.fromList . map (second TypeInfo) <$> queryWith rowParser conn "select oid, typname from pg_catalog.pg_type WHERE oid >= 16384"
-  modifyMVar_ (typeInfoCache conn) $ \cache -> pure $ customTypes `Map.union` cache
+  customTypes <- Map.fromList . map (second TypeInfo) <$> query conn "select oid, typname from pg_catalog.pg_type WHERE oid >= 16384"
+  modifyMVar_ conn.typeInfoCache $ \_ -> pure $ customTypes `Map.union` builtinPgTypesMap
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
 getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
@@ -1202,11 +1203,14 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
     Just (Left3 _noData) -> throwIrrecoverableError "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
     Just (Right3 _copyInResponse) -> throwIrrecoverableError "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
     Just (Middle3 (RowDescription coltypes)) -> do
+      typeInfoCache <- readMVar conn.typeInfoCache
       let numResultColumns = length coltypes
           expectedNumCols = length expectedColFmts
+          mkColInfo oid = ColumnInfo oid typeInfoCache
+          colInfos = map mkColInfo coltypes
       unless (numResultColumns == expectedNumCols) $ throwIrrecoverableError $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
-      unless (rtypecheck coltypes) $ throwIrrecoverableError "Query result column types do not match expected column types"
-      let rowparser = rparser coltypes <* Parsec.endOfInput
+      unless (rtypecheck colInfos) $ throwIrrecoverableError "Query result column types do not match expected column types"
+      let rowparser = rparser colInfos <* Parsec.endOfInput
       pure $ do
         errOrCmdComplete <-
           S.mapM

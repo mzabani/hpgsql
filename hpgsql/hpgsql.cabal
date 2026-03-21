@@ -59,6 +59,7 @@ library
       MultiWayIf
       NamedFieldPuns
       NumericUnderscores
+      OverloadedRecordDot
       OverloadedStrings
       RankNTypes
       RecordWildCards
