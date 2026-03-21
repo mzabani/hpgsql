@@ -85,7 +85,7 @@ import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComple
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import HPgsql.Query (Query (..), SingleQuery (..))
-import HPgsql.TypeInfo (Format (..))
+import HPgsql.TypeInfo (Format (..), Oid, TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..), Socket)
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
@@ -114,6 +114,7 @@ data HPgConnection = HPgConnection
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     originalConnStr :: !ConnString,
     connectedTo :: !AddrInfo,
+    typeInfoCache :: !(MVar (Map Oid TypeInfo)),
     parameterStatusMap :: !(MVar (Map Text Text)),
     internalConnectionState :: !(TVar InternalConnectionState),
     connPid :: !Int32,
@@ -182,7 +183,7 @@ data QueryState = QueryState
   { queryIdentifier :: !QueryId,
     queryText :: !ByteString,
     queryProtocol :: !QueryProtocol,
-    queryOwner :: !(Maybe WeakThreadId),
+    queryOwner :: !WeakThreadId,
     -- | Storing every single "control" (i.e. not `DataRow`) message received for each query
     -- means we can continue to drain its results from another thread at anytime, which is
     -- necessary to continue using the connection in the presence of asynchronous exceptions.
@@ -256,7 +257,15 @@ data ConnectOpts = ConnectOpts
     -- and this is only relevant if you plan on interrupting your queries with
     -- asynchronous exceptions, either by use of concurrency primitives or functions like
     -- `timeout`, and continue using the connection for new queries after that.
-    cancellationRequestResendIntervalMs :: Int
+    cancellationRequestResendIntervalMs :: Int,
+    -- | Immediately after connecting, run a query to fetch all types
+    -- from the `pg_type` table. This makes them available in FromPgField
+    -- instances.
+    -- The default is True. You probably want to set it to False if you have
+    -- a lot of custom types and are extremely latency sensitive.
+    -- Note that builtin postgres types are available in the connection's type
+    -- cache even if this is False, at no runtime cost.
+    fillTypeInfoCache :: Bool
   }
 
 connect :: ConnString -> DiffTime -> IO HPgConnection
@@ -272,7 +281,8 @@ defaultConnectOpts :: ConnectOpts
 defaultConnectOpts =
   ConnectOpts
     { killedThreadPollIntervalMs = 500,
-      cancellationRequestResendIntervalMs = 500
+      cancellationRequestResendIntervalMs = 500,
+      fillTypeInfoCache = True
     }
 
 data InternalConnectOrCancelRequest a where
@@ -292,6 +302,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
         True -> pure ()
       recvBuffer <- newMVar mempty
       sendBuffer <- newMVar mempty
+      typeInfoCache <- newMVar builtinPgTypesMap
       connParams <- newMVar mempty
       notifQueue <- STM.newTQueueIO
       currentConnectionState <-
@@ -302,7 +313,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
               currentPipeline = [],
               notificationsReceived = notifQueue
             }
-      let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr addrInfo connParams currentConnectionState 0 0 connOpts
+      let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr addrInfo typeInfoCache connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
         CancelNotConnect cancelRequest _ -> do
           -- TODO: We need to store the IP address of the server and reuse that,
@@ -328,7 +339,9 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
                 Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", pgErrorDetails = errDetails, innerException = Nothing}
                 Right ReadyForQuery {} -> pure ()
               debugPrint $ "Connected with backend PID " ++ show (backendPid backendKeyData)
-              pure $ hpgConnPartialDoNotReturn {connPid = backendPid backendKeyData, cancelSecretKey = backendSecretKey backendKeyData}
+              let finalConn = hpgConnPartialDoNotReturn {connPid = backendPid backendKeyData, cancelSecretKey = backendSecretKey backendKeyData}
+              when (fillTypeInfoCache connOpts) $ refreshTypeInfoCache finalConn
+              pure finalConn
   where
     -- \| Unsafe version of `withSafeReceiveNextMsg`.
     receiveNextMsgUnsafe :: (Show a) => HPgConnection -> PgMsgParser a -> IO a
@@ -361,6 +374,21 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       sock <- Socket.openSocket addrInfo
       Socket.connect sock (Socket.addrAddress addrInfo)
       pure (sock, addrInfo)
+
+-- | Fetches custom types from the database and refreshes this connection's
+-- internal type cache.
+-- Note that builtin postgres types are always available in the type cache,
+-- this just adds any other custom types.
+-- Any custom types already in the cache stay there or are replaced with
+-- more up-to-date types fetched from the pg_catalog.pg_type table.
+refreshTypeInfoCache :: HPgConnection -> IO ()
+refreshTypeInfoCache conn = do
+  -- TODO: Expose as a Pipeline so users can batch it with other typical
+  -- connection-setup statements?
+  -- https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
+  -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
+  customTypes <- Map.fromList . map (second TypeInfo) <$> queryWith rowParser conn "select oid, typname from pg_catalog.pg_type WHERE oid >= 16384"
+  modifyMVar_ (typeInfoCache conn) $ \cache -> pure $ customTypes `Map.union` cache
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
 getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
@@ -714,7 +742,7 @@ receiveOutstandingResponseMsgsSafely thisThreadId conn qryId = do
         queries
           | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Bug in HPgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
         (splitQueries -> (earlierQueries, thisQuery))
-          | any ((/= Just thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableError "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
+          | any ((/= thisThreadId) . queryOwner) earlierQueries -> throwIrrecoverableError "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
           | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
           | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
           | otherwise -> pure thisQuery
@@ -933,7 +961,7 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
     -- If this thread is interrupted now, it is ok: only `totalQueriesSent` was bumped, but `currentPipeline`
     -- is still empty (it will be modified once we send all control messages to postgres).
     -- This is Note [Only modify totalQueriesSent]
-    let newPipeline = zipWith (\queryIdentifier (queryText, queryProtocol) -> QueryState {queryIdentifier, queryText, queryOwner = Just thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
+    let newPipeline = zipWith (\queryIdentifier (queryText, queryProtocol) -> QueryState {queryIdentifier, queryText, queryOwner = thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
     atomicallySendControlMsgs_
       conn
       ( allMsgs,
@@ -1081,14 +1109,13 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
               -- or change this to a `takeWhile` because the internal model allows different
               -- queries to have different owners, even if in practice that shouldn't happen.
               let activeQueries = currentPipeline st
-              mustTakeOwnership <- fmap (List.foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} -> case queryOwner of
-                Nothing -> pure True
+              mustTakeOwnership <- fmap (List.foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} ->
                 -- See Note [`timeout` uses the same ThreadId] for why having the same ThreadId _still_ means
                 -- we need to cancel and drain those queries
-                Just tid -> if tid == thisThreadId then pure True else threadDoesNotExist tid
+                if queryOwner == thisThreadId then pure True else threadDoesNotExist queryOwner
               if mustTakeOwnership
                 then do
-                  STM.atomically $ STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = Just thisThreadId}) $ currentPipeline st}
+                  STM.atomically $ STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = thisThreadId}) $ currentPipeline st}
                   let owner = map queryOwner activeQueries
                   debugPrint $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
                   -- putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
