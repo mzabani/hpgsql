@@ -130,8 +130,8 @@ where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as B
 import Data.ByteString.Builder (Builder, byteString, char8)
+import qualified Data.ByteString.Char8 as B
 import Data.Int (Int64)
 import Data.List (intersperse)
 import Data.String (fromString)
@@ -139,10 +139,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word8)
 import qualified Database.PostgreSQL.LibPQ as PQ
+import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Internal as Base
-import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.ToField (Action (..), inQuotes)
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Transaction
@@ -171,35 +171,28 @@ import qualified Streaming
 --
 -- Throws 'FormatError' if the query string could not be formatted
 -- correctly.
-formatMany :: (ToRow q) => Connection -> Query -> [q] -> IO ByteString
+formatMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO ByteString
 formatMany _ q [] = fmtError "no rows supplied" q []
 formatMany _conn q@(Query template) qs =
   case parseTemplate template of
     Nothing -> fmtError "query is not of the expected form" q []
     Just (before, qbits, after) ->
       let numCols = B.count '?' qbits
-          rows = map toRow qs
-       in case filter (\acts -> length acts /= numCols) rows of
+       in case filter (\r -> length (HPgsql.toPgParams r) /= numCols) qs of
             (bad : _) ->
-              fmtError
-                ( show numCols ++ " single '?' characters, but "
-                    ++ show (length bad) ++ " parameters"
+              error
+                ( show numCols
+                    ++ " single '?' characters, but "
+                    ++ show (length $ HPgsql.toPgParams bad)
+                    ++ " parameters"
                 )
-                q
-                bad
             [] ->
-              pure $ before <> BS.intercalate "," (map renderRow rows) <> after
+              pure $ before <> BS.intercalate "," (map renderRow qs) <> after
   where
-    renderRow acts =
-      toByteString $
-        char8 '(' <> mconcat (intersperse (char8 ',') (map renderAction acts)) <> char8 ')'
-
-    renderAction :: Action -> Builder
-    renderAction (Plain b) = b
-    renderAction (Escape bs) = inQuotes (byteString (escapeStringSQL bs))
-    renderAction (EscapeByteA bs) = inQuotes (byteString (escapeByteaHex bs))
-    renderAction (EscapeIdentifier bs) = char8 '"' <> byteString (escapeIdentSQL bs) <> char8 '"'
-    renderAction (Many acts) = mconcat (map renderAction acts)
+    renderRow row =
+      let numCols = length $ HPgsql.toPgParams row
+       in toByteString $
+            char8 '(' <> mconcat (intersperse (char8 ',') (replicate numCols "?")) <> char8 ')'
 
     -- Standard SQL string escaping: double single quotes
     escapeStringSQL :: ByteString -> ByteString
@@ -321,8 +314,9 @@ parseTemplate template =
 -- Throws 'FormatError' if the query could not be formatted correctly, or
 -- a 'SqlError' exception if the backend returns an error.
 execute :: (HPgsql.ToPgRow q) => Connection -> Query -> q -> IO Int64
-execute conn template qs = mapHpgsqlErrors $
-  HPgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
+execute conn template qs =
+  mapHpgsqlErrors $
+    HPgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
 
 toHpgsqlQuery :: (HPgsql.ToPgRow q) => Query -> q -> HPgsql.Query
 toHpgsqlQuery (Query qry) params = HPgsql.mkQueryWithQuestionMarks qry params
@@ -356,7 +350,7 @@ toHpgsqlQuery (Query qry) params = HPgsql.mkQueryWithQuestionMarks qry params
 --      WHERE sometable.x = upd.x
 --  |] [(1, \"hello\"),(2, \"world\")]
 -- @
-executeMany :: (ToRow q) => Connection -> Query -> [q] -> IO Int64
+executeMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO Int64
 executeMany _ _ [] = return 0
 executeMany conn q qs = mapHpgsqlErrors $ do
   qry <- formatMany conn q qs
@@ -409,8 +403,9 @@ query_ conn q = query conn q ()
 
 -- | A version of 'query' taking parser as argument
 queryWith :: (HPgsql.ToPgRow q) => HPgsql.RowParser r -> Connection -> Query -> q -> IO [r]
-queryWith parser conn template qs = mapHpgsqlErrors $
-  HPgsql.queryWith parser (hpgConn conn) (toHpgsqlQuery template qs)
+queryWith parser conn template qs =
+  mapHpgsqlErrors $
+    HPgsql.queryWith parser (hpgConn conn) (toHpgsqlQuery template qs)
 
 -- | A version of 'query_' taking parser as argument
 queryWith_ :: HPgsql.RowParser r -> Connection -> Query -> IO [r]

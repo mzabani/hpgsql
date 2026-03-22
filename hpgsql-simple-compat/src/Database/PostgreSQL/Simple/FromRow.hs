@@ -47,6 +47,7 @@ import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo
 import Database.PostgreSQL.Simple.Types (Null, Only (..), (:.) (..))
 import GHC.Generics
+import qualified HPgsql.Encoding as HPgsql
 import Prelude hiding (null)
 
 -- | A collection type that can be converted from a sequence of fields.
