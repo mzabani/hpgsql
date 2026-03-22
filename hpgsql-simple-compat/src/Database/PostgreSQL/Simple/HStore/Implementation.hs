@@ -118,8 +118,8 @@ hstore (toHStoreText -> (HStoreText key)) (toHStoreText -> (HStoreText val)) =
     )
 
 instance ToField HStoreBuilder where
-  toField Empty = toField (BS.empty)
-  toField (Comma x) = toField (BU.toLazyByteString x)
+  toField Empty = Escape BS.empty
+  toField (Comma x) = Escape (BL.toStrict (BU.toLazyByteString x))
 
 newtype HStoreList = HStoreList {fromHStoreList :: [(Text, Text)]} deriving (Typeable, Show)
 

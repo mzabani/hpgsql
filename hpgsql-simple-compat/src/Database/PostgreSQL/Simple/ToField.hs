@@ -22,28 +22,18 @@
 module Database.PostgreSQL.Simple.ToField
   ( Action (..),
     ToField (..),
-    toJSONField,
     inQuotes,
   )
 where
 
 import Control.Applicative (Const (Const))
-import qualified Data.Aeson as JSON
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as SB
 import Data.ByteString.Builder
   ( Builder,
     byteString,
     char8,
-    doubleDec,
-    floatDec,
-    int16Dec,
-    int32Dec,
-    int64Dec,
     int8Dec,
-    intDec,
-    integerDec,
-    stringUtf8,
     word16Dec,
     word32Dec,
     word64Dec,
@@ -51,19 +41,11 @@ import Data.ByteString.Builder
     wordDec,
   )
 import qualified Data.ByteString.Lazy as LB
-import Data.CaseInsensitive (CI)
-import qualified Data.CaseInsensitive as CI
 import Data.Functor.Identity (Identity (Identity))
-import Data.Int (Int16, Int32, Int64, Int8)
+import Data.Int (Int8)
 import Data.List (intersperse)
-import Data.Scientific (Scientific)
-import qualified Data.Text as ST
 import qualified Data.Text.Encoding as ST
-import qualified Data.Text.Lazy as LT
-import qualified Data.Text.Lazy.Builder as LT
-import Data.Text.Lazy.Builder.Scientific (scientificBuilder)
-import Data.Time.Compat (Day, LocalTime, NominalDiffTime, TimeOfDay, UTCTime, ZonedTime)
-import Data.Time.LocalTime.Compat (CalendarDiffTime)
+import Data.Time.Compat (LocalTime, NominalDiffTime, TimeOfDay)
 import Data.Typeable (Typeable)
 import Data.UUID.Types (UUID)
 import qualified Data.UUID.Types as UUID
@@ -77,7 +59,6 @@ import {-# SOURCE #-} Database.PostgreSQL.Simple.ToRow
 import Database.PostgreSQL.Simple.Types
 import Foreign.C.Types (CUInt (..))
 import HPgsql.Encoding (ToPgField (..))
-import qualified HPgsql.TypeInfo as HPgsql
 
 -- | How to render an element when substituting it into a query.
 data Action
@@ -125,11 +106,6 @@ instance (ToField a) => ToField (Identity a) where
   toField (Identity a) = toField a
   {-# INLINE toField #-}
 
-instance (ToField a) => ToField (Maybe a) where
-  toField Nothing = renderNull
-  toField (Just a) = toField a
-  {-# INLINE toField #-}
-
 instance (ToField a) => ToField (In [a]) where
   toField (In []) = Plain $ byteString "(null)"
   toField (In xs) =
@@ -149,33 +125,8 @@ instance ToField Default where
   toField _ = Plain (byteString "default")
   {-# INLINE toField #-}
 
-instance ToField Bool where
-  toField True = Plain (byteString "true")
-  toField False = Plain (byteString "false")
-  {-# INLINE toField #-}
-
 instance ToField Int8 where
   toField = Plain . int8Dec
-  {-# INLINE toField #-}
-
-instance ToField Int16 where
-  toField = Plain . int16Dec
-  {-# INLINE toField #-}
-
-instance ToField Int32 where
-  toField = Plain . int32Dec
-  {-# INLINE toField #-}
-
-instance ToField Int where
-  toField = Plain . intDec
-  {-# INLINE toField #-}
-
-instance ToField Int64 where
-  toField = Plain . int64Dec
-  {-# INLINE toField #-}
-
-instance ToField Integer where
-  toField = Plain . integerDec
   {-# INLINE toField #-}
 
 instance ToField Word8 where
@@ -202,25 +153,6 @@ instance ToField PQ.Oid where
   toField = Plain . \(PQ.Oid (CUInt x)) -> word32Dec x
   {-# INLINE toField #-}
 
-instance ToField HPgsql.Oid where
-  toField (HPgsql.Oid oid) = toField (PQ.Oid $ fromIntegral oid)
-
-instance ToField Float where
-  toField v
-    | isNaN v || isInfinite v = Plain (inQuotes (floatDec v))
-    | otherwise = Plain (floatDec v)
-  {-# INLINE toField #-}
-
-instance ToField Double where
-  toField v
-    | isNaN v || isInfinite v = Plain (inQuotes (doubleDec v))
-    | otherwise = Plain (doubleDec v)
-  {-# INLINE toField #-}
-
-instance ToField Scientific where
-  toField x = toField (LT.toLazyText (scientificBuilder x))
-  {-# INLINE toField #-}
-
 instance ToField (Binary SB.ByteString) where
   toField (Binary bs) = EscapeByteA bs
   {-# INLINE toField #-}
@@ -244,50 +176,8 @@ instance ToField QualifiedIdentifier where
     EscapeIdentifier (ST.encodeUtf8 t)
   {-# INLINE toField #-}
 
-instance ToField SB.ByteString where
-  toField = Escape
-  {-# INLINE toField #-}
-
-instance ToField LB.ByteString where
-  toField = toField . SB.concat . LB.toChunks
-  {-# INLINE toField #-}
-
-instance ToField ST.Text where
-  toField = Escape . ST.encodeUtf8
-  {-# INLINE toField #-}
-
-instance ToField [Char] where
-  toField = Escape . toByteString . stringUtf8
-  {-# INLINE toField #-}
-
-instance ToField LT.Text where
-  toField = toField . LT.toStrict
-  {-# INLINE toField #-}
-
--- | citext
-instance ToField (CI ST.Text) where
-  toField = toField . CI.original
-  {-# INLINE toField #-}
-
--- | citext
-instance ToField (CI LT.Text) where
-  toField = toField . LT.toStrict . CI.original
-  {-# INLINE toField #-}
-
-instance ToField UTCTime where
-  toField = Plain . inQuotes . utcTimeToBuilder
-  {-# INLINE toField #-}
-
-instance ToField ZonedTime where
-  toField = Plain . inQuotes . zonedTimeToBuilder
-  {-# INLINE toField #-}
-
 instance ToField LocalTime where
   toField = Plain . inQuotes . localTimeToBuilder
-  {-# INLINE toField #-}
-
-instance ToField Day where
-  toField = Plain . inQuotes . dayToBuilder
   {-# INLINE toField #-}
 
 instance ToField TimeOfDay where
@@ -314,10 +204,6 @@ instance ToField NominalDiffTime where
   toField = Plain . inQuotes . nominalDiffTimeToBuilder
   {-# INLINE toField #-}
 
-instance ToField CalendarDiffTime where
-  toField = Plain . inQuotes . calendarDiffTimeToBuilder
-  {-# INLINE toField #-}
-
 instance (ToField a) => ToField (PGArray a) where
   toField pgArray =
     case fromPGArray pgArray of
@@ -336,17 +222,6 @@ instance (ToField a) => ToField (Vector a) where
 
 instance ToField UUID where
   toField = Plain . inQuotes . byteString . UUID.toASCIIBytes
-
-instance ToField JSON.Value where
-  toField = toField . JSON.encode
-
--- | Convert a Haskell value to JSON using 'JSON.toEncoding'.
---
--- This can be used as the default implementation for the 'toField'
--- method for Haskell types that have a JSON representation in
--- PostgreSQL.
-toJSONField :: (JSON.ToJSON a) => a -> Action
-toJSONField = toField . JSON.encode
 
 -- | Surround a string with single-quote characters: \"@'@\"
 --
