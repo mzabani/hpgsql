@@ -416,7 +416,6 @@ instance (ToPgField a) => ToPgField (Maybe a) where
   toPgField (Just n) = toPgField n
 
 class ToPgRow a where
-  -- TODO: Default implementation for records with `Generic`
   toPgParams :: a -> [(Maybe Oid, Maybe LBS.ByteString)]
 
 instance ToPgRow () where

@@ -75,7 +75,7 @@ tests:
 ## 
 # Runs hpgsql-simple-compat's tests.
 # OPTION PG --pg <pg> The version of the postgresql instance to start or 'all'. Defaults to 18 if unspecified.
-test-compat:
+tests-compat:
     set -eo pipefail
     [ -z "$PG" ] && PG=(18)
     [ "${PG[0]}" = "all" ] && PG=(14 15 16 17 18)

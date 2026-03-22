@@ -25,7 +25,7 @@ import Data.String (IsString (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import HPgsql.Encoding (ToPgField (..), ToPgRow (..))
+import HPgsql.Encoding (ToPgField (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), parseSql, sqlStatementText)
 import HPgsql.TypeInfo (Oid)
 import Language.Haskell.Meta.Parse (parseExp)
@@ -58,12 +58,11 @@ instance IsString Query where
      in Query $ fmap (\stmt -> SingleQuery (encodeUtf8 $ sqlStatementText stmt) []) statements
 
 -- | Takes in a query string with question marks as placeholders for query arguments,
--- e.g. "SELECT * FROM table WHERE col1=? AND col2=?", and a row object, and returns
+-- e.g. "SELECT * FROM table WHERE col1=? AND col2=?", and a list of query parameters, and returns
 -- the equivalent query for Hpgsql to run.
-mkQueryWithQuestionMarks :: (ToPgRow r) => ByteString -> r -> Query
-mkQueryWithQuestionMarks queryTemplate r =
-  let allParams = toPgParams r
-      statements = parseSql (decodeUtf8 queryTemplate)
+mkQueryWithQuestionMarks :: ByteString -> [(Maybe Oid, Maybe LBS.ByteString)] -> Query
+mkQueryWithQuestionMarks queryTemplate allParams =
+  let statements = parseSql (decodeUtf8 queryTemplate)
    in Query $ distributeParams allParams statements
   where
     processStatement :: SqlStatement -> (ByteString, Int)

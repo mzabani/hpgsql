@@ -130,20 +130,15 @@ where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import Data.ByteString.Builder (Builder, byteString, char8)
+import Data.ByteString.Builder (char8)
 import qualified Data.ByteString.Char8 as B
 import Data.Int (Int64)
 import Data.List (intersperse)
-import Data.String (fromString)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import Data.Word (Word8)
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Internal as Base
-import Database.PostgreSQL.Simple.ToField (Action (..), inQuotes)
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types
@@ -171,10 +166,12 @@ import qualified Streaming
 --
 -- Throws 'FormatError' if the query string could not be formatted
 -- correctly.
-formatMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO ByteString
+formatMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO HPgsql.Query
 formatMany _ q [] = fmtError "no rows supplied" q []
-formatMany _conn q@(Query template) qs =
-  case parseTemplate template of
+formatMany _conn q@(Query template) qs = do
+  -- First we replace the query string's ? with (?,?,?,...) with as many
+  -- parameters as each row contains
+  pgSimpleQuery <- case parseTemplate template of
     Nothing -> fmtError "query is not of the expected form" q []
     Just (before, qbits, after) ->
       let numCols = B.count '?' qbits
@@ -188,28 +185,13 @@ formatMany _conn q@(Query template) qs =
                 )
             [] ->
               pure $ before <> BS.intercalate "," (map renderRow qs) <> after
+  -- Now we ask HPgsql to parse the query with one ? per query parameter
+  pure $ HPgsql.mkQueryWithQuestionMarks pgSimpleQuery (concatMap HPgsql.toPgParams qs)
   where
     renderRow row =
       let numCols = length $ HPgsql.toPgParams row
        in toByteString $
             char8 '(' <> mconcat (intersperse (char8 ',') (replicate numCols "?")) <> char8 ')'
-
-    -- Standard SQL string escaping: double single quotes
-    escapeStringSQL :: ByteString -> ByteString
-    escapeStringSQL = BS.concatMap (\w -> if w == 39 then "''" else BS.singleton w)
-
-    -- Bytea hex format: \xDEADBEEF
-    escapeByteaHex :: ByteString -> ByteString
-    escapeByteaHex bs = "\\x" <> BS.concatMap (\w -> BS.pack [hexDigit (w `div` 16), hexDigit (w `mod` 16)]) bs
-
-    hexDigit :: Word8 -> Word8
-    hexDigit n
-      | n < 10 = n + 48
-      | otherwise = n + 87
-
-    -- SQL identifier escaping: double double quotes
-    escapeIdentSQL :: ByteString -> ByteString
-    escapeIdentSQL = BS.concatMap (\w -> if w == 34 then "\"\"" else BS.singleton w)
 
 -- Split the input string into three pieces, @before@, @qbits@, and @after@,
 -- following this grammar:
@@ -319,7 +301,7 @@ execute conn template qs =
     HPgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
 
 toHpgsqlQuery :: (HPgsql.ToPgRow q) => Query -> q -> HPgsql.Query
-toHpgsqlQuery (Query qry) params = HPgsql.mkQueryWithQuestionMarks qry params
+toHpgsqlQuery (Query qry) params = HPgsql.mkQueryWithQuestionMarks qry (HPgsql.toPgParams params)
 
 -- | Execute a multi-row @INSERT@, @UPDATE@, or other SQL query that is not
 -- expected to return results.
@@ -354,7 +336,7 @@ executeMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO Int64
 executeMany _ _ [] = return 0
 executeMany conn q qs = mapHpgsqlErrors $ do
   qry <- formatMany conn q qs
-  HPgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 qry)
+  HPgsql.execute (hpgConn conn) qry
 
 -- | Execute @INSERT ... RETURNING@, @UPDATE ... RETURNING@, or other SQL
 -- query that accepts multi-row input and is expected to return results.
