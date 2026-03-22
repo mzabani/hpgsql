@@ -3,7 +3,7 @@
 
 module EncodingDecodingSpec where
 
-import Control.Monad (void)
+import Control.Monad (join, void)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
@@ -295,7 +295,7 @@ queryEnumTypes conn = withRollback conn $ do
   -- yet. Then we add it and it will pass
   queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
-  refreshTypeInfoCache conn
+  join $ runPipeline conn $ refreshTypeInfoCache conn
   queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum" `shouldReturn` [Val2]
 
 data SomeGenericEnum = EVal1 | EVal2 | EVal3

@@ -342,7 +342,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
                 Right ReadyForQuery {} -> pure ()
               debugPrint $ "Connected with backend PID " ++ show (backendPid backendKeyData)
               let finalConn = hpgConnPartialDoNotReturn {connPid = backendPid backendKeyData, cancelSecretKey = backendSecretKey backendKeyData}
-              when (fillTypeInfoCache connOpts) $ refreshTypeInfoCache finalConn
+              when (fillTypeInfoCache connOpts) $ join $ runPipeline finalConn $ refreshTypeInfoCache finalConn
               pure finalConn
   where
     -- \| Unsafe version of `withSafeReceiveNextMsg`.
@@ -383,15 +383,21 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
 -- this just refreshes any other custom types, including removing those that
 -- no longer exist and adding new ones.
 -- HPgsql runs this automatically for new connections unless you disable it.
+-- This is a Pipeline so you can batch it with other commands for reduced latency.
 -- See `ConnectOpts` and `resetTypeInfoCache` for more.
-refreshTypeInfoCache :: HPgConnection -> IO ()
-refreshTypeInfoCache conn = do
+refreshTypeInfoCache :: HPgConnection -> Pipeline (IO ())
+refreshTypeInfoCache conn =
   -- TODO: Expose as a Pipeline so users can batch it with other typical
   -- connection-setup statements?
   -- https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
   -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
-  customTypes <- Map.fromList . map (second TypeInfo) <$> query conn "select oid, typname from pg_catalog.pg_type WHERE oid >= 16384"
-  modifyMVar_ conn.typeInfoCache $ \_ -> pure $ customTypes `Map.union` builtinPgTypesMap
+  let fetchPipeline = pipelineL rowParser "select oid, typname from pg_catalog.pg_type WHERE oid >= 16384"
+   in fillTypeInfoCache <$> fetchPipeline
+  where
+    fillTypeInfoCache queryResultsIO = do
+      queryResults <- queryResultsIO
+      let customTypes = Map.fromList $ map (second TypeInfo) queryResults
+      modifyMVar_ conn.typeInfoCache $ \_ -> pure $ customTypes `Map.union` builtinPgTypesMap
 
 -- | Useful to reset the connection's internal typeInfo cache
 -- to the builtin postgres types.
@@ -490,21 +496,23 @@ receiveNextMsgWithMaskedContinuation conn parser f =
 -- be really cheap!
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either Char a -> IO b) -> IO b
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = rethrowAsIrrecoverable $ do
-  -- \^ We rethrow as irrecoverable because an error here is likely a socket receiving error
+  -- \^ We rethrow as irrecoverable because an error here is likely a socket receiving error.
+  --
   -- We need to preserve the invariant that the internal buffer's first byte is
-  -- always the first byte of a valid Message, while keeping this function
+  -- always the first byte of a valid Message while keeping this function
   -- interruptible.
   -- This means we can't extract a message partially from the internal buffer,
   -- even in face of asynchronous exceptions.
-  -- So we append to the buffer up until the time to extract a message from the buffer,
-  -- at which point we use masking.
-  bufLen <- receiveUntilBufferHasAtLeast 5
-  charAndLength <- peekIntoBuffer 5
+  -- So we append to the buffer up until it has been fully fetched,
+  -- and then extract it from the buffer in one piece.
+  currentBuf <- receiveUntilBufferHasAtLeast 5
+  let bufLen = LBS.length currentBuf
+  let charAndLength = LBS.take 5 currentBuf
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
       lenLeftToFetch :: Int64 = fromIntegral $ either error id (Cereal.decodeLazy @Int32 lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
-  when (bufLen < fullMessageLen) $ void $ receiveUntilBufferHasAtLeast fullMessageLen
-  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMessageLen
+  restOfMsg <- LBS.drop 5 . LBS.take fullMessageLen <$> if bufLen >= fullMessageLen then pure currentBuf else receiveUntilBufferHasAtLeast fullMessageLen
+  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen
   -- We don't let `go` recursively call itself or even `receivedNoticeOrParameterSoTryAgain`
   -- because it would inherit its own masking, which would be bad!
   -- We don't want to have to test the behaviour of our functions with both
@@ -513,8 +521,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
     Nothing -> receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f
     Just res -> pure res
   where
-    go msgIdentChar fullMessageLen = mask_ $ do
-      restOfMsg <- LBS.drop 5 <$> peekIntoBuffer fullMessageLen
+    go msgIdentChar restOfMsg fullMessageLen = mask_ $ do
       case parsePgMessage msgIdentChar restOfMsg parser of
         Just msg -> do
           removeFirstBytesFromBufferOrThrow fullMessageLen
@@ -559,12 +566,14 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
-    -- Returns the final buffer's length.
-    receiveUntilBufferHasAtLeast :: Int64 -> IO Int64
+    -- Returns the current buffer.
+    receiveUntilBufferHasAtLeast :: Int64 -> IO LBS.ByteString
     receiveUntilBufferHasAtLeast minBytesNecessary = do
-      nBytesInBuffer <- LBS.length <$> readMVar recvBuffer
-      if nBytesInBuffer < minBytesNecessary
-        then do
+      currentBuffer <- readMVar recvBuffer
+      let nBytesInBuffer = LBS.length currentBuffer
+      if nBytesInBuffer >= minBytesNecessary
+        then pure currentBuffer
+        else do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
           modifyMVar_ recvBuffer $ \lbs -> mask $ \restore -> do
@@ -572,11 +581,6 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
             pure (lbs <> LBS.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
-        else
-          pure nBytesInBuffer
-
-    peekIntoBuffer :: Int64 -> IO LBS.ByteString
-    peekIntoBuffer n = LBS.take n <$> readMVar recvBuffer
 
 sendCancellationRequest :: HPgConnection -> IO ()
 sendCancellationRequest conn = do
@@ -957,7 +961,7 @@ queryWithStreaming rparser conn qry = join $ runPipeline conn $ pipelineS rparse
 -- It is important to note the same thread that runs this must be the thread that
 -- consumes the returned Stream, and the returned Stream must be consumed completely
 -- (up to the last row or a postgres error) before you are able to run other queries.
-queryStreaming :: FromPgRow a => HPgConnection -> Query -> IO (Stream (Of a) IO ())
+queryStreaming :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryStreaming = queryWithStreaming rowParser
 
 getMyWeakThreadId :: IO WeakThreadId
