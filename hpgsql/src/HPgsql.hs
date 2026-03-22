@@ -3,7 +3,10 @@ module HPgsql
     queryWith,
     queryWithStreaming,
     queryStreaming,
+    copyStart,
+    copyEnd,
     putCopyData,
+    withCopy,
     withConnection,
     withConnectionOpts,
     ConnString (..),
@@ -36,7 +39,6 @@ module HPgsql
     connectionTransactionStatus,
     mkQuery,
     runPipeline,
-    withCopy,
     pipelineCmd,
     pipelineL,
     pipelineS,
@@ -1282,10 +1284,53 @@ withCopy conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) copyFn
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       copyFn
-      copyEnd conn qryId
+      copyEndInternal conn qryId
 
-copyEnd :: HPgConnection -> QueryId -> IO Int64
-copyEnd conn qryId = do
+copyStart :: HPgConnection -> Query -> IO ()
+copyStart conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) = do
+  -- If the query contains not just COPY, but other statements before, we run
+  -- those. This is awkward, but what else should we do? Throw?
+  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmd (Query fqne)
+  thisThreadId <- getMyWeakThreadId
+  atomicallyInitiatePipelineOrPanicAndThenConsumeResults
+    conn
+    ((queryString, CopyQuery StillCopying) :| [])
+    [ SomeMessage $ Parse queryString (map fst queryParams),
+      SomeMessage $ Bind {paramsValuesInOrder = map snd queryParams, resultColumnFmts = []},
+      -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
+      SomeMessage Execute,
+      SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
+    ]
+    $ \(qryId :| _) -> do
+      -- TODO: If this part is interrupted, I doubt Hpgsql can resume execution
+      -- sanely! Maybe at least for now we could detect an async exception and
+      -- rethrow an irrecoverable error? It could still go unnoticed in a
+      -- dead thread, though.
+      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+
+putCopyData :: HPgConnection -> ByteString -> IO ()
+putCopyData conn t = nonAtomicSendMsg conn (CopyData t)
+
+copyEnd :: HPgConnection -> IO Int64
+copyEnd conn = do
+  thisThreadId <- getMyWeakThreadId
+  qryId <- STM.atomically $ do
+    st <- STM.readTVar conn.internalConnectionState
+    case st.currentPipeline of
+      [] -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd"
+      [qs] -> case qs.queryProtocol of
+        ExtendedQuery -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd, but rather there was a regular query"
+        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was issued by a different thread, and HPgsql does not support multiple threads running/ending the same COPY statement"
+        CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was already finished"
+        CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement had previously failed"
+      _ -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active pipeline with other statements running when a copyEnd was attempted"
+
+  copyEndInternal conn qryId
+
+copyEndInternal :: HPgConnection -> QueryId -> IO Int64
+copyEndInternal conn qryId = do
   atomicallySendControlMsgs_
     conn
     ( [SomeMessage CopyDone, SomeMessage Sync],
@@ -1333,9 +1378,6 @@ atomicallySendControlMsgs conn acquire release f = do
        in modifyMVar (sendBuffer conn) $ \msgsInBuffer ->
             -- Use a DList for appends? Probably not worth it since there are so few control messages.
             pure (msgsInBuffer ++ [(Builder.toLazyByteString (mconcat $ map toPgMessage msgs), afterSentTxn)], ret)
-
-putCopyData :: HPgConnection -> ByteString -> IO ()
-putCopyData conn t = nonAtomicSendMsg conn (CopyData t)
 
 -- | This function is thread-and-interruption-safe, so you
 -- can run it with the same connection in parallel to any other functions.

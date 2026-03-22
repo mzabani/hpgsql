@@ -26,6 +26,7 @@ library
   exposed-modules:
     Database.PostgreSQL.Simple
     Database.PostgreSQL.Simple.Arrays
+    Database.PostgreSQL.Simple.Copy
     Database.PostgreSQL.Simple.Errors
     Database.PostgreSQL.Simple.FromField
     Database.PostgreSQL.Simple.FromRow
@@ -50,6 +51,7 @@ library
   -- Other-modules:
   other-modules:
     Database.PostgreSQL.Simple.Compat
+    Database.PostgreSQL.Simple.HpgsqlUtils
     Database.PostgreSQL.Simple.HStore.Implementation
     Database.PostgreSQL.Simple.Internal.PQResultUtils
     Database.PostgreSQL.Simple.Time.Implementation

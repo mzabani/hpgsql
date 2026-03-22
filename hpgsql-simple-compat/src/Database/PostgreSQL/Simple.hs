@@ -138,6 +138,7 @@ import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
+import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
 import Database.PostgreSQL.Simple.Internal as Base
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Transaction
@@ -299,9 +300,6 @@ execute :: (HPgsql.ToPgRow q) => Connection -> Query -> q -> IO Int64
 execute conn template qs =
   mapHpgsqlErrors $
     HPgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
-
-toHpgsqlQuery :: (HPgsql.ToPgRow q) => Query -> q -> HPgsql.Query
-toHpgsqlQuery (Query qry) params = HPgsql.mkQueryWithQuestionMarks qry (HPgsql.toPgParams params)
 
 -- | Execute a multi-row @INSERT@, @UPDATE@, or other SQL query that is not
 -- expected to return results.

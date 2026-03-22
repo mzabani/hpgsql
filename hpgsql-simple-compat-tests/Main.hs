@@ -34,6 +34,7 @@ import qualified Data.Text.Encoding as T
 import Data.Time.Compat (diffUTCTime, getCurrentTime)
 import Data.Typeable
 import qualified Data.Vector as V
+import Database.PostgreSQL.Simple.Copy
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.HStore
 import Database.PostgreSQL.Simple.Newtypes
@@ -69,23 +70,23 @@ tests env =
         testCase "Time" . testTime,
         -- , testCase "Interval"             . testInterval
         testCase "Array" . testArray,
-        testCase "Array of nullables"   . testNullableArray,
+        testCase "Array of nullables" . testNullableArray,
         -- , testCase "HStore"               . testHStore
         -- , testCase "citext"               . testCIText
-        testCase "JSON"                 . testJSON,
-        testCase "Aeson newtype"        . testAeson,
+        testCase "JSON" . testJSON,
+        testCase "Aeson newtype" . testAeson,
         -- , testCase "DerivingVia"          . testDerivingVia
         -- , testCase "Question mark escape" . testQM
-        testCase "Savepoint"            . testSavepoint,
-        testCase "Unicode"              . testUnicode,
+        testCase "Savepoint" . testSavepoint,
+        testCase "Unicode" . testUnicode,
         -- testCase "Values" . testValues,
-        -- , testCase "Copy"                 . testCopy
-        -- , testCopyFailures
+        -- testCase "Copy"                 . testCopy,
+        testCopyFailures,
         testCase "Double" . testDouble,
-        -- testCase "1-ary generic"        . testGeneric1,
+        -- testCase "1-ary generic" . testGeneric1,
         -- , testCase "2-ary generic"        . testGeneric2
         -- , testCase "3-ary generic"        . testGeneric3
-        testCase "Timeout"              . testTimeout,
+        testCase "Timeout" . testTimeout,
         testCase "Exceptions" . testExceptions
       ]
 
@@ -511,14 +512,14 @@ testValues TestEnv {..} = do
 --         CopyOutDone _ -> return rows
 --         CopyOutRow row -> loop (row : rows)
 
--- testCopyFailures :: TestEnv -> TestTree
--- testCopyFailures env =
---   testGroup "Copy failures" $
---     map
---       ($ env)
---       [ testCopyUniqueConstraintError,
---         testCopyMalformedError
---       ]
+testCopyFailures :: TestEnv -> TestTree
+testCopyFailures env =
+  testGroup "Copy failures" $
+    map
+      ($ env)
+      [ testCopyUniqueConstraintError,
+        testCopyMalformedError
+      ]
 
 goldenTest :: TestName -> IO BL.ByteString -> TestTree
 goldenTest testName =
@@ -531,38 +532,38 @@ goldenTest testName =
       | otherwise = c
     diff ref new = ["diff", "-u", ref, new]
 
--- -- | Test that we provide a sensible error message on failure
--- testCopyUniqueConstraintError :: TestEnv -> TestTree
--- testCopyUniqueConstraintError TestEnv {..} =
---   goldenTest "unique constraint violation" $
---     handle (\(SomeException exc) -> return $ BL.pack $ show exc) $ do
---       execute_ conn "CREATE TEMPORARY TABLE copy_unique_constraint_error_test (x int PRIMARY KEY, y text)"
---       copy_ conn "COPY copy_unique_constraint_error_test FROM STDIN (FORMAT CSV)"
---       mapM_ (putCopyData conn) copyRows
---       _n <- putCopyEnd conn
---       return BL.empty
---   where
---     copyRows =
---       [ "1,foo\n",
---         "2,bar\n",
---         "1,baz\n"
---       ]
+-- | Test that we provide a sensible error message on failure
+testCopyUniqueConstraintError :: TestEnv -> TestTree
+testCopyUniqueConstraintError TestEnv {..} =
+  goldenTest "unique constraint violation" $
+    handle (\(SomeException exc) -> return $ BL.pack $ show exc) $ do
+      execute_ conn "CREATE TEMPORARY TABLE copy_unique_constraint_error_test (x int PRIMARY KEY, y text)"
+      copy_ conn "COPY copy_unique_constraint_error_test FROM STDIN (FORMAT CSV)"
+      mapM_ (putCopyData conn) copyRows
+      _n <- putCopyEnd conn
+      return BL.empty
+  where
+    copyRows =
+      [ "1,foo\n",
+        "2,bar\n",
+        "1,baz\n"
+      ]
 
--- testCopyMalformedError :: TestEnv -> TestTree
--- testCopyMalformedError TestEnv {..} =
---   goldenTest "malformed input" $
---     handle (\(SomeException exc) -> return $ BL.pack $ show exc) $ do
---       execute_ conn "CREATE TEMPORARY TABLE copy_malformed_input_error_test (x int PRIMARY KEY, y text)"
---       copy_ conn "COPY copy_unique_constraint_error_test FROM STDIN (FORMAT CSV)"
---       mapM_ (putCopyData conn) copyRows
---       _n <- putCopyEnd conn
---       return BL.empty
---   where
---     copyRows =
---       [ "1,foo\n",
---         "2,bar\n",
---         "z,baz\n"
---       ]
+testCopyMalformedError :: TestEnv -> TestTree
+testCopyMalformedError TestEnv {..} =
+  goldenTest "malformed input" $
+    handle (\(SomeException exc) -> return $ BL.pack $ show exc) $ do
+      execute_ conn "CREATE TEMPORARY TABLE copy_malformed_input_error_test (x int PRIMARY KEY, y text)"
+      copy_ conn "COPY copy_unique_constraint_error_test FROM STDIN (FORMAT CSV)"
+      mapM_ (putCopyData conn) copyRows
+      _n <- putCopyEnd conn
+      return BL.empty
+  where
+    copyRows =
+      [ "1,foo\n",
+        "2,bar\n",
+        "z,baz\n"
+      ]
 
 testTimeout :: TestEnv -> Assertion
 testTimeout TestEnv {..} =
