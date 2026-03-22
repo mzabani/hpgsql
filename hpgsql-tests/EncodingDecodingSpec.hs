@@ -190,10 +190,11 @@ jsonValuesRoundTrip conn = hedgehog $ do
   jsonVal2 :: Aeson.Value <- Gen.forAll genJsonValue
   jsonVal3 :: Aeson.Value <- Gen.forAll genJsonValue
   let row = (jsonVal1, jsonVal2, jsonVal3)
-  [(v1, v2, v3) :: (Aeson.Value, PgJson, PgJson)] <- liftIO $ queryWith rowParser conn [sql|SELECT #{jsonVal1}, #{jsonVal2}::json, #{jsonVal3}::jsonb|]
+  [(v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson)] <- liftIO $ queryWith rowParser conn [sql|SELECT #{jsonVal1}, #{jsonVal1}::jsonb, #{jsonVal2}::json, #{jsonVal3}::jsonb|]
   v1 === jsonVal1
-  Aeson.toJSON v2 === jsonVal2
-  Aeson.toJSON v3 === jsonVal3
+  v2 === jsonVal1
+  Aeson.toJSON v3 === jsonVal2
+  Aeson.toJSON v4 === jsonVal3
 
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do
@@ -241,12 +242,17 @@ queryCompositeType conn = withRollback conn $ do
   queryWith intAndBoolParserNullableValue conn "SELECT NULL::int_and_bool" `shouldReturn` [Nothing]
 
 queryArrayTypes :: HPgConnection -> IO ()
-queryArrayTypes conn = withRollback conn $ do
+queryArrayTypes conn = do
+  -- TODO: hedgehog gen arrays with varying lengths, NULLs, etc.
   queryWith (rowParser @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
   queryWith (rowParser @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
   queryWith (rowParser @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]
   queryWith (rowParser @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
   queryWith (rowParser @(Only (Vector Aeson.Value))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)) `shouldReturn` [Only $ Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]]
+  let multiDimArray1 = Vector.fromList [Vector.fromList [1, 2, 3, 4], Vector.fromList [4, 5, 6, 7 :: Int]]
+  query conn [sql|SELECT ARRAY[ARRAY[1,2,3,4],ARRAY[4,5,6, 7]]|] `shouldReturn` [Only multiDimArray1]
+  let multiDimArray2 = Vector.fromList [Vector.fromList [1, 2, 3], Vector.fromList [4, 5, 6 :: Int], Vector.fromList [7, 8, 9 :: Int]]
+  query conn [sql|SELECT ARRAY[ARRAY[1,2,3],ARRAY[4,5,6], ARRAY[7,8,9]]|] `shouldReturn` [Only multiDimArray2]
 
 data MyEnum = Val1 | Val2 | Val3
   deriving stock (Eq, Show)

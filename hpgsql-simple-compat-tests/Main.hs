@@ -61,32 +61,32 @@ tests env =
       -- Some files for the tests below have been removed
       -- to make hpgsql-simple-compat simply compile.
       -- We should bring them back little by little.
-      [ -- testBytea,
+      [ testBytea,
         testCase "ExecuteMany" . testExecuteMany,
         -- testCase "Fold"                 . testFold
         testCase "Notify" . testNotify,
-        -- testCase "Serializable" . testSerializable
-        testCase "Time" . testTime
+        testCase "Serializable" . testSerializable,
+        testCase "Time" . testTime,
         -- , testCase "Interval"             . testInterval
-        -- , testCase "Array"                . testArray
-        -- , testCase "Array of nullables"   . testNullableArray
+        testCase "Array" . testArray,
+        testCase "Array of nullables"   . testNullableArray,
         -- , testCase "HStore"               . testHStore
         -- , testCase "citext"               . testCIText
-        -- , testCase "JSON"                 . testJSON
-        -- , testCase "Aeson newtype"        . testAeson
+        testCase "JSON"                 . testJSON,
+        testCase "Aeson newtype"        . testAeson,
         -- , testCase "DerivingVia"          . testDerivingVia
         -- , testCase "Question mark escape" . testQM
-        -- , testCase "Savepoint"            . testSavepoint
-        -- , testCase "Unicode"              . testUnicode
-        -- , testCase "Values"               . testValues
+        testCase "Savepoint"            . testSavepoint,
+        testCase "Unicode"              . testUnicode,
+        -- testCase "Values" . testValues,
         -- , testCase "Copy"                 . testCopy
         -- , testCopyFailures
-        -- , testCase "Double"               . testDouble
-        -- , testCase "1-ary generic"        . testGeneric1
+        testCase "Double" . testDouble,
+        -- testCase "1-ary generic"        . testGeneric1,
         -- , testCase "2-ary generic"        . testGeneric2
         -- , testCase "3-ary generic"        . testGeneric3
-        -- , testCase "Timeout"              . testTimeout
-        -- , testCase "Exceptions"           . testExceptions
+        testCase "Timeout"              . testTimeout,
+        testCase "Exceptions" . testExceptions
       ]
 
 testBytea :: TestEnv -> TestTree
@@ -454,10 +454,22 @@ testUnicode TestEnv {..} = do
   messages' <- query_ conn "SELECT сообщение FROM ру́сский"
   sort messages @?= sort messages'
 
--- TODO: This test needs reworking for HPgsql since `execute` uses HPgsql.ToPgRow,
--- not ToRow/ToField, so `Values` can't be used as a parameter directly.
 testValues :: TestEnv -> Assertion
-testValues TestEnv {..} = error "TODO HPgsql"
+testValues TestEnv {..} = do
+  execute_ conn "CREATE TEMPORARY TABLE values_test (x int, y text)"
+  test (Values ["int4", "text"] [])
+  test (Values ["int4", "text"] [(1, "hello")])
+  test (Values ["int4", "text"] [(1, "hello"), (2, "world")])
+  test (Values ["int4", "text"] [(1, "hello"), (2, "world"), (3, "goodbye")])
+  test (Values [] [(1, "hello")])
+  test (Values [] [(1, "hello"), (2, "world")])
+  test (Values [] [(1, "hello"), (2, "world"), (3, "goodbye")])
+  where
+    test :: Values (Int, Text) -> Assertion
+    test table@(Values _ vals) = do
+      execute conn "INSERT INTO values_test ?" (Only table)
+      vals' <- query_ conn "DELETE FROM values_test RETURNING *"
+      sort vals @?= sort vals'
 
 -- testCopy :: TestEnv -> Assertion
 -- testCopy TestEnv {..} = do

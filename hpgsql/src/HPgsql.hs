@@ -983,16 +983,19 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
     -- If this thread is interrupted now, it is ok: only `totalQueriesSent` was bumped, but `currentPipeline`
     -- is still empty (it will be modified once we send all control messages to postgres).
     -- This is Note [Only modify totalQueriesSent]
-    let newPipeline = zipWith (\queryIdentifier (queryText, queryProtocol) -> QueryState {queryIdentifier, queryText, queryOwner = thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
-    atomicallySendControlMsgs_
-      conn
-      ( allMsgs,
-        do
-          st <- STM.readTVar (internalConnectionState conn)
-          STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = newPipeline}
-      )
-    debugPrint $ "+++ Sent QueryIds " ++ show [nextId .. lastId]
-    pure $ fmap queryIdentifier (NE.fromList newPipeline)
+    let newPipelineList = zipWith (\queryIdentifier (queryText, queryProtocol) -> QueryState {queryIdentifier, queryText, queryOwner = thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
+    case NE.nonEmpty newPipelineList of
+      Nothing -> throwIrrecoverableError "Bug in Hpgsql: empty newPipeline to be sent"
+      Just newPipeline -> do
+        atomicallySendControlMsgs_
+          conn
+          ( allMsgs,
+            do
+              st <- STM.readTVar (internalConnectionState conn)
+              STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = NE.toList newPipeline}
+          )
+        debugPrint $ "+++ Sent QueryIds " ++ show [nextId .. lastId]
+        pure $ fmap queryIdentifier newPipeline
   continuation qryIds
   where
     getUniqueQueryStatesForNewPipeline :: NonEmpty (ByteString, QueryProtocol) -> STM (QueryId, QueryId)
@@ -1193,23 +1196,25 @@ pipelineCmd (Query qs) =
 -- results of every query in the supplied pipeline, and in order.
 -- Anything else is not officially supported by HPgsql and may result in deadlocks or undefined behaviour.
 runPipeline :: HPgConnection -> Pipeline a -> IO a
-runPipeline conn (Pipeline [] run) = pure $ run conn []
-runPipeline conn (Pipeline (NE.fromList -> queries) run) = do
-  let toMessages (SingleQuery qryString qryParams, mExpectedResultColFmts) =
-        [ SomeMessage $ Parse qryString (map fst qryParams),
-          SomeMessage $
-            Bind
-              { paramsValuesInOrder = map snd qryParams,
-                resultColumnFmts = fromMaybe [BinaryFmt] mExpectedResultColFmts
-              },
-          SomeMessage Describe,
-          SomeMessage Execute
-        ]
-  atomicallyInitiatePipelineOrPanicAndThenConsumeResults
-    conn
-    (fmap (\(SingleQuery {queryString}, _) -> (queryString, ExtendedQuery)) queries)
-    (concatMap toMessages queries ++ [SomeMessage Sync])
-    $ \qryIds -> pure $ run conn (NE.toList qryIds)
+runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
+  case mQueries of
+    Nothing -> pure $ run conn []
+    Just queries -> do
+      let toMessages (SingleQuery qryString qryParams, mExpectedResultColFmts) =
+            [ SomeMessage $ Parse qryString (map fst qryParams),
+              SomeMessage $
+                Bind
+                  { paramsValuesInOrder = map snd qryParams,
+                    resultColumnFmts = fromMaybe [BinaryFmt] mExpectedResultColFmts
+                  },
+              SomeMessage Describe,
+              SomeMessage Execute
+            ]
+      atomicallyInitiatePipelineOrPanicAndThenConsumeResults
+        conn
+        (fmap (\(SingleQuery {queryString}, _) -> (queryString, ExtendedQuery)) queries)
+        (concatMap toMessages queries ++ [SomeMessage Sync])
+        $ \qryIds -> pure $ run conn (NE.toList qryIds)
 
 consumeStreamingResults :: RowParser a -> HPgConnection -> QueryId -> Stream (Of a) IO ()
 consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryId = S.effect $ do
@@ -1410,10 +1415,12 @@ lastAndInit xs = case NE.nonEmpty xs of
   Just nxs -> second Just $ lastAndInitNE nxs
 
 lastAndInitNE :: NonEmpty a -> ([a], a)
-lastAndInitNE (x :| []) = ([], x)
 lastAndInitNE (x :| xs) =
-  let (others, l) = lastAndInitNE (NE.fromList xs)
-   in (x : others, l)
+  case NE.nonEmpty xs of
+    Nothing -> ([], x)
+    Just neXs ->
+      let (others, l) = lastAndInitNE neXs
+       in (x : others, l)
 
 whenNonEmpty :: [a] -> (NonEmpty a -> IO b) -> IO ()
 whenNonEmpty [] _ = pure ()

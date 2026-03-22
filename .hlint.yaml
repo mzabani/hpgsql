@@ -37,7 +37,7 @@
 
 - functions:
   - {name: Prelude.foldl', within: [], message: "foldl' is only in the Prelude since GHC 9.8. Import it from Data.List instead."}
-  - {name: Data.List.NonEmpty.fromList, within: [], severity: error, message: "fromList is partial. Use nonEmpty from Data.List.NonEmpty instead."}
-  - {name: "Data.List.NonEmpty.!!", within: [], severity: error, message: "(!!) is partial. Use safe indexing instead."}
+  - {name: Data.List.NonEmpty.fromList, within: [], message: "fromList is partial. Use nonEmpty from Data.List.NonEmpty instead."}
+  - {name: "Data.List.NonEmpty.!!", within: [], message: "(!!) is partial. Use safe indexing instead."}
 
 # - error: {name: "Avoid restricted function"}

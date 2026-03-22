@@ -62,10 +62,9 @@ instance FromPgField PgJson where
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
-             in \mbs ->
-                  case mbs of
-                    Just bs -> Right $ PgJson $ fixJsonb bs
-                    Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
+             in \case
+                  Just bs -> Right $ PgJson $ fixJsonb bs
+                  Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
@@ -83,12 +82,11 @@ instance (FromJSON a) => FromPgField (Aeson a) where
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
-             in \mbs ->
-                  case mbs of
-                    Just bs -> case Aeson.decode $ fixJsonb bs of
-                      Just v -> Right $ Aeson v
-                      Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?"
-                    Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
+             in \case
+                  Just bs -> case Aeson.decode $ fixJsonb bs of
+                    Just v -> Right $ Aeson v
+                    Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?"
+                  Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }

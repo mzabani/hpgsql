@@ -202,7 +202,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
       numCols <- fromIntegral <$> int32Parser
       let numColsExpected = length resultColumnsFmts
       unless (numCols == numColsExpected) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numColsExpected
-      let mkColInfo = \oid -> ColumnInfo oid typeInfoCache
+      let mkColInfo oid = ColumnInfo oid typeInfoCache
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
         (LBS.fromStrict -> sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
@@ -763,12 +763,11 @@ instance FromPgField Aeson.Value where
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
-             in \mbs ->
-                  case mbs of
-                    Just bs -> case Aeson.decode $ fixJsonb bs of
-                      Just d -> Right d
-                      Nothing -> Left "Bug in HPgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
-                    Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
+             in \case
+                  Just bs -> case Aeson.decode $ fixJsonb bs of
+                    Just d -> Right d
+                    Nothing -> Left "Bug in HPgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
@@ -809,15 +808,55 @@ instance forall a. (FromPgField a) => FromPgField (Vector a) where
         when (ndim /= 1) $ fail $ "TODO: No support for multi-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
         !dim_i :: Int <- fromIntegral <$> int32Parser
         !_lb_i <- int32Parser
-        -- TODO: Check binary/text compatibility somehow?
-        -- TODO: Allocate vector with right size for performance, use `runST` or something?
+        -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
         unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
-        fmap Vector.fromList $ replicateM dim_i $ do
+        Vector.replicateM dim_i $ do
           size :: Int <- fromIntegral <$> int32Parser
           elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
           case elementParser.fieldValueParser elementColInfo elementBs of
             Left err -> fail $ "Error parsing array element: " ++ show err
             Right el -> pure el
+
+instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
+  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
+  fieldParser =
+    FieldParser
+      { fieldValueParser = \colInfo ->
+          let !arrayFieldParser = arrayParser colInfo.typeInfoCache <* Parsec.endOfInput
+           in \case
+                Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector (Vector a))`"
+                Just bs -> Parsec.parseOnly arrayFieldParser bs,
+        fieldFmt = BinaryFmt,
+        allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
+      }
+    where
+      !elementParser = fieldParser @a
+      arrayParser :: Map Oid TypeInfo -> Parsec.Parser (Vector (Vector a))
+      arrayParser typeInfoCache = do
+        !ndim <- int32Parser
+        !_hasNull <- int32Parser
+        !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
+        let !elementColInfo = ColumnInfo elementTypeOid typeInfoCache
+        when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
+        unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+        -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
+        numRows <- do
+          !dim_i :: Int <- fromIntegral <$> int32Parser
+          !_lb_i <- int32Parser
+          pure dim_i
+        lengthEachRow <- do
+          !dim_i :: Int <- fromIntegral <$> int32Parser
+          !_lb_i <- int32Parser
+          pure dim_i
+
+        Vector.replicateM numRows $ do
+          Vector.replicateM lengthEachRow $
+            do
+              size :: Int <- fromIntegral <$> int32Parser
+              elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
+              case elementParser.fieldValueParser elementColInfo elementBs of
+                Left err -> fail $ "Error parsing array element: " ++ show err
+                Right el -> pure el
 
 int32Parser :: Parsec.Parser Int32
 int32Parser = either fail pure . Cereal.decode @Int32 =<< Parsec.take 4
