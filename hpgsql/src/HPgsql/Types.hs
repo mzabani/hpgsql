@@ -2,7 +2,8 @@ module HPgsql.Types
   ( Aeson (..),
     PgJson, -- Do not export ctor
     Values (..),
-    valuesToQuery,
+    commaSeparatedRows,
+    valuesToQuery
   )
 where
 
@@ -28,17 +29,28 @@ newtype Values a = Values [a]
 -- Can be embedded inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:
 --
 -- > [sql| INSERT INTO emp(id,name) ^{valuesToQuery (Values rows)} ON CONFLICT DO NOTHING |]
+--
+-- You will find `commaSeparatedRows` very similar to this function.
 valuesToQuery :: (ToPgRow a) => Values a -> Query
 valuesToQuery (Values []) = Query $ NE.singleton $ SingleQuery "" []
-valuesToQuery (Values rows@(firstRow : _)) =
+valuesToQuery (Values rows) = "VALUES " <> commaSeparatedRows rows
+
+-- | Generates a query like @($1,$2), ($3,$4)@ from a list of rows.
+-- Can be embedded inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:
+--
+-- > [sql| INSERT INTO emp(id,name) (VALUES ^{commaSeparatedRows rows)} ON CONFLICT DO NOTHING |]
+--
+-- You will find `valuesToQuery` very similar to this function.
+commaSeparatedRows :: (ToPgRow a) => [a] -> Query
+commaSeparatedRows [] = Query $ NE.singleton $ SingleQuery "" []
+commaSeparatedRows rows@(firstRow : _) =
   let allParams = concatMap toPgParams rows
       numCols = length (toPgParams firstRow)
       rowPlaceholder :: Int -> Text
       rowPlaceholder startIdx =
         "(" <> Text.intercalate ", " ["$" <> Text.pack (show (startIdx + i)) | i <- [0 .. numCols - 1]] <> ")"
-      valuesClause = Text.intercalate ", " [rowPlaceholder (rowIdx * numCols + 1) | rowIdx <- [0 .. length rows - 1]]
-      fullSql = encodeUtf8 $ "VALUES " <> valuesClause
-   in Query $ NE.singleton $ SingleQuery fullSql allParams
+      commaSepArgs = Text.intercalate ", " [rowPlaceholder (rowIdx * numCols + 1) | rowIdx <- [0 .. length rows - 1]]
+   in Query $ NE.singleton $ SingleQuery (encodeUtf8 commaSepArgs) allParams
 
 -- | A JSON type that does not incur the costs of deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates

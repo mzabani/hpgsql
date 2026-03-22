@@ -1187,7 +1187,8 @@ pipelineCmd (Query qs) =
             consumeResultsIgnoreRows conn (fromMaybe (error "pipelineCmd internal bug: no mLastQry") mLastQry)
     )
 
--- | Runs a pipeline of statements.
+-- | Runs a pipeline of statements, that is, sends multiple SQL statements in a single round-trip
+-- to the server.
 -- Note that the thread that runs this must be the thread that consumes the
 -- results of every query in the supplied pipeline, and in order.
 -- Anything else is not officially supported by HPgsql and may result in deadlocks or undefined behaviour.
