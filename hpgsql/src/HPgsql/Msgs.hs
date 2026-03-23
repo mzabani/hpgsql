@@ -22,7 +22,7 @@ import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
 import Data.Word (Word8)
-import HPgsql.TypeInfo (Format (..), Oid (..))
+import HPgsql.TypeInfo (Format (..), Oid (..), TransactionStatus (..))
 
 class ToPgMessage a where
   toPgMessage :: a -> Builder
@@ -142,10 +142,6 @@ data ParseComplete = ParseComplete
 
 data ParameterStatus = ParameterStatus {parameterName :: !Text, parameterValue :: !Text}
   deriving stock (Show)
-
--- | This replicates the postgresql-libpq constructor, because why not?
-data TransactionStatus = TransIdle | TransInTrans | TransInError
-  deriving stock (Eq, Show)
 
 newtype ReadyForQuery
   = ReadyForQuery TransactionStatus

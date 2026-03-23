@@ -1,7 +1,10 @@
-module Database.PostgreSQL.LibPQ (fname, unescapeBytea, Column(..), ExecStatus(..), Format(..), Oid(..), Result(..), Row(..)) where
+module Database.PostgreSQL.LibPQ (fname, transactionStatus, Column (..), Connection (..), ExecStatus (..), Format (..), Oid (..), Result (..), Row (..), TransactionStatus (..)) where
 
 import Data.ByteString (ByteString)
-import HPgsql.TypeInfo (Oid(..))
+import qualified HPgsql
+import HPgsql.TypeInfo (Oid (..), TransactionStatus (..))
+
+data Connection = Connection {hpgConn :: HPgsql.HPgConnection}
 
 data ExecStatus = FatalError
   deriving (Eq, Show)
@@ -17,5 +20,5 @@ data Format = Text | Binary
 fname :: Result -> Column -> IO (Maybe ByteString)
 fname _ _ = pure Nothing
 
-unescapeBytea :: ByteString -> IO (Maybe ByteString)
-unescapeBytea _ = pure Nothing
+transactionStatus :: Connection -> IO TransactionStatus
+transactionStatus conn = HPgsql.connectionTransactionStatus $ hpgConn conn

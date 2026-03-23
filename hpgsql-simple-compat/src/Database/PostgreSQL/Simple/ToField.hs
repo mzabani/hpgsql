@@ -1,4 +1,6 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -22,7 +24,6 @@
 module Database.PostgreSQL.Simple.ToField
   ( Action (..),
     ToField (..),
-    toJSONField,
     inQuotes,
   )
 where
@@ -35,24 +36,15 @@ import Data.ByteString.Builder
     char8,
   )
 import qualified Data.ByteString.Lazy as LB
-import Data.Typeable (Typeable)
+import Data.Typeable (Proxy (..), Typeable)
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import HPgsql.Encoding (ToPgField (..))
+import qualified HPgsql.Encoding as HPgsql
+import HPgsql.TypeInfo (Oid)
 
 -- | How to render an element when substituting it into a query.
 data Action
-  = -- | Render without escaping or quoting. Use for non-text types
-    -- such as numbers, when you are /certain/ that they will not
-    -- introduce formatting vulnerabilities via use of characters such
-    -- as spaces or \"@'@\".
-    Plain Builder
-  | -- | Escape and enclose in quotes before substituting. Use for all
-    -- text-like types, and anything else that may contain unsafe
-    -- characters when rendered.
-    Escape ByteString
-  | -- | Escape binary data for use as a @bytea@ literal.  Include surrounding
-    -- quotes.  This is used by the 'Binary' newtype wrapper.
-    EscapeByteA ByteString
+  = QueryArgument (Maybe Oid, Maybe LB.ByteString)
   | -- | Escape before substituting. Use for all sql identifiers like
     -- table, column names, etc. This is used by the 'Identifier' newtype
     -- wrapper.
@@ -62,24 +54,20 @@ data Action
   deriving (Typeable)
 
 instance Show Action where
-  show (Plain b) = "Plain " ++ show (toByteString b)
-  show (Escape b) = "Escape " ++ show b
-  show (EscapeByteA b) = "EscapeByteA " ++ show b
+  show (QueryArgument (oid, _binRep)) = "QueryArgument " ++ show (oid)
   show (EscapeIdentifier b) = "EscapeIdentifier " ++ show b
   show (Many b) = "Many " ++ show b
+
+proxyOf :: a -> Proxy a
+proxyOf _ = Proxy
 
 -- | A type that may be used as a single parameter to a SQL query.
 class ToField a where
   toField :: a -> Action
-  -- ^ Prepare a value for substitution into a query string.
+  default toField :: (HPgsql.ToPgField a) => a -> Action
+  toField v = QueryArgument (HPgsql.toTypeOid (proxyOf v), HPgsql.toPgField v)
 
--- | Convert a Haskell value to JSON using 'JSON.toEncoding'.
---
--- This can be used as the default implementation for the 'toField'
--- method for Haskell types that have a JSON representation in
--- PostgreSQL.
-toJSONField :: (JSON.ToJSON a) => a -> Action
-toJSONField = Escape . SB.concat . LB.toChunks . JSON.encode
+instance (HPgsql.ToPgField a) => ToField a
 
 -- | Surround a string with single-quote characters: \"@'@\"
 --
@@ -88,19 +76,3 @@ inQuotes :: Builder -> Builder
 inQuotes b = quote `mappend` b `mappend` quote
   where
     quote = char8 '\''
-
--- | This instance relies on rendering the Action to text bytes. Since hpgsql
--- sends all parameters using binary format, this will not work correctly for
--- most types at runtime. With OVERLAPPABLE, hpgsql's native ToPgField instances
--- (which produce proper binary encodings) will take precedence for types that
--- have them.
-instance {-# OVERLAPPABLE #-} (ToField a) => ToPgField a where
-  toTypeOid _ = Nothing
-  toPgField a = Just $ actionToLBS (toField a)
-
-actionToLBS :: Action -> LB.ByteString
-actionToLBS (Plain b) = LB.fromStrict (toByteString b)
-actionToLBS (Escape bs) = LB.fromStrict bs
-actionToLBS (EscapeByteA bs) = LB.fromStrict bs
-actionToLBS (EscapeIdentifier bs) = LB.fromStrict bs
-actionToLBS (Many actions) = LB.concat (map actionToLBS actions)

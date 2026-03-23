@@ -135,6 +135,20 @@ instance Applicative RowParser where
 
   RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in tc1 cols1 ++ tc2 cols2) (nc1 ++ nc2)
 
+instance Monad RowParser where
+  RowParser {..} >>= f =
+    RowParser
+      { -- TODO: What does this Monad instance even mean?
+        -- I made it type-check, but I need to understand it.
+        fullRowParser = \colInfos ->
+          do
+            firstCols <- fullRowParser colInfos
+            let rp = f firstCols
+            rp.fullRowParser colInfos,
+        rowColumnsTypeCheck,
+        resultColumnsFmts
+      }
+
 -- TODO: Monad instance because people do want to write
 -- <- (bind arrows) in their FromPgField instances..
 -- and also because `fail` feels better than `error`?

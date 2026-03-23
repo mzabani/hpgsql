@@ -5,6 +5,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
@@ -28,6 +29,7 @@ import Data.Time.Compat (diffUTCTime, getCurrentTime)
 import Data.Typeable
 import qualified Data.Vector as V
 import Database.PostgreSQL.Simple.Copy
+import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes
 import qualified Database.PostgreSQL.Simple.Transaction as ST
 import Database.PostgreSQL.Simple.Types (Query (..))
@@ -699,3 +701,6 @@ withConnstring kont = do
           "host='postgres'",
           "port=5432"
         ]
+
+newtype SomeText = SomeText Text
+  deriving newtype (FromField)

@@ -173,7 +173,7 @@ formatMany _conn q@(Query template) qs = do
   -- First we replace the query string's ? with (?,?,?,...) with as many
   -- parameters as each row contains
   pgSimpleQuery <- case parseTemplate template of
-    Nothing -> fmtError "query is not of the expected form" q []
+    Nothing -> fmtError "query is not of the expected form" q
     Just (before, qbits, after) ->
       let numCols = B.count '?' qbits
        in case filter (\r -> length (HPgsql.toPgParams r) /= numCols) qs of
@@ -352,7 +352,7 @@ returning :: (ToRow q, FromRow r) => Connection -> Query -> [q] -> IO [r]
 returning = returningWith fromRow
 
 -- | A version of 'returning' taking parser as argument
-returningWith :: (ToRow q) => RowParser r -> Connection -> Query -> [q] -> IO [r]
+returningWith :: (ToRow q) => HPgsql.RowParser r -> Connection -> Query -> [q] -> IO [r]
 returningWith _ _ _ [] = return []
 returningWith parser conn q qs = error "TODO HPgsql"
 

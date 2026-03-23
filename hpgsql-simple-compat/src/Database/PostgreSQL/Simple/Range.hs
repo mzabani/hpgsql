@@ -20,12 +20,11 @@ module Database.PostgreSQL.Simple.Range
     isEmptyBy,
     contains,
     containsBy,
-    fromFieldRange,
   )
 where
 
 import Control.Applicative hiding (empty)
-import Data.Attoparsec.ByteString.Char8 (Parser, parseOnly)
+import Data.Attoparsec.ByteString.Char8 (Parser)
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import qualified Data.ByteString as B
 import Data.ByteString.Builder
@@ -35,7 +34,6 @@ import Data.ByteString.Builder
   )
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.Simple.Compat (toByteString)
-import Database.PostgreSQL.Simple.FromField
 
 -- | Represents boundary of a range
 data RangeBound a
@@ -174,23 +172,3 @@ rangeToBuilderBy cmp f x =
     buildUB PosInfinity = byteString "]'"
 
 {-# INLINE rangeToBuilder #-}
-
-fromFieldRange :: (Typeable a) => FieldParser a -> FieldParser (PGRange a)
-fromFieldRange fromField' f mdat = do
-  info <- typeInfo f
-  case info of
-    Range {} ->
-      let f' = f {typeOid = typoid (rngsubtype info)}
-       in case mdat of
-            Nothing -> returnError UnexpectedNull f ""
-            Just "empty" -> pure $ empty
-            Just bs ->
-              let parseIt NegInfinity = pure NegInfinity
-                  parseIt (Inclusive v) = Inclusive <$> fromField' f' (Just v)
-                  parseIt (Exclusive v) = Exclusive <$> fromField' f' (Just v)
-                  parseIt PosInfinity = pure PosInfinity
-               in case parseOnly pgrange bs of
-                    Left e -> returnError ConversionFailed f e
-                    Right (lb, ub) -> PGRange <$> parseIt lb <*> parseIt ub
-    _ -> returnError Incompatible f ""
-

@@ -38,9 +38,9 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as B8
+import qualified Data.ByteString.Lazy as LBS
 import Data.IORef
 import Data.Int (Int64)
-import qualified Data.ByteString.Lazy as LBS
 import qualified Data.IntMap as IntMap
 import qualified Data.Map.Strict as Map
 import Data.String
@@ -194,6 +194,10 @@ connect = connectPostgreSQL . postgreSQLConnectionString
 withConnect :: ConnectInfo -> (Connection -> IO c) -> IO c
 withConnect connInfo = bracket (connect connInfo) close
 
+-- | Atomically perform an action with the database handle, if there is one.
+withConnection :: Connection -> (PQ.Connection -> IO a) -> IO a
+withConnection Connection {..} m = m $ PQ.Connection hpgConn
+
 -- | Attempt to make a connection based on a libpq connection string.
 --   See <https://www.postgresql.org/docs/9.5/static/libpq-connect.html#LIBPQ-CONNSTRING>
 --   for more information.  Also note that environment variables also affect
@@ -330,8 +334,9 @@ mapHpgsqlErrors = handle (throwIO . postgresErrorToSqlError)
 
 -- | A version of 'execute' that does not perform query substitution.
 execute_ :: Connection -> Query -> IO Int64
-execute_ conn (Query stmt) = mapHpgsqlErrors $
-  HPgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 stmt)
+execute_ conn (Query stmt) =
+  mapHpgsqlErrors $
+    HPgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 stmt)
 
 disconnectedError :: SqlError
 disconnectedError = fatalError "connection disconnected"
@@ -343,12 +348,6 @@ data Row = Row
   { row :: {-# UNPACK #-} !PQ.Row,
     rowresult :: !PQ.Result
   }
-
-newtype RowParser a = RP {unRP :: ReaderT Row (StateT PQ.Column Conversion) a}
-  deriving (Functor, Applicative, Alternative, Monad)
-
-liftRowParser :: IO a -> RowParser a
-liftRowParser = RP . lift . lift . liftConversion
 
 newtype Conversion a = Conversion {runConversion :: Connection -> IO (Ok a)}
 
@@ -422,20 +421,14 @@ libPQError desc =
       ioe_filename = Nothing
     }
 
-fmtError :: String -> Query -> [Action] -> a
-fmtError msg q xs =
+fmtError :: String -> Query -> a
+fmtError msg q =
   throw
     FormatError
       { fmtMessage = msg,
         fmtQuery = q,
-        fmtParams = map twiddle xs
+        fmtParams = []
       }
-  where
-    twiddle (Plain b) = toByteString b
-    twiddle (Escape s) = s
-    twiddle (EscapeByteA s) = s
-    twiddle (EscapeIdentifier s) = s
-    twiddle (Many ys) = B.concat (map twiddle ys)
 
 fmtErrorBs :: Query -> [Action] -> ByteString -> a
 fmtErrorBs q xs msg = fmtError (T.unpack $ TE.decodeUtf8 msg) q xs
@@ -443,4 +436,3 @@ fmtErrorBs q xs msg = fmtError (T.unpack $ TE.decodeUtf8 msg) q xs
 -- | Quote bytestring or throw 'FormatError'
 quote :: Query -> [Action] -> Either ByteString ByteString -> Builder
 quote q xs = either (fmtErrorBs q xs) (inQuotes . byteString)
-

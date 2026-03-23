@@ -1,3 +1,5 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternGuards #-}
@@ -81,7 +83,7 @@
 -- instances use 'typename' instead.
 module Database.PostgreSQL.Simple.FromField
   ( FromField (..),
-    FieldParser,
+    FieldParser (..),
     Conversion (),
     runConversion,
     conversionMap,
@@ -98,41 +100,24 @@ module Database.PostgreSQL.Simple.FromField
     typeOid,
     PQ.Oid (..),
     PQ.Format (..),
-    pgArrayFieldParser,
-    attoFieldParser,
-    optionalField,
-    fromJSONField,
-    fromFieldJSONByteString,
   )
 where
 
-import Control.Applicative ((<|>))
-import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Exception (Exception (fromException, toException))
-import qualified Data.Aeson as JSON
-import qualified Data.Aeson.Types as JSON
-import Data.Attoparsec.ByteString.Char8 hiding (Result)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
-import qualified Data.ByteString.Lazy as LB
 import qualified Data.IntMap as IntMap
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as ST
 import qualified Data.Text.Encoding as ST
 import Data.Typeable (Typeable, typeOf)
 import qualified Database.PostgreSQL.LibPQ as PQ
-import Database.PostgreSQL.Simple.Arrays as Arrays
 import Database.PostgreSQL.Simple.Compat
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
-import qualified Database.PostgreSQL.Simple.TypeInfo.Static as TI
-import Database.PostgreSQL.Simple.Types
-import HPgsql.Encoding (FromPgField (..))
+import HPgsql.Encoding (FieldParser (..))
 import qualified HPgsql.Encoding as HPgsql
-import HPgsql.TypeInfo (Format (..))
 import qualified HPgsql.TypeInfo as HPgsqlTI
-import System.IO.Unsafe (unsafePerformIO)
 
 -- | Exception thrown if conversion from a SQL value to a Haskell
 -- value fails.
@@ -174,56 +159,49 @@ instance Exception ResultError where
 left :: (Exception a) => a -> Conversion b
 left = conversionError
 
-type FieldParser a = Field -> Maybe ByteString -> Conversion a
-
--- | A type that may be converted from a SQL type.
 class FromField a where
   fromField :: FieldParser a
-  -- ^ Convert a SQL value to a Haskell value.
-  --
-  -- Returns a list of exceptions if the conversion fails.  In the case of
-  -- library instances,  this will usually be a single 'ResultError',  but
-  -- may be a 'UnicodeException'.
-  --
-  -- Note that retaining any reference to the 'Field' argument causes
-  -- the entire @LibPQ.'PQ.Result'@ to be retained.  Thus, implementations
-  -- of 'fromField' should return results that do not refer to this value
-  -- after the result have been evaluated to WHNF.
-  --
-  -- Note that as of @hpgsql-simple-compat-0.4.0.0@,  the 'ByteString' value
-  -- has already been copied out of the @LibPQ.'PQ.Result'@ before it has
-  -- been passed to 'fromField'.  This is because for short strings, it's
-  -- cheaper to copy the string than to set up a finalizer.
+  default fromField :: (HPgsql.FromPgField a) => FieldParser a
+  fromField = HPgsql.fieldParser
 
--- | The instances derived here rely on unsafePerformIO and bottoms in lots
--- of places. They should be fine for most commonly found FromField instances
--- out there, but will crash and burn for others.
--- This is also an orphan instance, but we choose to accept that in the name
--- of pragmatism: users wanting to migrate to hpgsql will likely find this easier
--- than alternatives.
-instance {-# OVERLAPPABLE #-} (FromField a) => FromPgField a where
-  fieldParser =
-    HPgsql.FieldParser
-      { HPgsql.fieldValueParser = \colInfo mbs ->
-          let field = Field {result = error "Field.result not available in hpgsql-simple-compat", column = error "Field.column not available in hpgsql-simple-compat", typeOid = fromHpgsqlOid $ HPgsql.typeOid colInfo}
-              strictBs = fmap LB.toStrict mbs
-           in unsafePerformIO $ do
-                -- Build a Connection with a pre-populated TypeInfoCache from
-                -- HPgsql's typeInfoCache. This allows 'typename', 'returnError',
-                -- and 'typeInfo' to work for any type in the cache.
-                connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (HPgsql.typeInfoCache colInfo)
-                let conn =
-                      Connection
-                        connectionObjects
-                        (error "Connection not available in FromField instances in hpgsql-simple-compat")
-                        (error "Connection not available in FromField instances in hpgsql-simple-compat")
-                ok <- runConversion (fromField field strictBs) conn
-                case ok of
-                  Ok a -> pure (Right a)
-                  Errors errs -> pure (Left (show errs)),
-        HPgsql.fieldFmt = BadlySupportedTextFmt,
-        HPgsql.allowedPgTypes = const True
-      }
+instance (HPgsql.FromPgField a) => FromField a where
+  fromField = HPgsql.fieldParser
+
+-- type FieldParser a = Field -> Maybe ByteString -> Conversion a
+
+-- -- | A type that may be converted from a SQL type.
+-- class FromField a where
+--   fromField :: FieldParser a
+
+-- -- | The instances derived here rely on unsafePerformIO and bottoms in lots
+-- -- of places. They should be fine for most commonly found FromField instances
+-- -- out there, but will crash and burn for others.
+-- -- This is also an orphan instance, but we choose to accept that in the name
+-- -- of pragmatism: users wanting to migrate to hpgsql will likely find this easier
+-- -- than alternatives.
+-- instance {-# OVERLAPPABLE #-} (FromField a) => FromPgField a where
+--   fieldParser =
+--     HPgsql.FieldParser
+--       { HPgsql.fieldValueParser = \colInfo mbs ->
+--           let field = Field {result = error "Field.result not available in hpgsql-simple-compat", column = error "Field.column not available in hpgsql-simple-compat", typeOid = fromHpgsqlOid $ HPgsql.typeOid colInfo}
+--               strictBs = fmap LB.toStrict mbs
+--            in unsafePerformIO $ do
+--                 -- Build a Connection with a pre-populated TypeInfoCache from
+--                 -- HPgsql's typeInfoCache. This allows 'typename', 'returnError',
+--                 -- and 'typeInfo' to work for any type in the cache.
+--                 connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (HPgsql.typeInfoCache colInfo)
+--                 let conn =
+--                       Connection
+--                         connectionObjects
+--                         (error "Connection not available in FromField instances in hpgsql-simple-compat")
+--                         (error "Connection not available in FromField instances in hpgsql-simple-compat")
+--                 ok <- runConversion (fromField field strictBs) conn
+--                 case ok of
+--                   Ok a -> pure (Right a)
+--                   Errors errs -> pure (Left (show errs)),
+--         HPgsql.fieldFmt = BadlySupportedTextFmt,
+--         HPgsql.allowedPgTypes = const True
+--       }
 
 -- | Converts HPgsql's TypeInfo cache to one similar to postgresql-simple's, but
 -- with lots of bottoms everywhere because hpgsql's typeInfo cache is less complete.
@@ -266,102 +244,6 @@ typeInfoByOid oid = Conversion $ \conn -> do
 name :: Field -> Maybe ByteString
 name Field {..} = unsafeDupablePerformIO (PQ.fname result column)
 
--- | For dealing with SQL @null@ values outside of the 'FromField' class.
---   Alternatively, one could use 'Control.Applicative.optional',  but that
---   also turns type and conversion errors into 'Nothing',  whereas this is
---   more specific and turns only @null@ values into 'Nothing'.
-optionalField :: FieldParser a -> FieldParser (Maybe a)
-optionalField p f mv =
-  case mv of
-    Nothing -> pure Nothing
-    Just _ -> Just <$> p f mv
-{-# INLINE optionalField #-}
-
-
-pgArrayFieldParser :: (Typeable a) => FieldParser a -> FieldParser (PGArray a)
-pgArrayFieldParser fieldParser f mdat = do
-  info <- typeInfo f
-  case info of
-    TI.Array {} ->
-      case mdat of
-        Nothing -> returnError UnexpectedNull f ""
-        Just dat -> do
-          case parseOnly (fromArray fieldParser info f) dat of
-            Left err -> returnError ConversionFailed f err
-            Right conv -> PGArray <$> conv
-    _ -> returnError Incompatible f ""
-
-fromArray :: FieldParser a -> TypeInfo -> Field -> Parser (Conversion [a])
-fromArray fieldParser typInfo f = sequence . (parseIt <$>) <$> array delim
-  where
-    delim = typdelim (typelem typInfo)
-    fElem = f {typeOid = typoid (typelem typInfo)}
-
-    parseIt item =
-      fieldParser f' $ if item == Arrays.Plain "NULL" then Nothing else Just item'
-      where
-        item' = fmt delim item
-        f'
-          | Arrays.Array _ <- item = f
-          | otherwise = fElem
-
--- | Return the JSON ByteString directly
---
--- @since 0.6.3
-fromFieldJSONByteString :: Field -> Maybe ByteString -> Conversion ByteString
-fromFieldJSONByteString f mbs =
-  if typeOid f /= TI.jsonOid && typeOid f /= TI.jsonbOid
-    then returnError Incompatible f ""
-    else case mbs of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs -> pure bs
-
--- | Parse a field to a JSON 'JSON.Value' and convert that into a
--- Haskell value using the 'JSON.FromJSON' instance.
---
--- This can be used as the default implementation for the 'fromField'
--- method for Haskell types that have a JSON representation in
--- PostgreSQL.
---
--- The 'Typeable' constraint is required to show more informative
--- error messages when parsing fails.
---
--- Note that @fromJSONField :: FieldParser ('Maybe' Foo)@ will return
--- @'Nothing'@ on the json @null@ value, and return an exception on SQL @null@
--- value.  Alternatively,  one could write @'optionalField' fromJSONField@
--- that will return @Nothing@ on SQL @null@,  and otherwise will call
--- @fromJSONField :: FieldParser Foo@ and then return @'Just'@ the
--- result value,  or return its exception.  If one would
--- like to return @Nothing@ on both the SQL @null@ and json @null@ values,
--- one way to do it would be to write
--- @\\f mv -> 'Control.Monad.join' '<$>' optionalField fromJSONField f mv@
-fromJSONField :: (JSON.FromJSON a, Typeable a) => FieldParser a
-fromJSONField f mbBs = do
-  bs <- fromFieldJSONByteString f mbBs
-  value <- case JSON.eitherDecodeStrict' bs of
-    Left err -> returnError ConversionFailed f $ "JSON parse error: " ++ err
-    Right val -> pure val
-  case JSON.ifromJSON value of
-    JSON.IError path err ->
-      returnError ConversionFailed f $
-        "JSON decoding error: " ++ (JSON.formatError path err)
-    JSON.ISuccess x -> pure x
-
-type Compat = PQ.Oid -> Bool
-
-doFromField ::
-  forall a.
-  (Typeable a) =>
-  Field ->
-  Compat ->
-  (ByteString -> Conversion a) ->
-  Maybe ByteString ->
-  Conversion a
-doFromField f isCompat cvt (Just bs)
-  | isCompat (typeOid f) = cvt bs
-  | otherwise = returnError Incompatible f "types incompatible"
-doFromField f _ _ _ = returnError UnexpectedNull f ""
-
 -- | Given one of the constructors from 'ResultError',  the field,
 --   and an 'errMessage',  this fills in the other fields in the
 --   exception value and returns it in a 'Left . SomeException'
@@ -382,28 +264,3 @@ returnError mkErr f msg = do
       (maybe "" B8.unpack (name f))
       (show (typeOf (undefined :: a)))
       msg
-
--- | Construct a field parser from an attoparsec parser. An 'Incompatible' error is thrown if the
--- PostgreSQL oid does not match the specified predicate.
---
--- @
--- instance FromField Int16 where
---   fromField = attoFieldParser ok16 (signed decimal)
--- @
---
--- @since 0.6.3
-attoFieldParser ::
-  forall a.
-  (Typeable a) =>
-  -- | Predicate for whether the postgresql type oid is compatible with this parser
-  (PQ.Oid -> Bool) ->
-  -- | An attoparsec parser.
-  Parser a ->
-  FieldParser a
-attoFieldParser types p0 f dat = doFromField f types (go p0) dat
-  where
-    go :: Parser a -> ByteString -> Conversion a
-    go p s =
-      case parseOnly p s of
-        Left err -> returnError ConversionFailed f err
-        Right v -> pure v

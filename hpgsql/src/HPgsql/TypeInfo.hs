@@ -70,6 +70,7 @@ module HPgsql.TypeInfo
     _int8rangeOid,
     Format (..),
     Oid (..),
+    TransactionStatus (..),
     TypeInfo (..),
     builtinPgTypesMap,
   )
@@ -88,6 +89,10 @@ import Data.Text (Text)
 -- and one for Text, which isn't great.
 -- We will likely remove support for the text format eventually.
 data Format = BadlySupportedTextFmt | BinaryFmt
+  deriving stock (Eq, Show)
+
+-- | This replicates the postgresql-libpq constructor, because why not?
+data TransactionStatus = TransIdle | TransInTrans | TransInError
   deriving stock (Eq, Show)
 
 newtype Oid = Oid Int32
