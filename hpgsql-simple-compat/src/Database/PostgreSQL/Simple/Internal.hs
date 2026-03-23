@@ -43,7 +43,6 @@ import Data.Int (Int64)
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.IntMap as IntMap
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
 import Data.String
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -61,9 +60,6 @@ import GHC.IO.Exception
 import HPgsql (ErrorDetail (..), HPgConnection, PostgresError (..))
 import qualified HPgsql
 import qualified HPgsql.Connection
-#if !defined(mingw32_HOST_OS)
-import           Control.Concurrent(threadWaitRead, threadWaitWrite)
-#endif
 
 -- | A Field represents metadata about a particular field
 --
@@ -277,37 +273,6 @@ connectPostgreSQL connstr = do
       hpgConn <- HPgsql.connect connStr 30
       pure $ Connection {..}
 
-connectdb :: ByteString -> IO PQ.Connection
-#if defined(mingw32_HOST_OS)
-connectdb = PQ.connectdb
-#else
-connectdb conninfo = do
-    conn <- PQ.connectStart conninfo
-    loop conn
-  where
-    funcName = "Database.PostgreSQL.Simple.connectPostgreSQL"
-    loop conn = do
-      status <- PQ.connectPoll conn
-      case status of
-        PQ.PollingFailed  -> throwLibPQError conn "connection failed"
-        PQ.PollingReading -> do
-                                mfd <- PQ.socket conn
-                                case mfd of
-                                  Nothing -> throwIO $! fdError funcName
-                                  Just fd -> do
-                                      threadWaitRead fd
-                                      loop conn
-        PQ.PollingWriting -> do
-                                mfd <- PQ.socket conn
-                                case mfd of
-                                  Nothing -> throwIO $! fdError funcName
-                                  Just fd -> do
-                                      threadWaitWrite fd
-                                      loop conn
-        PQ.PollingOk      -> return conn
-
-#endif
-
 -- | Turns a 'ConnectInfo' data structure into a libpq connection string.
 postgreSQLConnectionString :: ConnectInfo -> ByteString
 postgreSQLConnectionString connectInfo = fromString connstr
@@ -367,27 +332,6 @@ mapHpgsqlErrors = handle (throwIO . postgresErrorToSqlError)
 execute_ :: Connection -> Query -> IO Int64
 execute_ conn (Query stmt) = mapHpgsqlErrors $
   HPgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 stmt)
-
-throwResultError :: ByteString -> PQ.Result -> PQ.ExecStatus -> IO a
-throwResultError _ result status = do
-  errormsg <-
-    fromMaybe ""
-      <$> PQ.resultErrorField result PQ.DiagMessagePrimary
-  detail <-
-    fromMaybe ""
-      <$> PQ.resultErrorField result PQ.DiagMessageDetail
-  hint <-
-    fromMaybe ""
-      <$> PQ.resultErrorField result PQ.DiagMessageHint
-  state' <- maybe "" id <$> PQ.resultErrorField result PQ.DiagSqlstate
-  throwIO $
-    SqlError
-      { sqlState = state',
-        sqlExecStatus = status,
-        sqlErrorMsg = errormsg,
-        sqlErrorDetail = detail,
-        sqlErrorHint = hint
-      }
 
 disconnectedError :: SqlError
 disconnectedError = fatalError "connection disconnected"
@@ -478,11 +422,6 @@ libPQError desc =
       ioe_filename = Nothing
     }
 
-throwLibPQError :: PQ.Connection -> ByteString -> IO a
-throwLibPQError conn default_desc = do
-  msg <- maybe default_desc id <$> PQ.errorMessage conn
-  throwIO $! libPQError msg
-
 fmtError :: String -> Query -> [Action] -> a
 fmtError msg q xs =
   throw
@@ -505,6 +444,3 @@ fmtErrorBs q xs msg = fmtError (T.unpack $ TE.decodeUtf8 msg) q xs
 quote :: Query -> [Action] -> Either ByteString ByteString -> Builder
 quote q xs = either (fmtErrorBs q xs) (inQuotes . byteString)
 
-checkError :: PQ.Connection -> Maybe a -> IO (Either ByteString a)
-checkError _ (Just x) = return $ Right x
-checkError c Nothing = Left . maybe "" id <$> PQ.errorMessage c

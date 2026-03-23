@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 ------------------------------------------------------------------------------
@@ -33,55 +32,10 @@ import Data.ByteString.Builder
   ( Builder,
     byteString,
     char8,
-    doubleDec,
-    floatDec,
-    int16Dec,
-    int32Dec,
-    int64Dec,
-    int8Dec,
-    intDec,
-    integerDec,
-    lazyByteString,
-    word16Dec,
-    word32Dec,
-    word64Dec,
-    word8Dec,
-    wordDec,
-  )
-import Data.Function (on)
-import Data.Int
-  ( Int16,
-    Int32,
-    Int64,
-    Int8,
-  )
-import Data.Scientific (Scientific)
-import qualified Data.Text.Lazy.Builder as LT
-import qualified Data.Text.Lazy.Encoding as LT
-import Data.Time.Compat
-  ( Day,
-    LocalTime,
-    NominalDiffTime,
-    TimeOfDay,
-    UTCTime,
-    ZonedTime,
-    zonedTimeToUTC,
   )
 import Data.Typeable (Typeable)
-import Data.Word
-  ( Word16,
-    Word32,
-    Word64,
-    Word8,
-  )
-import Database.PostgreSQL.Simple.Compat (scientificBuilder, toByteString)
+import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.FromField
-import Database.PostgreSQL.Simple.Time hiding
-  ( NegInfinity,
-    PosInfinity,
-  )
--- import qualified Database.PostgreSQL.Simple.Time as Time
-import Database.PostgreSQL.Simple.ToField
 
 -- | Represents boundary of a range
 data RangeBound a
@@ -221,9 +175,6 @@ rangeToBuilderBy cmp f x =
 
 {-# INLINE rangeToBuilder #-}
 
-instance (FromField a, Typeable a) => FromField (PGRange a) where
-  fromField = fromFieldRange fromField
-
 fromFieldRange :: (Typeable a) => FieldParser a -> FieldParser (PGRange a)
 fromFieldRange fromField' f mdat = do
   info <- typeInfo f
@@ -243,106 +194,3 @@ fromFieldRange fromField' f mdat = do
                     Right (lb, ub) -> PGRange <$> parseIt lb <*> parseIt ub
     _ -> returnError Incompatible f ""
 
-instance ToField (PGRange Int8) where
-  toField = Plain . rangeToBuilder int8Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Int16) where
-  toField = Plain . rangeToBuilder int16Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Int32) where
-  toField = Plain . rangeToBuilder int32Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Int) where
-  toField = Plain . rangeToBuilder intDec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Int64) where
-  toField = Plain . rangeToBuilder int64Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Integer) where
-  toField = Plain . rangeToBuilder integerDec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Word8) where
-  toField = Plain . rangeToBuilder word8Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Word16) where
-  toField = Plain . rangeToBuilder word16Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Word32) where
-  toField = Plain . rangeToBuilder word32Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Word) where
-  toField = Plain . rangeToBuilder wordDec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Word64) where
-  toField = Plain . rangeToBuilder word64Dec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Float) where
-  toField = Plain . rangeToBuilder floatDec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Double) where
-  toField = Plain . rangeToBuilder doubleDec
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Scientific) where
-  toField = Plain . rangeToBuilder f
-    where
-      f = lazyByteString . LT.encodeUtf8 . LT.toLazyText . scientificBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange UTCTime) where
-  toField = Plain . rangeToBuilder utcTimeToBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange ZonedTime) where
-  toField = Plain . rangeToBuilderBy cmpZonedTime zonedTimeToBuilder
-  {-# INLINE toField #-}
-
-cmpZonedTime :: ZonedTime -> ZonedTime -> Ordering
-cmpZonedTime = compare `on` zonedTimeToUTC -- FIXME:  optimize
-
-instance ToField (PGRange LocalTime) where
-  toField = Plain . rangeToBuilder localTimeToBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Day) where
-  toField = Plain . rangeToBuilder dayToBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange TimeOfDay) where
-  toField = Plain . rangeToBuilder timeOfDayToBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange UTCTimestamp) where
-  toField = Plain . rangeToBuilder utcTimestampToBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange ZonedTimestamp) where
-  toField = Plain . rangeToBuilderBy cmpZonedTimestamp zonedTimestampToBuilder
-  {-# INLINE toField #-}
-
-cmpZonedTimestamp :: ZonedTimestamp -> ZonedTimestamp -> Ordering
-cmpZonedTimestamp = compare `on` (zonedTimeToUTC <$>)
-
-instance ToField (PGRange LocalTimestamp) where
-  toField = Plain . rangeToBuilder localTimestampToBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange Date) where
-  toField = Plain . rangeToBuilder dateToBuilder
-  {-# INLINE toField #-}
-
-instance ToField (PGRange NominalDiffTime) where
-  toField = Plain . rangeToBuilder nominalDiffTimeToBuilder
-  {-# INLINE toField #-}

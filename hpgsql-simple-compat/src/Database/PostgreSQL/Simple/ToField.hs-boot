@@ -1,6 +1,5 @@
 module Database.PostgreSQL.Simple.ToField where
 
-import Database.PostgreSQL.Simple.Types
 import Data.ByteString.Builder(Builder)
 import Data.ByteString(ByteString)
 
@@ -26,5 +25,3 @@ data Action =
     -- ^ Concatenate a series of rendering actions.
 
 class ToField a
-
-instance ToField Oid

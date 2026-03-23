@@ -33,8 +33,6 @@ import qualified Data.Text.Encoding as TS
 import Data.Text.Encoding.Error (UnicodeException)
 import qualified Data.Text.Lazy as TL
 import Data.Typeable
-import Database.PostgreSQL.Simple.FromField
-import Database.PostgreSQL.Simple.ToField
 
 class ToHStore a where
   toHStore :: a -> HStoreBuilder
@@ -117,36 +115,11 @@ hstore (toHStoreText -> (HStoreText key)) (toHStoreText -> (HStoreText val)) =
         `mappend` char8 '"'
     )
 
-instance ToField HStoreBuilder where
-  toField Empty = toField (BS.empty)
-  toField (Comma x) = toField (BU.toLazyByteString x)
-
 newtype HStoreList = HStoreList {fromHStoreList :: [(Text, Text)]} deriving (Typeable, Show)
 
 -- | hstore
 instance ToHStore HStoreList where
   toHStore (HStoreList xs) = mconcat (map (uncurry hstore) xs)
-
-instance ToField HStoreList where
-  toField xs = toField (toHStore xs)
-
--- | hstore
-instance FromField HStoreList where
-  fromField f mdat = do
-    typ <- typename f
-    if typ /= "hstore"
-      then returnError Incompatible f ""
-      else case mdat of
-        Nothing -> returnError UnexpectedNull f ""
-        Just dat ->
-          case P.parseOnly (parseHStore <* P.endOfInput) dat of
-            Left err ->
-              returnError ConversionFailed f err
-            Right (Left err) ->
-              returnError ConversionFailed f "unicode exception"
-                <|> conversionError err
-            Right (Right val) ->
-              return val
 
 newtype HStoreMap = HStoreMap {fromHStoreMap :: Map Text Text} deriving (Eq, Ord, Typeable, Show)
 
@@ -154,14 +127,6 @@ instance ToHStore HStoreMap where
   toHStore (HStoreMap xs) = Map.foldrWithKey f mempty xs
     where
       f k v xs' = hstore k v `mappend` xs'
-
-instance ToField HStoreMap where
-  toField xs = toField (toHStore xs)
-
-instance FromField HStoreMap where
-  fromField f mdat = convert <$> fromField f mdat
-    where
-      convert (HStoreList xs) = HStoreMap (Map.fromList xs)
 
 parseHStoreList :: BS.ByteString -> Either String HStoreList
 parseHStoreList dat =

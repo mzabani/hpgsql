@@ -1,17 +1,15 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DoAndIfThenElse #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-#if __GLASGOW_HASKELL__ >= 806
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE DeriveAnyClass #-}
-#endif
+{-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Main (main) where
 
 import Common
-import Control.Applicative
 import Control.Exception as E
 import Control.Monad
 import Data.Aeson
@@ -19,32 +17,22 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy.Char8 as BL
-import Data.CaseInsensitive (CI)
-import qualified Data.CaseInsensitive as CI
 import Data.Char
-import Data.Foldable (toList)
 import Data.IORef
-import Data.List (concat, sort)
+import Data.List (sort)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Monoid ((<>))
-import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text.Encoding as T
 import Data.Time.Compat (diffUTCTime, getCurrentTime)
 import Data.Typeable
 import qualified Data.Vector as V
 import Database.PostgreSQL.Simple.Copy
-import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.HStore
 import Database.PostgreSQL.Simple.Newtypes
-import Database.PostgreSQL.Simple.ToField (ToField)
 import qualified Database.PostgreSQL.Simple.Transaction as ST
-import Database.PostgreSQL.Simple.Types (PGArray (..), Query (..), Values (..))
+import Database.PostgreSQL.Simple.Types (Query (..))
 import Exception (testExceptions)
-import GHC.Generics (Generic)
 import HPgsql.Encoding (FromPgField)
-import Interval
 import Notify
 import Serializable
 import System.Environment (getEnvironment)
@@ -455,22 +443,22 @@ testUnicode TestEnv {..} = do
   messages' <- query_ conn "SELECT сообщение FROM ру́сский"
   sort messages @?= sort messages'
 
-testValues :: TestEnv -> Assertion
-testValues TestEnv {..} = do
-  execute_ conn "CREATE TEMPORARY TABLE values_test (x int, y text)"
-  test (Values ["int4", "text"] [])
-  test (Values ["int4", "text"] [(1, "hello")])
-  test (Values ["int4", "text"] [(1, "hello"), (2, "world")])
-  test (Values ["int4", "text"] [(1, "hello"), (2, "world"), (3, "goodbye")])
-  test (Values [] [(1, "hello")])
-  test (Values [] [(1, "hello"), (2, "world")])
-  test (Values [] [(1, "hello"), (2, "world"), (3, "goodbye")])
-  where
-    test :: Values (Int, Text) -> Assertion
-    test table@(Values _ vals) = do
-      execute conn "INSERT INTO values_test ?" (Only table)
-      vals' <- query_ conn "DELETE FROM values_test RETURNING *"
-      sort vals @?= sort vals'
+-- testValues :: TestEnv -> Assertion
+-- testValues TestEnv {..} = do
+--   execute_ conn "CREATE TEMPORARY TABLE values_test (x int, y text)"
+--   test (Values ["int4", "text"] [])
+--   test (Values ["int4", "text"] [(1, "hello")])
+--   test (Values ["int4", "text"] [(1, "hello"), (2, "world")])
+--   test (Values ["int4", "text"] [(1, "hello"), (2, "world"), (3, "goodbye")])
+--   test (Values [] [(1, "hello")])
+--   test (Values [] [(1, "hello"), (2, "world")])
+--   test (Values [] [(1, "hello"), (2, "world"), (3, "goodbye")])
+--   where
+--     test :: Values (Int, Text) -> Assertion
+--     test table@(Values _ vals) = do
+--       execute conn "INSERT INTO values_test ?" (Only table)
+--       vals' <- query_ conn "DELETE FROM values_test RETURNING *"
+--       sort vals @?= sort vals'
 
 -- testCopy :: TestEnv -> Assertion
 -- testCopy TestEnv {..} = do
@@ -614,26 +602,26 @@ testDouble TestEnv {..} = do
 --       r <- query conn "SELECT ?::int, ?::text, ?::bool" x0
 --       r @?= [x0]
 
-data Gen1 = Gen1 Int
-  deriving (Show, Eq, Generic)
+-- data Gen1 = Gen1 Int
+--   deriving (Show, Eq, Generic)
 
-instance FromRow Gen1
+-- instance FromRow Gen1
 
-instance ToRow Gen1
+-- instance ToRow Gen1
 
-data Gen2 = Gen2 Int Text
-  deriving (Show, Eq, Generic)
+-- data Gen2 = Gen2 Int Text
+--   deriving (Show, Eq, Generic)
 
-instance FromRow Gen2
+-- instance FromRow Gen2
 
-instance ToRow Gen2
+-- instance ToRow Gen2
 
-data Gen3 = Gen3 Int Text Bool
-  deriving (Show, Eq, Generic)
+-- data Gen3 = Gen3 Int Text Bool
+--   deriving (Show, Eq, Generic)
 
-instance FromRow Gen3
+-- instance FromRow Gen3
 
-instance ToRow Gen3
+-- instance ToRow Gen3
 
 data TestException
   = TestException

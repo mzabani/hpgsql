@@ -1,9 +1,6 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances #-}
@@ -98,9 +95,6 @@ module Database.PostgreSQL.Simple.FromField
     typeInfo,
     typeInfoByOid,
     name,
-    tableOid,
-    tableColumn,
-    format,
     typeOid,
     PQ.Oid (..),
     PQ.Format (..),
@@ -112,48 +106,28 @@ module Database.PostgreSQL.Simple.FromField
   )
 where
 
-#include "MachDeps.h"
-
-import Control.Applicative (Const (Const), (<|>))
+import Control.Applicative ((<|>))
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Exception (Exception (fromException, toException))
 import qualified Data.Aeson as JSON
 import qualified Data.Aeson.Types as JSON
 import Data.Attoparsec.ByteString.Char8 hiding (Result)
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as SB
-import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LB
-import Data.CaseInsensitive (CI)
-import qualified Data.CaseInsensitive as CI
-import Data.Functor.Identity (Identity (Identity))
-import Data.IORef (IORef, newIORef)
-import Data.Int (Int16, Int32, Int64)
 import qualified Data.IntMap as IntMap
 import qualified Data.Map.Strict as Map
-import Data.Ratio (Ratio)
-import Data.Scientific (Scientific)
 import qualified Data.Text as ST
 import qualified Data.Text.Encoding as ST
-import qualified Data.Text.Lazy as LT
-import Data.Time.Compat (CalendarDiffTime, Day, LocalTime, TimeOfDay, UTCTime, ZonedTime)
 import Data.Typeable (Typeable, typeOf)
-import Data.UUID.Types (UUID)
-import qualified Data.UUID.Types as UUID
-import Data.Vector (Vector)
-import qualified Data.Vector as V
-import Data.Vector.Mutable (IOVector)
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Arrays as Arrays
 import Database.PostgreSQL.Simple.Compat
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.Ok
-import Database.PostgreSQL.Simple.Time
 import Database.PostgreSQL.Simple.TypeInfo as TI
 import qualified Database.PostgreSQL.Simple.TypeInfo.Static as TI
 import Database.PostgreSQL.Simple.Types
-import GHC.Real (infinity, notANumber)
 import HPgsql.Encoding (FromPgField (..))
 import qualified HPgsql.Encoding as HPgsql
 import HPgsql.TypeInfo (Format (..))
@@ -292,52 +266,6 @@ typeInfoByOid oid = Conversion $ \conn -> do
 name :: Field -> Maybe ByteString
 name Field {..} = unsafeDupablePerformIO (PQ.fname result column)
 
--- | Returns the name of the object id of the @table@ associated with the
---   column,  if any.  Returns 'Nothing' when there is no such table;
---   for example a computed column does not have a table associated with it.
---   Analogous to libpq's @PQftable@.
-tableOid :: Field -> Maybe PQ.Oid
-tableOid Field {..} = toMaybeOid (unsafeDupablePerformIO (PQ.ftable result column))
-  where
-    toMaybeOid x =
-      if x == PQ.invalidOid
-        then Nothing
-        else Just x
-
--- | If the column has a table associated with it, this returns the
---   number of the associated table column.  Table columns have
---   nonzero numbers.  Zero is returned if the specified column is not
---   a simple reference to a table column, or when using pre-3.0
---   protocol. Analogous to libpq's @PQftablecol@.
-tableColumn :: Field -> Int
-tableColumn Field {..} = fromCol (unsafeDupablePerformIO (PQ.ftablecol result column))
-  where
-    fromCol (PQ.Col x) = fromIntegral x
-
--- | This returns whether the data was returned in a binary or textual format.
---   Analogous to libpq's @PQfformat@.
-format :: Field -> PQ.Format
-format Field {..} = unsafeDupablePerformIO (PQ.fformat result column)
-
--- | void
-instance FromField () where
-  fromField f _bs
-    | typeOid f /= TI.voidOid = returnError Incompatible f ""
-    | otherwise = pure ()
-
-instance (FromField a) => FromField (Const a b) where
-  fromField f bs = Const <$> fromField f bs
-
-instance (FromField a) => FromField (Identity a) where
-  fromField f bs = Identity <$> fromField f bs
-
--- | For dealing with null values.  Compatible with any postgresql type
---   compatible with type @a@.  Note that the type is not checked if
---   the value is null, although it is inadvisable to rely on this
---   behavior.
-instance (FromField a) => FromField (Maybe a) where
-  fromField = optionalField fromField
-
 -- | For dealing with SQL @null@ values outside of the 'FromField' class.
 --   Alternatively, one could use 'Control.Applicative.optional',  but that
 --   also turns type and conversion errors into 'Nothing',  whereas this is
@@ -349,258 +277,6 @@ optionalField p f mv =
     Just _ -> Just <$> p f mv
 {-# INLINE optionalField #-}
 
--- | compatible with any data type,  but the value must be null
-instance FromField Null where
-  fromField _ Nothing = pure Null
-  fromField f (Just _) = returnError ConversionFailed f "data is not null"
-
--- | bool
-instance FromField Bool where
-  fromField f bs
-    | typeOid f /= TI.boolOid = returnError Incompatible f ""
-    | bs == Nothing = returnError UnexpectedNull f ""
-    | bs == Just "t" = pure True
-    | bs == Just "f" = pure False
-    | otherwise = returnError ConversionFailed f ""
-
--- | \"char\", bpchar
-instance FromField Char where
-  fromField f bs0 =
-    if (eq TI.charOid \/ eq TI.bpcharOid) (typeOid f)
-      then case bs0 of
-        Nothing -> returnError UnexpectedNull f ""
-        Just bs ->
-          if B.length bs /= 1
-            then returnError ConversionFailed f "length not 1"
-            else return $! (B.head bs)
-      else returnError Incompatible f ""
-
--- | int2
-instance FromField Int16 where
-  fromField = attoFieldParser ok16 $ signed decimal
-
--- | int2, int4
-instance FromField Int32 where
-  fromField = attoFieldParser ok32 $ signed decimal
-
-#if WORD_SIZE_IN_BITS < 64
--- | int2, int4,  and if compiled as 64-bit code,  int8 as well.
--- This library was compiled as 32-bit code.
-#else
--- | int2, int4,  and if compiled as 64-bit code,  int8 as well.
--- This library was compiled as 64-bit code.
-#endif
-instance FromField Int where
-  fromField = attoFieldParser okInt $ signed decimal
-
--- | int2, int4, int8
-instance FromField Int64 where
-  fromField = attoFieldParser ok64 $ signed decimal
-
--- | int2, int4, int8
-instance FromField Integer where
-  fromField = attoFieldParser ok64 $ signed decimal
-
--- | int2, float4    (Uses attoparsec's 'double' routine,  for
---   better accuracy convert to 'Scientific' or 'Rational' first)
-instance FromField Float where
-  fromField = attoFieldParser ok (realToFrac <$> pg_double)
-    where
-      ok = eq TI.float4Oid \/ eq TI.int2Oid
-
--- | int2, int4, float4, float8  (Uses attoparsec's 'double' routine,  for
---   better accuracy convert to 'Scientific' or 'Rational' first)
-instance FromField Double where
-  fromField = attoFieldParser ok pg_double
-    where
-      ok = eq TI.float4Oid \/ eq TI.float8Oid \/ eq TI.int2Oid \/ eq TI.int4Oid
-
--- | int2, int4, int8, float4, float8, numeric
-instance FromField (Ratio Integer) where
-  fromField = attoFieldParser ok pg_rational
-    where
-      ok = eq TI.float4Oid \/ eq TI.float8Oid \/ eq TI.int2Oid \/ eq TI.int4Oid \/ eq TI.int8Oid \/ eq TI.numericOid
-
--- | int2, int4, int8, float4, float8, numeric
-instance FromField Scientific where
-  fromField = attoFieldParser ok rational
-    where
-      ok = eq TI.float4Oid \/ eq TI.float8Oid \/ eq TI.int2Oid \/ eq TI.int4Oid \/ eq TI.int8Oid \/ eq TI.numericOid
-
-unBinary :: Binary t -> t
-unBinary (Binary x) = x
-
-pg_double :: Parser Double
-pg_double =
-  (string "NaN" *> pure (0 / 0))
-    <|> (string "Infinity" *> pure (1 / 0))
-    <|> (string "-Infinity" *> pure (-1 / 0))
-    <|> double
-
-pg_rational :: Parser Rational
-pg_rational =
-  (string "NaN" *> pure notANumber)
-    <|> (string "Infinity" *> pure infinity)
-    <|> (string "-Infinity" *> pure (-infinity))
-    <|> rational
-
--- | bytea, name, text, \"char\", bpchar, varchar, unknown
-instance FromField SB.ByteString where
-  fromField f dat =
-    if typeOid f == TI.byteaOid
-      then unBinary <$> fromField f dat
-      else doFromField f okText' pure dat
-
--- | oid
-instance FromField PQ.Oid where
-  fromField f dat = PQ.Oid <$> attoFieldParser (== TI.oidOid) decimal f dat
-
--- | bytea, name, text, \"char\", bpchar, varchar, unknown
-instance FromField LB.ByteString where
-  fromField f dat = LB.fromChunks . (: []) <$> fromField f dat
-
-unescapeBytea ::
-  Field ->
-  SB.ByteString ->
-  Conversion (Binary SB.ByteString)
-unescapeBytea f str' = case unsafeDupablePerformIO (PQ.unescapeBytea str') of
-  Nothing -> returnError ConversionFailed f "unescapeBytea failed"
-  Just str -> pure (Binary str)
-
--- | bytea
-instance FromField (Binary SB.ByteString) where
-  fromField f dat = case format f of
-    PQ.Text -> doFromField f okBinary (unescapeBytea f) dat
-    PQ.Binary -> doFromField f okBinary (pure . Binary) dat
-
--- | bytea
-instance FromField (Binary LB.ByteString) where
-  fromField f dat = Binary . LB.fromChunks . (: []) . unBinary <$> fromField f dat
-
--- | name, text, \"char\", bpchar, varchar
-instance FromField ST.Text where
-  fromField f = doFromField f okText $ (either left pure . ST.decodeUtf8')
-
--- FIXME:  check character encoding
-
--- | name, text, \"char\", bpchar, varchar
-instance FromField LT.Text where
-  fromField f dat = LT.fromStrict <$> fromField f dat
-
--- | citext
-instance FromField (CI ST.Text) where
-  fromField f mdat = do
-    typ <- typename f
-    if typ /= "citext"
-      then returnError Incompatible f ""
-      else case mdat of
-        Nothing -> returnError UnexpectedNull f ""
-        Just dat ->
-          either
-            left
-            (pure . CI.mk)
-            (ST.decodeUtf8' dat)
-
--- | citext
-instance FromField (CI LT.Text) where
-  fromField f mdat = do
-    typ <- typename f
-    if typ /= "citext"
-      then returnError Incompatible f ""
-      else case mdat of
-        Nothing -> returnError UnexpectedNull f ""
-        Just dat ->
-          either
-            left
-            (pure . CI.mk . LT.fromStrict)
-            (ST.decodeUtf8' dat)
-
--- | name, text, \"char\", bpchar, varchar
-instance FromField [Char] where
-  fromField f dat = ST.unpack <$> fromField f dat
-
--- | timestamptz
-instance FromField UTCTime where
-  fromField = ff TI.timestamptzOid "UTCTime" parseUTCTime
-
--- | timestamptz
-instance FromField ZonedTime where
-  fromField = ff TI.timestamptzOid "ZonedTime" parseZonedTime
-
--- | timestamp
-instance FromField LocalTime where
-  fromField = ff TI.timestampOid "LocalTime" parseLocalTime
-
--- | date
-instance FromField Day where
-  fromField = ff TI.dateOid "Day" parseDay
-
--- | time
-instance FromField TimeOfDay where
-  fromField = ff TI.timeOid "TimeOfDay" parseTimeOfDay
-
--- | timestamptz
-instance FromField UTCTimestamp where
-  fromField = ff TI.timestamptzOid "UTCTimestamp" parseUTCTimestamp
-
--- | timestamptz
-instance FromField ZonedTimestamp where
-  fromField = ff TI.timestamptzOid "ZonedTimestamp" parseZonedTimestamp
-
--- | timestamp
-instance FromField LocalTimestamp where
-  fromField = ff TI.timestampOid "LocalTimestamp" parseLocalTimestamp
-
--- | date
-instance FromField Date where
-  fromField = ff TI.dateOid "Date" parseDate
-
--- | interval. Requires you to configure intervalstyle as @iso_8601@.
---
---   You can configure intervalstyle on every connection with a @SET@ command,
---   but for better performance you may want to configure it permanently in the
---   file found with @SHOW config_file;@ .
-instance FromField CalendarDiffTime where
-  fromField = ff TI.intervalOid "CalendarDiffTime" parseCalendarDiffTime
-
-ff ::
-  PQ.Oid ->
-  String ->
-  (B8.ByteString -> Either String a) ->
-  Field ->
-  Maybe B8.ByteString ->
-  Conversion a
-ff compatOid hsType parseBS f mstr =
-  if typeOid f /= compatOid
-    then err Incompatible ""
-    else case mstr of
-      Nothing -> err UnexpectedNull ""
-      Just str -> case parseBS str of
-        Left msg -> err ConversionFailed msg
-        Right val -> return val
-  where
-    err errC msg = do
-      typnam <- typename f
-      left $
-        errC
-          (B8.unpack typnam)
-          (tableOid f)
-          (maybe "" B8.unpack (name f))
-          hsType
-          msg
-{-# INLINE ff #-}
-
--- | Compatible with both types.  Conversions to type @b@ are
---   preferred,  the conversion to type @a@ will be tried after
---   the 'Right' conversion fails.
-instance (FromField a, FromField b) => FromField (Either a b) where
-  fromField f dat =
-    (Right <$> fromField f dat)
-      <|> (Left <$> fromField f dat)
-
--- | any postgresql array whose elements are compatible with type @a@
-instance (FromField a, Typeable a) => FromField (PGArray a) where
-  fromField = pgArrayFieldParser fromField
 
 pgArrayFieldParser :: (Typeable a) => FieldParser a -> FieldParser (PGArray a)
 pgArrayFieldParser fieldParser f mdat = do
@@ -628,32 +304,6 @@ fromArray fieldParser typInfo f = sequence . (parseIt <$>) <$> array delim
         f'
           | Arrays.Array _ <- item = f
           | otherwise = fElem
-
-instance (FromField a, Typeable a) => FromField (Vector a) where
-  fromField f v = V.fromList . fromPGArray <$> fromField f v
-
-instance (FromField a, Typeable a) => FromField (IOVector a) where
-  fromField f v = liftConversion . V.unsafeThaw =<< fromField f v
-
--- | uuid
-instance FromField UUID where
-  fromField f mbs =
-    if typeOid f /= TI.uuidOid
-      then returnError Incompatible f ""
-      else case mbs of
-        Nothing -> returnError UnexpectedNull f ""
-        Just bs ->
-          case UUID.fromASCIIBytes bs of
-            Nothing -> returnError ConversionFailed f "Invalid UUID"
-            Just uuid -> pure uuid
-
--- | json, jsonb
-instance FromField JSON.Value where
-  fromField f mbs = parseBS =<< fromFieldJSONByteString f mbs
-    where
-      parseBS bs = case JSON.eitherDecodeStrict' bs of
-        Left err -> returnError ConversionFailed f err
-        Right val -> pure val
 
 -- | Return the JSON ByteString directly
 --
@@ -687,65 +337,17 @@ fromFieldJSONByteString f mbs =
 -- @\\f mv -> 'Control.Monad.join' '<$>' optionalField fromJSONField f mv@
 fromJSONField :: (JSON.FromJSON a, Typeable a) => FieldParser a
 fromJSONField f mbBs = do
-  value <- fromField f mbBs
+  bs <- fromFieldJSONByteString f mbBs
+  value <- case JSON.eitherDecodeStrict' bs of
+    Left err -> returnError ConversionFailed f $ "JSON parse error: " ++ err
+    Right val -> pure val
   case JSON.ifromJSON value of
     JSON.IError path err ->
       returnError ConversionFailed f $
         "JSON decoding error: " ++ (JSON.formatError path err)
     JSON.ISuccess x -> pure x
 
--- | Compatible with the same set of types as @a@.  Note that
---   modifying the 'IORef' does not have any effects outside
---   the local process on the local machine.
-instance (FromField a) => FromField (IORef a) where
-  fromField f v = liftConversion . newIORef =<< fromField f v
-
--- | Compatible with the same set of types as @a@.  Note that
---   modifying the 'MVar' does not have any effects outside
---   the local process on the local machine.
-instance (FromField a) => FromField (MVar a) where
-  fromField f v = liftConversion . newMVar =<< fromField f v
-
 type Compat = PQ.Oid -> Bool
-
-okText, okText', okBinary, ok16, ok32, ok64, okInt :: Compat
-okText =
-  eq TI.nameOid
-    \/ eq TI.textOid
-    \/ eq TI.charOid
-    \/ eq TI.bpcharOid
-    \/ eq TI.varcharOid
-okText' =
-  eq TI.nameOid
-    \/ eq TI.textOid
-    \/ eq TI.charOid
-    \/ eq TI.bpcharOid
-    \/ eq TI.varcharOid
-    \/ eq TI.unknownOid
-okBinary = eq TI.byteaOid
-ok16 = eq TI.int2Oid
-ok32 = eq TI.int2Oid \/ eq TI.int4Oid
-ok64 = eq TI.int2Oid \/ eq TI.int4Oid \/ eq TI.int8Oid
-#if WORD_SIZE_IN_BITS < 64
-okInt = ok32
-#else
-okInt = ok64
-#endif
-
--- | eq and \/ are used to imlement what Macro stuff did,
--- i.e. mkCompats and inlineTypoid
-eq :: PQ.Oid -> PQ.Oid -> Bool
-eq = (==)
-{-# INLINE eq #-}
-
-infixr 2 \/
-
-(\/) ::
-  (PQ.Oid -> Bool) ->
-  (PQ.Oid -> Bool) ->
-  (PQ.Oid -> Bool)
-f \/ g = \x -> f x || g x
-{-# INLINE (\/) #-}
 
 doFromField ::
   forall a.
@@ -775,9 +377,9 @@ returnError mkErr f msg = do
   typnam <- typename f
   left $
     mkErr
-      (B.unpack typnam)
-      (tableOid f)
-      (maybe "" B.unpack (name f))
+      (B8.unpack typnam)
+      (error "no tableOid in hpgsql")
+      (maybe "" B8.unpack (name f))
       (show (typeOf (undefined :: a)))
       msg
 
