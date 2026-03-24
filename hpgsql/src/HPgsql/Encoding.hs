@@ -52,7 +52,9 @@ import qualified Data.Vector as Vector
 import Data.Word (Word32, Word64)
 import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, castWord64ToDouble, expt, float2Double)
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
-import GHC.TypeLits (KnownSymbol, symbolVal)
+import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
+import qualified GHC.TypeLits as TypeLits
+import HPgsql.Base
 import HPgsql.TypeInfo (Format (..), Oid (..), TypeInfo, boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
@@ -135,25 +137,8 @@ instance Applicative RowParser where
 
   RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in tc1 cols1 ++ tc2 cols2) (nc1 ++ nc2)
 
-instance Monad RowParser where
-  RowParser {..} >>= f =
-    RowParser
-      { -- TODO: What does this Monad instance even mean?
-        -- I made it type-check, but I need to understand it.
-        fullRowParser = \colInfos ->
-          do
-            firstCols <- fullRowParser colInfos
-            let rp = f firstCols
-            rp.fullRowParser colInfos,
-        rowColumnsTypeCheck,
-        resultColumnsFmts
-      }
-
--- TODO: Monad instance because people do want to write
--- <- (bind arrows) in their FromPgField instances..
--- and also because `fail` feels better than `error`?
--- instance Monad RowParser where
---   (>>=) = (<*>)
+instance (TypeError (TypeLits.Text "RowParser does not have a Monad instance in HPgsql because HPgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances.")) => Monad RowParser where
+  (>>=) = error "inaccessible bind in Monad RowParser instance"
 
 -- | TODO: I think this can actually be exported. Maybe it helps users avoid `Only` if they prefer?
 singleColRowParser :: FieldParser a -> RowParser a

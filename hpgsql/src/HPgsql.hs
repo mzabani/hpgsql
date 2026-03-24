@@ -83,6 +83,7 @@ import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
 #else
 import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
 #endif
+import HPgsql.Base
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Encoding (ColumnInfo (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
@@ -1421,11 +1422,6 @@ rethrowAsIrrecoverable = handle (throw . asIrrec)
   where
     asIrrec ex = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", pgErrorDetails = mempty, innerException = Just ex, relatedStatement = Nothing}
 
--- whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
--- whenJust m f = case m of
---   Nothing -> pure ()
---   Just v -> f v
-
 {-# NOINLINE _globalDebugLock #-}
 _globalDebugLock :: MVar Bool
 _globalDebugLock = unsafePerformIO $ newMVar True
@@ -1445,42 +1441,6 @@ timeDebugNonBlockingOperation _ f = f
 --   t2 <- getMonotonicTime
 --   when (t2 - t1 > 0.01) $ putStrLn $ opName ++ " took more than 10ms: " ++ show (t2 - t1)
 --   pure ret
-
-headMaybe :: [a] -> Maybe a
-headMaybe [] = Nothing
-headMaybe (x : _) = Just x
-
-lastMaybe :: [a] -> Maybe a
-lastMaybe [] = Nothing
-lastMaybe [x] = Just x
-lastMaybe (_ : xs) = lastMaybe xs
-
-lastAndInit :: [a] -> ([a], Maybe a)
-lastAndInit xs = case NE.nonEmpty xs of
-  Nothing -> ([], Nothing)
-  Just nxs -> second Just $ lastAndInitNE nxs
-
-lastAndInitNE :: NonEmpty a -> ([a], a)
-lastAndInitNE (x :| xs) =
-  case NE.nonEmpty xs of
-    Nothing -> ([], x)
-    Just neXs ->
-      let (others, l) = lastAndInitNE neXs
-       in (x : others, l)
-
-whenNonEmpty :: [a] -> (NonEmpty a -> IO b) -> IO ()
-whenNonEmpty [] _ = pure ()
-whenNonEmpty (x : xs) f = void $ f (x :| xs)
-
--- whenM :: IO Bool -> IO a -> IO ()
--- whenM cond f = do
---   v <- cond
---   when v $ void f
-
-ifM :: IO Bool -> IO a -> IO a -> IO a
-ifM cond fTrue fFalse = do
-  v <- cond
-  if v then fTrue else fFalse
 
 -- Note [Polling Weak ThreadId instead of finalizers]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
