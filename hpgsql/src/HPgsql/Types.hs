@@ -11,16 +11,20 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Encoding as AesonInternal
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.List.NonEmpty as NE
-import Data.Text (Text)
-import qualified Data.Text as Text
-import Data.Text.Encoding (encodeUtf8)
-import Data.Typeable (Typeable)
+import Data.Typeable (Proxy (..), Typeable)
+import Data.Vector (Vector)
+import qualified Data.Vector as Vector
 import HPgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
-import HPgsql.Query (Query (..), SingleQuery (..))
+import HPgsql.Query (Query (..), commaSeparatedRowTuples)
 import HPgsql.TypeInfo (Format (..), jsonOid, jsonbOid)
 
--- TODO: Write tests for these types!
+-- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
+newtype PGArray a = PGArray {fromPGArray :: [a]}
+  deriving (Eq, Ord, Read, Show, Functor)
+
+instance forall a. (ToPgField a) => ToPgField (PGArray a) where
+  toTypeOid _ = toTypeOid (Proxy @(Vector a))
+  toPgField tyiCache = toPgField tyiCache . Vector.fromList . fromPGArray
 
 newtype Values a = Values [a]
 
@@ -29,16 +33,10 @@ newtype Values a = Values [a]
 --
 -- > [sql| INSERT INTO emp(id,name) ^{valuesToQuery (Values rows)} ON CONFLICT DO NOTHING |]
 valuesToQuery :: (ToPgRow a) => Values a -> Query
-valuesToQuery (Values []) = Query $ NE.singleton $ SingleQuery "" [] -- TODO this should be an error? Maybe force a NonEmpty list?
-valuesToQuery (Values rows@(firstRow : _)) =
-  let allParams = concatMap toPgParams rows
-      numCols = length (toPgParams firstRow)
-      rowPlaceholder :: Int -> Text
-      rowPlaceholder startIdx =
-        "(" <> Text.intercalate ", " ["$" <> Text.pack (show (startIdx + i)) | i <- [0 .. numCols - 1]] <> ")"
-      valuesClause = Text.intercalate ", " [rowPlaceholder (rowIdx * numCols + 1) | rowIdx <- [0 .. length rows - 1]]
-      fullSql = encodeUtf8 $ "VALUES " <> valuesClause
-   in Query $ NE.singleton $ SingleQuery fullSql allParams
+valuesToQuery (Values []) = error "HPgsql: empty Values lists are not supported because postgres does not support them"
+valuesToQuery (Values rows) =
+  let allParams = map toPgParams rows
+   in "VALUES " <> commaSeparatedRowTuples allParams
 
 -- | A JSON type that does not incur the costs of deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates
@@ -92,5 +90,5 @@ instance (FromJSON a) => FromPgField (Aeson a) where
       }
 
 instance (ToJSON a) => ToPgField (Aeson a) where
-  toTypeOid _ = Just jsonbOid
-  toPgField (Aeson v) = Just $ LBS.cons 1 (Aeson.encode v)
+  toTypeOid _ _ = Just jsonbOid
+  toPgField _ (Aeson v) = Just $ LBS.cons 1 (Aeson.encode v)

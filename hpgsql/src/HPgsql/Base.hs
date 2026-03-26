@@ -2,6 +2,7 @@ module HPgsql.Base where
 
 import Control.Monad (void)
 import Data.Bifunctor (second)
+import qualified Data.Foldable as Foldable
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 
@@ -35,6 +36,28 @@ ifM :: IO Bool -> IO a -> IO a -> IO a
 ifM cond fTrue fFalse = do
   v <- cond
   if v then fTrue else fFalse
+
+-- | Takes the minimum of the Just values only, or the default if there are none.
+minimumOnOrDef :: (Ord b, Foldable f) => b -> f a -> (a -> Maybe b) -> b
+minimumOnOrDef def xs f =
+  Foldable.foldl'
+    ( \(!currMin :: b) el -> case f el of
+        Nothing -> currMin
+        Just v -> min v currMin
+    )
+    def
+    xs
+
+-- | Takes the maximum of the Just values only, or the default if there are none.
+maximumOnOrDef :: (Ord b, Foldable f) => b -> f a -> (a -> Maybe b) -> b
+maximumOnOrDef def xs f =
+  Foldable.foldl'
+    ( \(!currMax) el -> case f el of
+        Nothing -> currMax
+        Just v -> max v currMax
+    )
+    def
+    xs
 
 -- whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
 -- whenJust m f = case m of

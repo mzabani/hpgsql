@@ -12,7 +12,7 @@ import DbUtils
     withRollback,
   )
 import HPgsql
-import HPgsql.Query (sql)
+import HPgsql.Query (mkQuery, sql)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Test.Hspec

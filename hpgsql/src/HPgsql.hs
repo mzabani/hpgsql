@@ -37,7 +37,6 @@ module HPgsql
     executeMany_,
     executeMany,
     connectionTransactionStatus,
-    mkQuery,
     runPipeline,
     pipelineCmd,
     pipelineL,
@@ -59,7 +58,6 @@ import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracke
 import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
-import Data.Bifunctor (second)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
@@ -85,11 +83,11 @@ import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
 #endif
 import HPgsql.Base
 import HPgsql.Connection (ConnString (..))
-import HPgsql.Encoding (ColumnInfo (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), ToPgRow (..))
+import HPgsql.Encoding (ColumnInfo (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
-import HPgsql.Query (Query (..), SingleQuery (..))
+import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements)
 import HPgsql.TypeInfo (Format (..), Oid, TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..), Socket)
 import qualified Network.Socket as Socket
@@ -394,12 +392,12 @@ refreshTypeInfoCache conn =
   -- connection-setup statements?
   -- https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
   -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
-  let fetchPipeline = pipelineL rowParser "select oid, typname from pg_catalog.pg_type WHERE oid >= 16384"
+  let fetchPipeline = pipelineL rowParser "select oid, typname, typarray from pg_catalog.pg_type WHERE oid >= 16384"
    in fillTypeInfoCache <$> fetchPipeline
   where
     fillTypeInfoCache queryResultsIO = do
       queryResults <- queryResultsIO
-      let customTypes = Map.fromList $ map (second TypeInfo) queryResults
+      let customTypes = Map.fromList $ map (\(oid, typname, typarray) -> (oid, TypeInfo typname (if typarray == 0 then Nothing else Just typarray))) queryResults
       modifyMVar_ conn.typeInfoCache $ \_ -> pure $ customTypes `Map.union` builtinPgTypesMap
 
 -- | Useful to reset the connection's internal typeInfo cache
@@ -950,9 +948,6 @@ executeMany conn qs = do
 executeMany_ :: HPgConnection -> [Query] -> IO ()
 executeMany_ conn qry = void $ executeMany conn qry
 
-mkQuery :: (ToPgRow p) => ByteString -> p -> Query
-mkQuery qry p = Query $ NE.singleton $ SingleQuery qry (toPgParams p)
-
 -- | Streams results directly from the connection's socket, i.e. without using cursors.
 -- It is important to note the same thread that runs this must be the thread that
 -- consumes the returned Stream, and the returned Stream must be consumed completely
@@ -1173,7 +1168,7 @@ instance Applicative Pipeline where
      in f g
 
 pipelineS :: RowParser a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineS rowparser@(RowParser _ _ expectedColFmts) (Query (lastAndInitNE -> (firstQueriesToSend, lastQueryToSend))) =
+pipelineS rowparser@(RowParser _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
     (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just expectedColFmts)])
     ( \conn qryIds -> do
@@ -1187,7 +1182,10 @@ pipelineL :: RowParser a -> Query -> Pipeline (IO [a])
 pipelineL rowparser q = (S.toList_ =<<) <$> pipelineS rowparser q
 
 pipelineCmd :: Query -> Pipeline (IO Int64)
-pipelineCmd (Query qs) =
+pipelineCmd = pipelineCmdInternal . breakQueryIntoStatements
+
+pipelineCmdInternal :: NonEmpty SingleQuery -> Pipeline (IO Int64)
+pipelineCmdInternal qs =
   Pipeline
     (map (,Nothing) (NE.toList qs))
     ( \conn qryIds -> do
@@ -1207,16 +1205,18 @@ runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
   case mQueries of
     Nothing -> pure $ run conn []
     Just queries -> do
+      typeInfoCache <- readMVar conn.typeInfoCache
       let toMessages (SingleQuery qryString qryParams, mExpectedResultColFmts) =
-            [ SomeMessage $ Parse qryString (map fst qryParams),
-              SomeMessage $
-                Bind
-                  { paramsValuesInOrder = map snd qryParams,
-                    resultColumnFmts = fromMaybe [BinaryFmt] mExpectedResultColFmts
-                  },
-              SomeMessage Describe,
-              SomeMessage Execute
-            ]
+            let paramOidsAndValues = map ($ typeInfoCache) qryParams
+             in [ SomeMessage $ Parse qryString (map fst paramOidsAndValues),
+                  SomeMessage $
+                    Bind
+                      { paramsValuesInOrder = map snd paramOidsAndValues,
+                        resultColumnFmts = fromMaybe [BinaryFmt] mExpectedResultColFmts
+                      },
+                  SomeMessage Describe,
+                  SomeMessage Execute
+                ]
       atomicallyInitiatePipelineOrPanicAndThenConsumeResults
         conn
         (fmap (\(SingleQuery {queryString}, _) -> (queryString, ExtendedQuery)) queries)
@@ -1268,14 +1268,16 @@ queryWith :: RowParser a -> HPgConnection -> Query -> IO [a]
 queryWith rparser conn qry = join $ runPipeline conn $ pipelineL rparser qry
 
 withCopy :: HPgConnection -> Query -> IO () -> IO Int64
-withCopy conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) copyFn = do
-  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmd (Query fqne)
+withCopy conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) copyFn = do
+  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmdInternal fqne
   thisThreadId <- getMyWeakThreadId
+  typeInfoCache <- readMVar conn.typeInfoCache
+  let paramOidsAndValues = map ($ typeInfoCache) queryParams
   atomicallyInitiatePipelineOrPanicAndThenConsumeResults
     conn
     ((queryString, CopyQuery StillCopying) :| [])
-    [ SomeMessage $ Parse queryString (map fst queryParams),
-      SomeMessage $ Bind {paramsValuesInOrder = map snd queryParams, resultColumnFmts = []},
+    [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),
+      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = []},
       -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
       SomeMessage Execute,
       SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
@@ -1288,16 +1290,18 @@ withCopy conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) copyFn
       copyEndInternal conn qryId
 
 copyStart :: HPgConnection -> Query -> IO ()
-copyStart conn (Query (lastAndInitNE -> (firstQueries, SingleQuery {..}))) = do
+copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) = do
   -- If the query contains not just COPY, but other statements before, we run
   -- those. This is awkward, but what else should we do? Throw?
-  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmd (Query fqne)
+  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmdInternal fqne
   thisThreadId <- getMyWeakThreadId
+  typeInfoCache <- readMVar conn.typeInfoCache
+  let paramOidsAndValues = map ($ typeInfoCache) queryParams
   atomicallyInitiatePipelineOrPanicAndThenConsumeResults
     conn
     ((queryString, CopyQuery StillCopying) :| [])
-    [ SomeMessage $ Parse queryString (map fst queryParams),
-      SomeMessage $ Bind {paramsValuesInOrder = map snd queryParams, resultColumnFmts = []},
+    [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),
+      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = []},
       -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
       SomeMessage Execute,
       SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?

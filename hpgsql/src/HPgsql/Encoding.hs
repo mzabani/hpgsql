@@ -11,6 +11,7 @@ module HPgsql.Encoding
     RowParser (..), -- TODO: Can we export ctor?
     AllowNull (..),
     LowerCasedPgEnum (..),
+    (:.) (..),
     anyTypeDecoder,
     singleColRowParser,
     haskellIntOid,
@@ -54,8 +55,7 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
-import HPgsql.Base
-import HPgsql.TypeInfo (Format (..), Oid (..), TypeInfo, boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
+import HPgsql.TypeInfo (Format (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
   { typeOid :: !Oid,
@@ -261,46 +261,37 @@ class FromPgRow a where
   rowParser = genericFromPgRow
 
 class ToPgField a where
-  -- When writing a ToPgField MyCustomType instance, users can't know
-  -- the OID of their custom types.
-  -- Some options are available:
-  -- 1. Make `toTypeOid` return a `Maybe Oid` for those cases.
-  -- 2. Make `toTypeOid` return `Either TypeName Oid`.
-  -- With 1, users might have to add `::mycustomtype` assertions to their
-  -- queries occasionally, because postgres doesn't always infer types correctly.
-  -- With 2, hpgsql could run a query first to get the type's OIDs, then the user's query.
-  -- 1 seems much simpler and familiar.
-  toTypeOid :: proxy a -> Maybe Oid
-  toTypeOid _ = Nothing -- Default definition so users don't have to write this
-  toPgField :: a -> Maybe LBS.ByteString
+  toTypeOid :: proxy a -> Map Oid TypeInfo -> Maybe Oid
+  toTypeOid _ _ = Nothing -- Default definition so users don't have to write this
+  toPgField :: Map Oid TypeInfo -> a -> Maybe LBS.ByteString
 
 instance ToPgField Int where
-  toTypeOid _ = Just haskellIntOid
-  toPgField n = Just $ binaryIntEncoder n
+  toTypeOid _ _ = Just haskellIntOid
+  toPgField _ n = Just $ binaryIntEncoder n
 
 instance ToPgField Int16 where
-  toTypeOid _ = Just int2Oid
-  toPgField n = Just $ Cereal.encodeLazy @Int16 . fromIntegral $ n
+  toTypeOid _ _ = Just int2Oid
+  toPgField _ n = Just $ Cereal.encodeLazy @Int16 . fromIntegral $ n
 
 instance ToPgField Int32 where
-  toTypeOid _ = Just int4Oid
-  toPgField n = Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
+  toTypeOid _ _ = Just int4Oid
+  toPgField _ n = Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
 
 instance ToPgField Int64 where
-  toTypeOid _ = Just int8Oid
-  toPgField n = Just $ Cereal.encodeLazy @Int64 . fromIntegral $ n
+  toTypeOid _ _ = Just int8Oid
+  toPgField _ n = Just $ Cereal.encodeLazy @Int64 . fromIntegral $ n
 
 instance ToPgField Integer where
-  toTypeOid _ = Just numericOid
-  toPgField n = toPgField @Scientific (fromIntegral n)
+  toTypeOid _ _ = Just numericOid
+  toPgField tyiCache n = toPgField @Scientific tyiCache (fromIntegral n)
 
 instance ToPgField Oid where
-  toTypeOid _ = Just oidOid
-  toPgField n = Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
+  toTypeOid _ _ = Just oidOid
+  toPgField _ n = Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
 
 instance ToPgField Scientific where
-  toTypeOid _ = Just numericOid
-  toPgField n =
+  toTypeOid _ _ = Just numericOid
+  toPgField _ n =
     let sign = Cereal.encodeLazy @Int16 $ if n >= 0 then 0 else 0x4000
         -- The number is coeff * 10^exp, but we want it in base-10000 so we convert it to
         -- new_coeff * 10^new_exp with new_exp a multiple of 4
@@ -323,36 +314,36 @@ instance ToPgField Scientific where
               (Cereal.encodeLazy @Int16 rest <> encodedDigits)
 
 instance ToPgField Float where
-  toTypeOid _ = Just float4Oid
-  toPgField n = Just $ Cereal.encodeLazy @Word32 $ castFloatToWord32 n
+  toTypeOid _ _ = Just float4Oid
+  toPgField _ n = Just $ Cereal.encodeLazy @Word32 $ castFloatToWord32 n
 
 instance ToPgField Double where
-  toTypeOid _ = Just float8Oid
-  toPgField n = Just $ Cereal.encodeLazy @Word64 $ castDoubleToWord64 n
+  toTypeOid _ _ = Just float8Oid
+  toPgField _ n = Just $ Cereal.encodeLazy @Word64 $ castDoubleToWord64 n
 
 instance ToPgField Bool where
   -- TODO: Cereal.encodeLazy seems to work, but reference the documentation that shows how bools are encoded
-  toTypeOid _ = Just boolOid
-  toPgField n = Just $ Cereal.encodeLazy @Bool $ n
+  toTypeOid _ _ = Just boolOid
+  toPgField _ n = Just $ Cereal.encodeLazy @Bool $ n
 
 instance ToPgField Day where
   -- PG Dates are Int32 number of days relative to 2000-01-01
   -- https://github.com/postgres/postgres/blob/master/src/include/datatype/timestamp.h#L235
-  toTypeOid _ = Just dateOid
-  toPgField d = Just $ Cereal.encodeLazy @Int32 $ daysSince2000
+  toTypeOid _ _ = Just dateOid
+  toPgField _ d = Just $ Cereal.encodeLazy @Int32 $ daysSince2000
     where
       -- TODO: Catch integer overflow and do what?
       daysSince2000 = fromIntegral $ diffDays d (fromGregorian 2000 1 1)
 
 instance ToPgField CalendarDiffTime where
-  toTypeOid _ = Just intervalOid
-  toPgField CalendarDiffTime {..} =
+  toTypeOid _ _ = Just intervalOid
+  toPgField _ CalendarDiffTime {..} =
     let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400_000_000_000_000
      in Just $ Cereal.encodeLazy @(Int64, Int32, Int32) (round $ timeUnderOneDay * 1_000_000, days, fromIntegral ctMonths)
 
 instance ToPgField UTCTime where
-  toTypeOid _ = Just timestamptzOid
-  toPgField (UTCTime parsedDate timeinday) = Just $ Cereal.encodeLazy @Int64 totalusecs
+  toTypeOid _ _ = Just timestamptzOid
+  toPgField _ (UTCTime parsedDate timeinday) = Just $ Cereal.encodeLazy @Int64 totalusecs
     where
       -- TODO: Catch integer overflow and do what?
       -- This is FromPgField UTCTime:
@@ -368,93 +359,125 @@ instance ToPgField UTCTime where
       totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds timeinday `div` 1_000_000)
 
 instance ToPgField ZonedTime where
-  toTypeOid _ = Just timestamptzOid
-  toPgField = toPgField @UTCTime . zonedTimeToUTC
+  toTypeOid _ _ = Just timestamptzOid
+  toPgField tyiCache = toPgField @UTCTime tyiCache . zonedTimeToUTC
 
 instance ToPgField Char where
-  toTypeOid _ = Just textOid
-  toPgField t = toPgField $ Text.singleton t
+  toTypeOid _ _ = Just textOid
+  toPgField tyiCache t = toPgField tyiCache $ Text.singleton t
 
 instance ToPgField ByteString where
-  toTypeOid _ = Just byteaOid
-  toPgField = Just . LBS.fromStrict
+  toTypeOid _ _ = Just byteaOid
+  toPgField _ = Just . LBS.fromStrict
 
 instance ToPgField LBS.ByteString where
-  toTypeOid _ = Just byteaOid
-  toPgField = Just
+  toTypeOid _ _ = Just byteaOid
+  toPgField _ = Just
 
 instance ToPgField Text where
-  toTypeOid _ = Just textOid
+  toTypeOid _ _ = Just textOid
 
   -- TODO: What about client_encoding?
   -- TODO: Some unsafe Text->LazyByteString conversion function that is faster?
-  toPgField t = Just $ LBS.fromStrict $ encodeUtf8 t
+  toPgField _ t = Just $ LBS.fromStrict $ encodeUtf8 t
 
 instance ToPgField LT.Text where
-  toTypeOid _ = Just textOid
+  toTypeOid _ _ = Just textOid
 
   -- TODO: What about client_encoding?
   -- TODO: Some unsafe LT.Text->LazyByteString conversion function that is faster?
-  toPgField t = Just $ LT.encodeUtf8 t
+  toPgField _ t = Just $ LT.encodeUtf8 t
 
 instance ToPgField String where
-  toTypeOid _ = Just textOid
+  toTypeOid _ _ = Just textOid
 
   -- TODO: What about client_encoding?
-  toPgField = toPgField . Text.pack
+  toPgField tyiCache = toPgField tyiCache . Text.pack
 
 instance ToPgField Aeson.Value where
   -- Maybe we shouldn't specify an oid so postgres can infer the best type?
   -- But json and jsonb might have different binary representations..
-  toTypeOid _ = Just jsonbOid
-  toPgField v = Just $ LBS.cons 1 (Aeson.encode v)
+  toTypeOid _ _ = Just jsonbOid
+  toPgField _ v = Just $ LBS.cons 1 (Aeson.encode v)
 
 instance (ToPgField a) => ToPgField (Maybe a) where
-  toTypeOid _ = toTypeOid (Proxy @a)
-  toPgField Nothing = Nothing
-  toPgField (Just n) = toPgField n
+  toTypeOid _ typeInfoCache = toTypeOid (Proxy @a) typeInfoCache
+  toPgField _ Nothing = Nothing
+  toPgField tyiCache (Just n) = toPgField tyiCache n
+
+instance (ToPgField a) => ToPgField (Vector a) where
+  toTypeOid _ typeInfoCache = do
+    -- Maybe monad
+    elOid <- toTypeOid (Proxy @a) typeInfoCache
+    arrayTypInfo <- Map.lookup elOid typeInfoCache
+    arrayTypInfo.oidOfArrayType
+  toPgField typeInfoCache vec =
+    let Oid elemOid = fromMaybe (Oid 0) (toTypeOid (Proxy @a) typeInfoCache)
+        ndim = Cereal.encodeLazy @Int32 1
+        -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
+        hasNull = Cereal.encodeLazy @Int32 0
+        -- hasNull = Cereal.encodeLazy @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
+        elemOidBs = Cereal.encodeLazy @Int32 elemOid
+        dim1 = Cereal.encodeLazy @Int32 (fromIntegral $ Vector.length vec)
+        lb1 = Cereal.encodeLazy @Int32 1
+        encodedElements = Vector.foldl' (\acc el -> acc <> encodeElement el) mempty vec
+        encodeElement el = case toPgField typeInfoCache el of
+          Nothing -> Cereal.encodeLazy @Int32 (-1)
+          Just bs -> Cereal.encodeLazy @Int32 (fromIntegral $ LBS.length bs) <> bs
+     in Just $ ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
 
 class ToPgRow a where
-  toPgParams :: a -> [(Maybe Oid, Maybe LBS.ByteString)]
+  toPgParams :: a -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]
 
 instance ToPgRow () where
   toPgParams () = []
 
 instance (ToPgField a) => ToPgRow (Only a) where
-  toPgParams (Only a) = [(toTypeOid (Proxy @a), toPgField a)]
+  toPgParams (Only a) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a)]
 
 instance (ToPgField a, ToPgField b) => ToPgRow (a, b) where
-  toPgParams (a, b) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b)]
+  toPgParams (a, b) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b)]
 
 instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
-  toPgParams (a, b, c) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c)]
+  toPgParams (a, b, c) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
-  toPgParams (a, b, c, d) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d)]
+  toPgParams (a, b, c, d) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
-  toPgParams (a, b, c, d, e) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e)]
+  toPgParams (a, b, c, d, e) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f) => ToPgRow (a, b, c, d, e, f) where
-  toPgParams (a, b, c, d, e, f) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f)]
+  toPgParams (a, b, c, d, e, f) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g) => ToPgRow (a, b, c, d, e, f, g) where
-  toPgParams (a, b, c, d, e, f, g) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g)]
+  toPgParams (a, b, c, d, e, f, g) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h) => ToPgRow (a, b, c, d, e, f, g, h) where
-  toPgParams (a, b, c, d, e, f, g, h) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g), (toTypeOid (Proxy @h), toPgField h)]
+  toPgParams (a, b, c, d, e, f, g, h) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i) => ToPgRow (a, b, c, d, e, f, g, h, i) where
-  toPgParams (a, b, c, d, e, f, g, h, i) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g), (toTypeOid (Proxy @h), toPgField h), (toTypeOid (Proxy @i), toPgField i)]
+  toPgParams (a, b, c, d, e, f, g, h, i) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h), \typeInfoCache -> (toTypeOid (Proxy @i) typeInfoCache, toPgField typeInfoCache i)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j) => ToPgRow (a, b, c, d, e, f, g, h, i, j) where
-  toPgParams (a, b, c, d, e, f, g, h, i, j) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g), (toTypeOid (Proxy @h), toPgField h), (toTypeOid (Proxy @i), toPgField i), (toTypeOid (Proxy @j), toPgField j)]
+  toPgParams (a, b, c, d, e, f, g, h, i, j) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h), \typeInfoCache -> (toTypeOid (Proxy @i) typeInfoCache, toPgField typeInfoCache i), \typeInfoCache -> (toTypeOid (Proxy @j) typeInfoCache, toPgField typeInfoCache j)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [(toTypeOid (Proxy @a), toPgField a), (toTypeOid (Proxy @b), toPgField b), (toTypeOid (Proxy @c), toPgField c), (toTypeOid (Proxy @d), toPgField d), (toTypeOid (Proxy @e), toPgField e), (toTypeOid (Proxy @f), toPgField f), (toTypeOid (Proxy @g), toPgField g), (toTypeOid (Proxy @h), toPgField h), (toTypeOid (Proxy @i), toPgField i), (toTypeOid (Proxy @j), toPgField j), (toTypeOid (Proxy @k), toPgField k)]
+  toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h), \typeInfoCache -> (toTypeOid (Proxy @i) typeInfoCache, toPgField typeInfoCache i), \typeInfoCache -> (toTypeOid (Proxy @j) typeInfoCache, toPgField typeInfoCache j), \typeInfoCache -> (toTypeOid (Proxy @k) typeInfoCache, toPgField typeInfoCache k)]
 
 instance (ToPgField a) => ToPgRow [a] where
-  toPgParams colValues = let typOid = toTypeOid (Proxy @a) in map (\v -> (typOid, toPgField v)) colValues
+  toPgParams colValues = map (\v -> \typeInfoCache -> let typOid = toTypeOid (Proxy @a) typeInfoCache in (typOid, toPgField typeInfoCache v)) colValues
+
+-- | A way to compose rows.
+data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
+
+infixr 3 :.
+
+instance (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
+  toPgParams (ra :. rb) = toPgParams ra ++ toPgParams rb
+
+instance (FromPgRow a, FromPgRow b) => FromPgRow (a :. b) where
+  rowParser = (:.) <$> rowParser <*> rowParser
 
 -- | The OID for `Data.Int`, which is machine dependent.
 haskellIntOid :: Oid
@@ -804,17 +827,20 @@ instance forall a. (FromPgField a) => FromPgField (Vector a) where
         !_hasNull <- int32Parser
         !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
         let !elementColInfo = ColumnInfo elementTypeOid typeInfoCache
-        when (ndim /= 1) $ fail $ "TODO: No support for multi-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
-        !dim_i :: Int <- fromIntegral <$> int32Parser
-        !_lb_i <- int32Parser
-        -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
-        unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
-        Vector.replicateM dim_i $ do
-          size :: Int <- fromIntegral <$> int32Parser
-          elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
-          case elementParser.fieldValueParser elementColInfo elementBs of
-            Left err -> fail $ "Error parsing array element: " ++ show err
-            Right el -> pure el
+        when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
+        if ndim == 0
+          then pure mempty
+          else do
+            !dim_i :: Int <- fromIntegral <$> int32Parser
+            !_lb_i <- int32Parser
+            -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
+            unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+            Vector.replicateM dim_i $ do
+              size :: Int <- fromIntegral <$> int32Parser
+              elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
+              case elementParser.fieldValueParser elementColInfo elementBs of
+                Left err -> fail $ "Error parsing array element: " ++ show err
+                Right el -> pure el
 
 instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548

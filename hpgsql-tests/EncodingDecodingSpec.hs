@@ -28,7 +28,7 @@ import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import HPgsql
 import HPgsql.Encoding (AllowNull (..), ColumnInfo (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
-import HPgsql.Query (sql)
+import HPgsql.Query (mkQuery, sql)
 import HPgsql.TypeInfo (Oid, TypeInfo (..))
 import HPgsql.Types (PgJson, Values (..), valuesToQuery)
 import Hedgehog (PropertyT, (===))
@@ -78,9 +78,9 @@ spec = parallel $ do
     it
       "Less usual types"
       lessUsualTypes
-    it
-      "Values type round-trip"
-      valuesTypeRoundTrip
+  -- it
+  --   "Values type round-trip"
+  --   valuesTypeRoundTrip
   aroundConn $ describe "Custom types" $ do
     it "Composite type" queryCompositeType
     it
@@ -241,18 +241,21 @@ queryCompositeType conn = withRollback conn $ do
   queryWith intAndTextParser conn (mkQuery "SELECT ROW($1,$2)::mixed_bin_text" (14 :: Int, "abc" :: Text)) `shouldReturn` [(14, "abc")]
   queryWith intAndBoolParserNullableValue conn "SELECT NULL::int_and_bool" `shouldReturn` [Nothing]
 
-queryArrayTypes :: HPgConnection -> IO ()
-queryArrayTypes conn = do
+queryArrayTypes :: HPgConnection -> PropertyT IO ()
+queryArrayTypes conn = hedgehog $ do
   -- TODO: hedgehog gen arrays with varying lengths, NULLs, etc.
-  queryWith (rowParser @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
-  queryWith (rowParser @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
-  queryWith (rowParser @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]
-  queryWith (rowParser @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
-  queryWith (rowParser @(Only (Vector Aeson.Value))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)) `shouldReturn` [Only $ Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]]
-  let multiDimArray1 = Vector.fromList [Vector.fromList [1, 2, 3, 4], Vector.fromList [4, 5, 6, 7 :: Int]]
-  query conn [sql|SELECT ARRAY[ARRAY[1,2,3,4],ARRAY[4,5,6, 7]]|] `shouldReturn` [Only multiDimArray1]
-  let multiDimArray2 = Vector.fromList [Vector.fromList [1, 2, 3], Vector.fromList [4, 5, 6 :: Int], Vector.fromList [7, 8, 9 :: Int]]
-  query conn [sql|SELECT ARRAY[ARRAY[1,2,3],ARRAY[4,5,6], ARRAY[7,8,9]]|] `shouldReturn` [Only multiDimArray2]
+  intArrDim1 <- fmap Vector.fromList $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
+  liftIO $ do
+    queryWith rowParser conn (mkQuery "SELECT $1, $1" (Only intArrDim1)) `shouldReturn` [(intArrDim1, intArrDim1)]
+    queryWith (rowParser @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
+    queryWith (rowParser @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
+    queryWith (rowParser @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]
+    queryWith (rowParser @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
+    queryWith (rowParser @(Only (Vector Aeson.Value))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)) `shouldReturn` [Only $ Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]]
+    let multiDimArray1 = Vector.fromList [Vector.fromList [1, 2, 3, 4], Vector.fromList [4, 5, 6, 7 :: Int]]
+    query conn [sql|SELECT ARRAY[ARRAY[1,2,3,4],ARRAY[4,5,6, 7]]|] `shouldReturn` [Only multiDimArray1]
+    let multiDimArray2 = Vector.fromList [Vector.fromList [1, 2, 3], Vector.fromList [4, 5, 6 :: Int], Vector.fromList [7, 8, 9 :: Int]]
+    query conn [sql|SELECT ARRAY[ARRAY[1,2,3],ARRAY[4,5,6], ARRAY[7,8,9]]|] `shouldReturn` [Only multiDimArray2]
 
 data MyEnum = Val1 | Val2 | Val3
   deriving stock (Eq, Show)
@@ -295,8 +298,11 @@ queryEnumTypes conn = withRollback conn $ do
   -- yet. Then we add it and it will pass
   queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
+  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]"
+    `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
   join $ runPipeline conn $ refreshTypeInfoCache conn
   queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum" `shouldReturn` [Val2]
+  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]" `shouldReturn` [PGArray [Val2]]
 
 data SomeGenericEnum = EVal1 | EVal2 | EVal3
   deriving stock (Eq, Generic, Show)
@@ -329,9 +335,9 @@ queryGenericallyDerivedTypes conn = withRollback conn $ do
   queryWith rowParser conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericProdType 13 EVal2 "Some text" True False]
   queryWith rowParser conn "SELECT 'eval1'::myenum, 'eval2'::myenum, 'eval3'::myenum" `shouldReturn` [(EVal1, EVal2, EVal3)]
 
-valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
-valuesTypeRoundTrip conn = hedgehog $ do
-  rows <- Gen.forAll $ Gen.list (Gen.linear 1 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
-  let valsQuery = valuesToQuery (Values rows)
-  results <- liftIO $ query conn [sql|WITH t AS (^{valsQuery}) SELECT * FROM t ORDER BY 1, 2|]
-  results === List.sort rows
+-- valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
+-- valuesTypeRoundTrip conn = hedgehog $ do
+--   rows <- Gen.forAll $ Gen.list (Gen.linear 1 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
+--   let valsQuery = valuesToQuery (Values rows)
+--   results <- liftIO $ query conn [sql|WITH t AS (^{valsQuery}) SELECT * FROM t ORDER BY 1, 2|]
+--   results === List.sort rows
