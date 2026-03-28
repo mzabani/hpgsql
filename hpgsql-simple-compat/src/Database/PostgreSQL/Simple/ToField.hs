@@ -4,9 +4,9 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------
 
@@ -29,16 +29,26 @@ module Database.PostgreSQL.Simple.ToField
   )
 where
 
+import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString.Builder
   ( Builder,
     char8,
   )
 import qualified Data.ByteString.Lazy as LB
+import Data.Int (Int16, Int32, Int64)
 import Data.Map.Strict (Map)
+import Data.Scientific (Scientific)
+import Data.Text (Text)
+import qualified Data.Text.Lazy as LT
+import Data.Time.Calendar.Compat (Day)
+import Data.Time.Compat (UTCTime)
+import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
+import Database.PostgreSQL.Simple.Types (Binary (..))
 import HPgsql.Encoding (ToPgField (..))
 import HPgsql.TypeInfo (Oid, TypeInfo)
+import HPgsql.Types (Aeson)
 
 -- | How to render an element when substituting it into a query.
 data Action
@@ -66,7 +76,64 @@ class ToField a where
   -- TODO: Nothing as the typeOid so postgres has to infer it?
   toField v = QueryArgument $ \tyiCache -> (toTypeOid (proxyOf v) tyiCache, toPgField tyiCache v)
 
-instance (ToPgField a) => ToField a
+instance ToField Int
+
+instance ToField Int16
+
+instance ToField Int32
+
+instance ToField Int64
+
+instance ToField Integer
+
+instance ToField Oid
+
+instance ToField Scientific
+
+instance ToField Float
+
+instance ToField Double
+
+instance ToField Bool
+
+instance ToField Day
+
+instance ToField CalendarDiffTime
+
+instance ToField UTCTime
+
+instance ToField ZonedTime
+
+instance ToField Char
+
+instance ToField ByteString
+
+instance ToField LB.ByteString
+
+instance ToField Text
+
+instance ToField LT.Text
+
+instance ToField String
+
+instance ToField Aeson.Value
+
+instance (ToField a) => ToField (Maybe a) where
+  toField = \case
+    Nothing -> QueryArgument $ \_ -> (Nothing, Nothing) -- Postgres will infer the type, which is not the same as hpgsql, but perhaps fine? It's at least similar to what happens when using the text format.
+    Just v -> case toField v of
+      QueryArgument enc -> QueryArgument enc
+      _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"
+
+-- TODO this instance
+-- instance (ToField a) => ToField (Vector a) where
+--   toField v
+--     | Vector.length v == 0 = QueryArgument
+--     | otherwise =
+
+instance ToField (Binary ByteString)
+
+instance (Aeson.ToJSON a) => ToField (Aeson a)
 
 -- | Surround a string with single-quote characters: \"@'@\"
 --

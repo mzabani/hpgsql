@@ -34,7 +34,6 @@ import Database.PostgreSQL.Simple.Newtypes
 import qualified Database.PostgreSQL.Simple.Transaction as ST
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Exception (testExceptions)
-import HPgsql.Encoding (FromPgField)
 import Notify
 import Serializable
 import System.Environment (getEnvironment)
@@ -197,7 +196,7 @@ testFold TestEnv {..} = do
 
 queryFailure ::
   forall a.
-  (FromPgField a, Typeable a, Show a) =>
+  (FromField a, Typeable a, Show a) =>
   Connection -> Query -> a -> Assertion
 queryFailure conn q resultType = do
   x :: Either SomeException [Only a] <- E.try $ query_ conn q

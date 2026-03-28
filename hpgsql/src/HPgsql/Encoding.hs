@@ -14,10 +14,8 @@ module HPgsql.Encoding
     (:.) (..),
     anyTypeDecoder,
     singleColRowParser,
-    haskellIntOid,
-    haskellIntOids,
-    binaryIntDecoder,
-    binaryIntEncoder,
+    arrayField,
+    nullableField,
     -- TODO: Methods below should be internal
     parsePgType,
     compositeTypeParser,
@@ -59,7 +57,7 @@ import HPgsql.TypeInfo (Format (..), Oid (..), TypeInfo (..), boolOid, byteaOid,
 
 data ColumnInfo = ColumnInfo
   { typeOid :: !Oid,
-    -- | The TypeInfo cache as of the moment the query/pipeline ran.
+    -- | The TypeInfo cache as of the moment the query ran.
     typeInfoCache :: !(Map Oid TypeInfo)
   }
 
@@ -344,8 +342,6 @@ instance ToPgField String where
   toPgField tyiCache = toPgField tyiCache . Text.pack
 
 instance ToPgField Aeson.Value where
-  -- Maybe we shouldn't specify an oid so postgres can infer the best type?
-  -- But json and jsonb might have different binary representations..
   toTypeOid _ _ = Just jsonbOid
   toPgField _ v = Just $ LBS.cons 1 (Aeson.encode v)
 
@@ -743,53 +739,60 @@ instance FromPgField Aeson.Value where
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
 
+-- | A FieldParser that accepts and decodes SQL NULLs into `Nothing` values
+-- for a given parser.
+nullableField :: FieldParser a -> FieldParser (Maybe a)
+nullableField FieldParser {..} =
+  FieldParser
+    { fieldValueParser = \oid ->
+        let !origFieldValueParser = fieldValueParser oid
+         in \case
+              Nothing -> Right Nothing
+              justBs -> Just <$> origFieldValueParser justBs,
+      fieldFmt,
+      allowedPgTypes
+    }
+
 instance (FromPgField a) => FromPgField (Maybe a) where
-  fieldParser =
-    let (!FieldParser {..}) = fieldParser
-     in FieldParser
-          { fieldValueParser = \oid ->
-              let !origFieldValueParser = fieldValueParser oid
-               in \case
-                    Nothing -> Right Nothing
-                    justBs -> Just <$> origFieldValueParser justBs,
-            fieldFmt,
-            allowedPgTypes
-          }
+  fieldParser = nullableField fieldParser
+
+-- | A FieldParser that accepts and decodes Postgres arrays.
+arrayField :: forall a. FieldParser a -> FieldParser (Vector a)
+arrayField !elementParser =
+  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
+  FieldParser
+    { fieldValueParser = \colInfo ->
+        let !arrayFieldParser = arrayParser colInfo.typeInfoCache <* Parsec.endOfInput
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
+              Just bs -> Parsec.parseOnly arrayFieldParser bs,
+      fieldFmt = BinaryFmt,
+      allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
+    }
+  where
+    arrayParser :: Map Oid TypeInfo -> Parsec.Parser (Vector a)
+    arrayParser typeInfoCache = do
+      !ndim <- int32Parser
+      !_hasNull <- int32Parser
+      !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
+      let !elementColInfo = ColumnInfo elementTypeOid typeInfoCache
+      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
+      if ndim == 0
+        then pure mempty
+        else do
+          !dim_i :: Int <- fromIntegral <$> int32Parser
+          !_lb_i <- int32Parser
+          -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
+          unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+          Vector.replicateM dim_i $ do
+            size :: Int <- fromIntegral <$> int32Parser
+            elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
+            case elementParser.fieldValueParser elementColInfo elementBs of
+              Left err -> fail $ "Error parsing array element: " ++ show err
+              Right el -> pure el
 
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
-  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
-  fieldParser =
-    FieldParser
-      { fieldValueParser = \colInfo ->
-          let !arrayFieldParser = arrayParser colInfo.typeInfoCache <* Parsec.endOfInput
-           in \case
-                Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
-                Just bs -> Parsec.parseOnly arrayFieldParser bs,
-        fieldFmt = BinaryFmt,
-        allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
-      }
-    where
-      !elementParser = fieldParser @a
-      arrayParser :: Map Oid TypeInfo -> Parsec.Parser (Vector a)
-      arrayParser typeInfoCache = do
-        !ndim <- int32Parser
-        !_hasNull <- int32Parser
-        !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-        let !elementColInfo = ColumnInfo elementTypeOid typeInfoCache
-        when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
-        if ndim == 0
-          then pure mempty
-          else do
-            !dim_i :: Int <- fromIntegral <$> int32Parser
-            !_lb_i <- int32Parser
-            -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
-            unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
-            Vector.replicateM dim_i $ do
-              size :: Int <- fromIntegral <$> int32Parser
-              elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
-              case elementParser.fieldValueParser elementColInfo elementBs of
-                Left err -> fail $ "Error parsing array element: " ++ show err
-                Right el -> pure el
+  fieldParser = arrayField fieldParser
 
 instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548

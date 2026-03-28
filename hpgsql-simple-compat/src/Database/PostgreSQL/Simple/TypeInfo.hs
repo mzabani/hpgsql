@@ -30,19 +30,10 @@ module Database.PostgreSQL.Simple.TypeInfo
 where
 
 import Control.Concurrent.MVar
-import Control.Exception (throw)
-import qualified Data.ByteString as B
-import qualified Data.IntMap as IntMap
-import Data.Text.Encoding (encodeUtf8)
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
 import qualified Database.PostgreSQL.LibPQ as PQ
-import {-# SOURCE #-} Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.TypeInfo.Static
 import Database.PostgreSQL.Simple.TypeInfo.Types
-import Database.PostgreSQL.Simple.Types
-import qualified HPgsql as HPgsql
 import HPgsql.Encoding ()
 
 -- | Returns the metadata of the type with a particular oid.  To find
@@ -62,78 +53,4 @@ getTypeInfo' ::
   PQ.Oid ->
   TypeInfoCache ->
   IO (TypeInfoCache, TypeInfo)
-getTypeInfo' conn oid' oidmap =
-  case IntMap.lookup (oid2int oid') oidmap of
-    Just typeinfo -> return (oidmap, typeinfo)
-    Nothing -> do
-      names <-
-        query
-          conn
-          "SELECT oid, typcategory, typdelim, typname,\
-          \ typelem, typrelid\
-          \ FROM pg_type WHERE oid = ?"
-          (Only oid')
-      (oidmap', typeInfo) <-
-        case names of
-          [] -> return $ throw (fatalError "invalid type oid")
-          [(typoid, typcategory, typdelim, encodeUtf8 -> typname, typelem_, typrelid)] -> do
-            case typcategory of
-              'A' -> do
-                (oidmap', typelem) <- getTypeInfo' conn typelem_ oidmap
-                let !typeInfo = Array {..}
-                return $! (oidmap', typeInfo)
-              'R' -> do
-                rngsubtypeOids <-
-                  query
-                    conn
-                    "SELECT rngsubtype\
-                    \ FROM pg_range\
-                    \ WHERE rngtypid = ?"
-                    (Only oid')
-                case rngsubtypeOids of
-                  [HPgsql.Only rngsubtype_] -> do
-                    (oidmap', rngsubtype) <-
-                      getTypeInfo' conn rngsubtype_ oidmap
-                    let !typeInfo = Range {..}
-                    return $! (oidmap', typeInfo)
-                  _ -> fail "range subtype query failed to return exactly one result"
-              'C' -> do
-                cols <-
-                  query
-                    conn
-                    "SELECT attname, atttypid\
-                    \ FROM pg_attribute\
-                    \ WHERE attrelid = ?\
-                    \ AND attnum > 0\
-                    \ AND NOT attisdropped\
-                    \ ORDER BY attnum"
-                    (Only typrelid)
-                vec <- MV.new $! length cols
-                (oidmap', attributes) <- getAttInfos conn cols oidmap vec 0
-                let !typeInfo = Composite {..}
-                return $! (oidmap', typeInfo)
-              _ -> do
-                let !typeInfo = Basic {..}
-                return $! (oidmap, typeInfo)
-          _ -> fail "typename query returned more than one result"
-      -- oid is a primary key,  so the query should
-      -- never return more than one result
-      let !oidmap'' = IntMap.insert (oid2int oid') typeInfo oidmap'
-      return $! (oidmap'', typeInfo)
-
-getAttInfos ::
-  Connection ->
-  [(B.ByteString, PQ.Oid)] ->
-  TypeInfoCache ->
-  MV.IOVector Attribute ->
-  Int ->
-  IO (TypeInfoCache, V.Vector Attribute)
-getAttInfos conn cols oidmap vec n =
-  case cols of
-    [] -> do
-      !attributes <- V.unsafeFreeze vec
-      return $! (oidmap, attributes)
-    ((attname, attTypeOid) : xs) -> do
-      (oidmap', atttype) <- getTypeInfo' conn attTypeOid oidmap
-      MV.write vec n $! Attribute {..}
-      getAttInfos conn xs oidmap' vec (n + 1)
+getTypeInfo' _conn _oid' _oidmap = error "TODO getTypeInfo'"

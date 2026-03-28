@@ -5,8 +5,8 @@
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 -- |
 -- Module:      Database.PostgreSQL.Simple.FromField
@@ -105,16 +105,30 @@ module Database.PostgreSQL.Simple.FromField
 where
 
 import Control.Exception (Exception (fromException, toException))
+import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
+import qualified Data.ByteString.Lazy as LBS
+import Data.Int (Int16, Int32, Int64)
+import Data.Scientific (Scientific)
+import Data.Text (Text)
+import qualified Data.Text.Lazy as LT
+import Data.Time.Calendar.Compat (Day)
+import Data.Time.Compat (UTCTime)
+import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
 import Data.Typeable (Typeable, typeOf)
+import Data.Vector (Vector)
+import qualified Data.Vector as Vector
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
-import HPgsql.Encoding (FieldParser (..), FromPgField (..))
+import Database.PostgreSQL.Simple.Types (Binary (..))
+import HPgsql.Encoding (FieldParser (..), FromPgField (..), arrayField, nullableField)
 import qualified HPgsql.Encoding as HPgsql
+import HPgsql.TypeInfo (Oid)
+import HPgsql.Types (Aeson, PGArray (..))
 
 -- | Exception thrown if conversion from a SQL value to a Haskell
 -- value fails.
@@ -161,8 +175,64 @@ class FromField a where
   default fromField :: (HPgsql.FromPgField a) => FieldParser a
   fromField = HPgsql.fieldParser
 
-instance (HPgsql.FromPgField a) => FromField a where
-  fromField = HPgsql.fieldParser
+instance FromField ()
+
+instance FromField Int
+
+instance FromField Int16
+
+instance FromField Int32
+
+instance FromField Int64
+
+instance FromField Integer
+
+instance FromField Oid
+
+instance FromField Scientific
+
+instance FromField Float
+
+instance FromField Double
+
+instance FromField Bool
+
+instance FromField Char
+
+instance FromField ByteString
+
+instance FromField LBS.ByteString
+
+instance FromField Text
+
+instance FromField LT.Text
+
+instance FromField String
+
+instance FromField UTCTime
+
+instance FromField ZonedTime
+
+instance FromField Day
+
+instance FromField CalendarDiffTime
+
+instance FromField Aeson.Value
+
+instance (FromField a) => FromField (Maybe a) where
+  fromField = nullableField fromField
+
+instance (FromField a) => FromField (Vector a) where
+  fromField = arrayField fromField
+
+instance (FromField a) => FromField (PGArray a) where
+  fromField = PGArray . Vector.toList <$> arrayField fromField
+
+instance {-# OVERLAPPING #-} (HPgsql.FromPgField a) => FromField (Vector (Vector a))
+
+instance FromField (Binary ByteString)
+
+instance (Aeson.FromJSON a) => FromField (Aeson a)
 
 -- type FieldParser a = Field -> Maybe ByteString -> Conversion a
 

@@ -29,7 +29,8 @@ module Database.PostgreSQL.Simple.FromRow
   )
 where
 
-import HPgsql.Encoding (FromPgField (..), FromPgRow (..), RowParser, singleColRowParser)
+import Database.PostgreSQL.Simple.FromField (FromField (..))
+import HPgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), RowParser, singleColRowParser, (:.) (..))
 import Prelude hiding (null)
 
 class FromRow a where
@@ -37,7 +38,41 @@ class FromRow a where
   default fromRow :: (FromPgRow a) => RowParser a
   fromRow = rowParser
 
-instance (FromPgRow a) => FromRow a
+instance (FromField a) => FromRow (Only a) where
+  fromRow = Only <$> singleColRowParser fromField
+
+instance (FromField a, FromField b) => FromRow (a, b) where
+  fromRow = (,) <$> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c) => FromRow (a, b, c) where
+  fromRow = (,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d) => FromRow (a, b, c, d) where
+  fromRow = (,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d, FromField e) => FromRow (a, b, c, d, e) where
+  fromRow = (,,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f) => FromRow (a, b, c, d, e, f) where
+  fromRow = (,,,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g) => FromRow (a, b, c, d, e, f, g) where
+  fromRow = (,,,,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h) => FromRow (a, b, c, d, e, f, g, h) where
+  fromRow = (,,,,,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i) => FromRow (a, b, c, d, e, f, g, h, i) where
+  fromRow = (,,,,,,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i, FromField j) => FromRow (a, b, c, d, e, f, g, h, i, j) where
+  fromRow = (,,,,,,,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i, FromField j, FromField k) => FromRow (a, b, c, d, e, f, g, h, i, j, k) where
+  fromRow = (,,,,,,,,,,) <$> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField <*> singleColRowParser fromField
+
+instance (FromRow a, FromRow b) => FromRow (a :. b) where
+  fromRow = (:.) <$> fromRow <*> fromRow
 
 field :: (FromPgField a) => RowParser a
 field = singleColRowParser fieldParser

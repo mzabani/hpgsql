@@ -46,15 +46,15 @@ import Data.Int (Int64)
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
 import Database.PostgreSQL.Simple.Internal hiding (result, row)
+import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Simple.Types
 import qualified HPgsql
-import qualified HPgsql.Encoding as HPgsql
 
 -- | Issue a @COPY FROM STDIN@ or @COPY TO STDOUT@ query.   In the former
 --   case, the connection's state will change to @CopyIn@;  in the latter,
 --   @CopyOut@.  The connection must be in the ready state in order
 --   to call this function.  Performs parameter substitution.
-copy :: (HPgsql.ToPgRow params) => Connection -> Query -> params -> IO ()
+copy :: (ToRow params) => Connection -> Query -> params -> IO ()
 copy conn template qs = do
   let qry = toHpgsqlQuery template qs
   doCopy "Database.PostgreSQL.Simple.Copy.copy" conn qry
