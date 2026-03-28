@@ -37,15 +37,13 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Prelude hiding (takeWhile)
 
-newtype SqlStatement = SqlStatement [BlockOrNotBlock]
+newtype SqlStatement = SqlStatement {statementBlocks :: [BlockOrNotBlock]}
   deriving stock (Show, Eq)
 
 -- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which
 -- semicolons are not to be considered statement boundaries. These include strings, comments,
 -- parenthesised expressions and dollar-quoted strings.
--- Knowing if a fragment of SQL is a block or not can help interpolate '?' or other placeholder
--- strings as arguments in some contexts, while avoiding doing so inside e.g. text strings.
-data BlockOrNotBlock = Block !Text | NotBlock !Text
+data BlockOrNotBlock = Block !Text | NotBlock !Text | DollarNumberedArg !Int | QuestionMarkArg
   deriving stock (Eq, Show)
 
 -- | Parses one or more SQL statements (separated by semi-colons).
@@ -64,16 +62,25 @@ sqlStatementParser :: Parser [BlockOrNotBlock]
 sqlStatementParser = do
   t1 <-
     takeWhile
-      (\c -> not (isPossibleBlockStartingChar c) && c /= ';')
-  mc <- peekChar
+      (\c -> not (isPossibleBlockStartingChar c) && c /= ';' && c /= '$' && c /= '?')
+  -- We treat $ especially to avoid detecting dollar quoted strings as query
+  -- arguments. Dollar-quoted strings cannot begin with a digit.
+  mc <- Left <$> (char '$' *> Parsec.decimal) <|> Right <$> peekChar
   case mc of
-    Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [NotBlock t1]
-    Just ';' -> do
+    Right Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [NotBlock t1]
+    Right (Just '?') -> do
+      void $ char '?'
+      t2 <- sqlStatementParser <|> ([] <$ endOfInput)
+      pure $ NotBlock t1 : QuestionMarkArg : t2
+    Left argNum -> do
+      t2 <- sqlStatementParser <|> ([] <$ endOfInput)
+      pure $ NotBlock t1 : DollarNumberedArg argNum : t2
+    Right (Just ';') -> do
       void $ char ';'
       -- We take any comments followed by EOF here
       cws <- optional $ commentOrSpaceParser True <* endOfInput
       pure $ [NotBlock t1, NotBlock ";"] ++ fromMaybe [] cws
-    Just _ -> do
+    Right (Just _) -> do
       t2 <- many1 blockParser <|> (\pt -> [[NotBlock pt]]) <$> Parsec.take 1
       -- After reading blocks or just a char, we still need to find a semi-colon
       -- or EOF to get a statement from start to finish!
@@ -97,6 +104,8 @@ blockText :: BlockOrNotBlock -> Text
 blockText = \case
   Block t -> t
   NotBlock t -> t
+  QuestionMarkArg -> "?"
+  DollarNumberedArg n -> "$" <> Text.pack (show n)
 
 -- TODO: Doesn't attoparsec have something that returns all of the parsed text when applying
 -- a Parser? We should probably use that instead of this.
@@ -202,14 +211,23 @@ parenthesisedExpression = do
     insideParenParser = do
       more <-
         takeWhile
-          (\c -> not (isPossibleBlockStartingChar c) && c /= ')')
-      nextChar <- peekChar
+          (\c -> not (isPossibleBlockStartingChar c) && c /= ')' && c /= '$' && c /= '?')
+      -- We treat $ especially to avoid detecting dollar quoted strings as query
+      -- arguments. Dollar-quoted strings cannot begin with a digit.
+      nextChar <- Left <$> (char '$' *> Parsec.decimal) <|> Right <$> peekChar
       case nextChar of
-        Nothing -> pure [NotBlock more] -- Be gentle with EOF
-        Just ')' -> do
+        Right Nothing -> pure [NotBlock more] -- Be gentle with EOF
+        Right (Just ')') -> do
           closeParen <- string ")"
           pure [NotBlock more, NotBlock closeParen]
-        Just _ -> do
+        Right (Just '?') -> do
+          void $ char '?'
+          rest <- insideParenParser -- We're still inside an openParen
+          pure $ NotBlock more : QuestionMarkArg : rest
+        Left argNum -> do
+          rest <- insideParenParser -- We're still inside an openParen
+          pure $ NotBlock more : DollarNumberedArg argNum : rest
+        Right (Just _) -> do
           blocksOrOtherwise <- blockParser <|> (\t -> [NotBlock t]) <$> Parsec.take 1
           rest <- insideParenParser -- We're still inside an openParen after parsing a block or a character
           pure $ NotBlock more : blocksOrOtherwise ++ rest
@@ -282,6 +300,7 @@ flattenBlocks =
     ( \bs@(firstEl :| _) -> case firstEl of
         NotBlock _ -> NotBlock $ blockListText $ NE.toList bs
         Block _ -> Block $ blockListText $ NE.toList bs
+        x -> x
     )
     . NE.groupBy
       ( \a b -> case (a, b) of

@@ -30,7 +30,7 @@ import HPgsql
 import HPgsql.Encoding (AllowNull (..), ColumnInfo (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import HPgsql.Query (mkQuery, sql)
 import HPgsql.TypeInfo (Oid, TypeInfo (..))
-import HPgsql.Types (PgJson, Values (..), valuesToQuery)
+import HPgsql.Types (PGArray (..), PgJson, Values (..), valuesToQuery)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
@@ -283,8 +283,8 @@ myEnumFieldParserWithTypeInfoCheck =
         }
 
 instance ToPgField MyEnum where
-  toPgField =
-    toPgField . \case
+  toPgField tyiCache =
+    toPgField tyiCache . \case
       Val1 -> "val1" :: Text
       Val2 -> "val2"
       Val3 -> "val3"
@@ -299,10 +299,15 @@ queryEnumTypes conn = withRollback conn $ do
   queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
   queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]"
-    `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
-  join $ runPipeline conn $ refreshTypeInfoCache conn
-  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum" `shouldReturn` [Val2]
-  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]" `shouldReturn` [PGArray [Val2]]
+    `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT ARRAY['val2'::myenum]" "Query result column types do not match expected column types"
+  (refreshTyiCacheAction, queryRes) <-
+    runPipeline conn $
+      (,)
+        <$> refreshTypeInfoCache conn
+        <*> pipelineL (singleColRowParser myEnumFieldParserWithTypeInfoCheck) "SELECT 'val2'::myenum"
+  refreshTyiCacheAction
+  queryRes `shouldReturn` [Val2]
+  query conn "SELECT ARRAY['val2'::myenum]" `shouldReturn` [Only (PGArray [Val2])]
 
 data SomeGenericEnum = EVal1 | EVal2 | EVal3
   deriving stock (Eq, Generic, Show)

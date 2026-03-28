@@ -31,7 +31,7 @@ import HPgsql (Only (..))
 import HPgsql.Encoding (ToPgRow (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, mkQueryWithQuestionMarks, sql)
-import Hedgehog (Gen, forAll)
+import Hedgehog (Gen, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Streaming (Of (..), Stream)
@@ -249,19 +249,27 @@ spec :: Spec
 spec = do
   describe "Parsing tests" $ parallel $ do
     context "Simple query parsing tests" $ do
-      it "parses SQL without interpolation" $ do
+      it "sql Quasiquoter without interpolation" $ do
         let query = getUniqueNE [sql|SELECT * FROM users|]
         query.queryString `shouldBe` encodeUtf8 "SELECT * FROM users"
-        query.queryParams `shouldBe` []
+        length query.queryParams `shouldBe` 0
 
-      it "parses SQL with single interpolation" $ do
+      it "sql Quasiquoter with single interpolation" $ do
         let userId = 42 :: Int
             query = getUniqueNE [sql|SELECT * FROM users WHERE id = #{userId}|]
         query.queryString `shouldBe` encodeUtf8 "SELECT * FROM users WHERE id = $1"
         length query.queryParams `shouldBe` 1
 
-      it "SQL with question marks as placeholders" $ do
-        mkQueryWithQuestionMarks "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?); SELECT ? FROM table" (toPgParams (11 :: Int, 21 :: Int, 31 :: Int, 41 :: Int, 51 :: Int)) `shouldBe` mkQuery "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=$1 AND y IN ($2, $3, $4);" (11 :: Int, 21 :: Int, 31 :: Int, 41 :: Int) <> mkQuery " SELECT $1 FROM table" (Only (51 :: Int))
+      it "SQL string with placeholders" $ do
+        let queryParams = (11 :: Int, 21 :: Int, 31 :: Int, 41 :: Int, 51 :: Int)
+            qryStr = "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?); SELECT ? FROM table"
+            qry = mkQuery qryStr queryParams
+
+        let (q1 :| [q2]) = breakQueryIntoStatements qry
+        q1.queryString `shouldBe` "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=$1 AND y IN ($2, $3, $4);"
+        length q1.queryParams `shouldBe` 4
+        q2.queryString `shouldBe` " SELECT $1 FROM table"
+        length q2.queryParams `shouldBe` 1
 
       it "parses SQL with multiple interpolations" $ do
         let userId = 42 :: Int
@@ -307,10 +315,10 @@ spec = do
             mconcat $
               map sqlStatementText $
                 NE.toList origPieces
-      liftIO $ do
-        let parsedPieces = parseSql allSqlAsOneBigText
-        fmap flattenBlocksInPieces parsedPieces
-          `shouldBe` fmap flattenBlocksInPieces origPieces
+      annotateShow allSqlAsOneBigText
+      let parsedPieces = parseSql allSqlAsOneBigText
+      fmap flattenBlocksInPieces parsedPieces
+        === fmap flattenBlocksInPieces origPieces
     it "Statements concatenation matches original" $ hedgehog $ do
       SyntacticallyValidRandomSql {..} <- forAll genSyntacticallyValidRandomSql
       liftIO $ do

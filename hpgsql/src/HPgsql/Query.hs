@@ -13,6 +13,7 @@ module HPgsql.Query
 where
 
 import Control.Applicative (some, (<|>))
+import Control.Monad (foldM)
 import Data.Attoparsec.Text (Parser)
 import qualified Data.Attoparsec.Text as Parsec
 import Data.ByteString (ByteString)
@@ -22,7 +23,6 @@ import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.Map.Strict (Map)
-import Data.Maybe (mapMaybe)
 import Data.Proxy (Proxy (..))
 import Data.String (IsString (..))
 import Data.Text (Text)
@@ -51,7 +51,7 @@ data SingleQueryFragment
   = FragmentOfStaticSql !ByteString
   | -- | The number/index of the query argument, starting from 1 in a single statement
     QueryArgumentPlaceHolder !Int
-  deriving stock (Eq)
+  deriving stock (Eq, Show)
 
 -- | Zero, one, or more SQL statements. The query parameters and query fragments continue to go up in number across different
 -- statements, e.g. "SELECT $1; SELECT $2; SELECT $3; ...".
@@ -65,8 +65,8 @@ instance Show Query where
 -- | Takes a query string that has either ? or dollar-numbered query arguments (but not both) and returns
 -- a `Query`. Note that if the number of arguments does not match what's in the query string,
 -- this will throw an error.
-mkQuery :: (ToPgRow a) => Text -> a -> Query
-mkQuery t p = mkQueryWithQuestionMarksFromStmts (parseSql t) (toPgParams p)
+mkQuery :: (ToPgRow a) => ByteString -> a -> Query
+mkQuery t p = mkQueryWithQuestionMarksFromStmts (parseSql $ decodeUtf8 t) (toPgParams p)
 
 -- | Meant for internal usage, helps build "VALUES (..), (..)"-like statements.
 -- Users of hpgsql should just use the `Values` type instead of this.
@@ -105,7 +105,7 @@ data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![Map
 
 instance Show SingleQuery where
   -- Careful not exposing query arguments
-  show (SingleQuery {queryString}) = show queryString
+  show (SingleQuery {queryString}) = Text.unpack $ decodeUtf8 queryString
 
 -- breakQueryIntoStatements :: Query -> [SingleQuery]
 -- breakQueryIntoStatements q@Query {queryString, queryParams} = removeLastIfEmpty $ foldr go (NE.singleton "", 0, 1) queryString
@@ -168,48 +168,61 @@ mkQueryWithQuestionMarks queryTemplate allParams =
    in mkQueryWithQuestionMarksFromStmts statements allParams
 
 mkQueryWithQuestionMarksFromStmts :: NonEmpty SqlStatement -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
-mkQueryWithQuestionMarksFromStmts statements allParams = distributeParams allParams statements
-  where
-    -- This function is a very roundabout way of doing things.
-    -- It wouldn't be crazy to make `SqlStatement` contain special constructors for
-    -- question marks in NonBlock segments, but rather we do a lot of parsing here
-    -- all over again when we could do a tiny bit more work in Parsing.hs.
+mkQueryWithQuestionMarksFromStmts statements allParams =
+  let (_, queryFrags) =
+        List.mapAccumL
+          ( \(!maxArgSoFar) sqlPiece -> case sqlPiece of
+              Block t -> (maxArgSoFar, FragmentOfStaticSql $ encodeUtf8 t)
+              NotBlock t -> (maxArgSoFar, FragmentOfStaticSql $ encodeUtf8 t)
+              DollarNumberedArg n -> (max maxArgSoFar n, QueryArgumentPlaceHolder n)
+              QuestionMarkArg -> (maxArgSoFar + 1, QueryArgumentPlaceHolder (maxArgSoFar + 1))
+          )
+          0
+          (concatMap statementBlocks $ NE.toList statements)
+   in Query {queryString = queryFrags, queryParams = allParams}
 
-    processStatement :: SqlStatement -> ([SingleQueryFragment], Int)
-    processStatement (SqlStatement blks) =
-      let (finalN, frags) = List.foldr processBlock (1, []) blks
-       in (frags, finalN - 1)
+-- mkQueryWithQuestionMarksFromStmts statements allParams = distributeParams allParams statements
+--   where
+--     -- This function is a very roundabout way of doing things.
+--     -- It wouldn't be crazy to make `SqlStatement` contain special constructors for
+--     -- question marks in NonBlock segments, but rather we do a lot of parsing here
+--     -- all over again when we could do a tiny bit more work in Parsing.hs.
 
-    processBlock :: BlockOrNotBlock -> (Int, [SingleQueryFragment]) -> (Int, [SingleQueryFragment])
-    processBlock (Block t) (n, acc) = (n, FragmentOfStaticSql (encodeUtf8 t) : acc)
-    processBlock (NotBlock t) (n, acc) =
-      let (n', t') = replaceQuestionMarks n t
-       in (n', t' ++ acc)
+--     processStatement :: SqlStatement -> ([SingleQueryFragment], Int)
+--     processStatement (SqlStatement blks) =
+--       let (finalN, frags) = List.foldl' processBlock (1, []) blks
+--        in (frags, finalN - 1)
 
-    replaceQuestionMarks :: Int -> Text -> (Int, [SingleQueryFragment])
-    replaceQuestionMarks n txt =
-      let (before, rest) = Text.break (\c -> c == '?' || c == '$') txt
-       in if Text.null rest -- No question mark or dollar sign
-            then (n, [FragmentOfStaticSql $ encodeUtf8 before])
-            else case Parsec.parseOnly (Left <$> Parsec.string "?" <|> Right <$> (Parsec.string "$" *> Parsec.decimal)) rest of
-              Left e -> error $ "Failed parsing query with HPgsql: " ++ e
-              Right pr ->
-                case pr of
-                  Left _questionMark ->
-                    let (n', rest') = replaceQuestionMarks (n + 1) rest
-                     in (n', FragmentOfStaticSql (encodeUtf8 before) : QueryArgumentPlaceHolder n : rest')
-                  Right numberedParam ->
-                    let (n', rest') = replaceQuestionMarks (numberedParam + 1) rest
-                     in (n', FragmentOfStaticSql (encodeUtf8 before) : QueryArgumentPlaceHolder n : rest')
+--     processBlock :: (Int, [SingleQueryFragment]) -> BlockOrNotBlock -> (Int, [SingleQueryFragment])
+--     processBlock (n, acc) (Block t) = (n, FragmentOfStaticSql (encodeUtf8 t) : acc)
+--     processBlock (n, acc) (NotBlock t) =
+--       let (n', t') = replaceQuestionMarks n t
+--        in (n', t' ++ acc)
 
-    distributeParams :: [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> NonEmpty SqlStatement -> Query
-    distributeParams params (stmt :| rest) =
-      let (thisQueryFrags, numParams) = processStatement stmt
-          (thisQueryParams, remainingParams) = splitAt numParams params
-          thisQuery = Query thisQueryFrags thisQueryParams
-       in case rest of
-            [] -> thisQuery
-            (s : ss) -> thisQuery <> distributeParams remainingParams (s :| ss)
+--     replaceQuestionMarks :: Int -> Text -> (Int, [SingleQueryFragment])
+--     replaceQuestionMarks n txt =
+--       let (before, rest) = Text.break (\c -> c == '?' || c == '$') txt
+--        in if Text.null rest -- No question mark or dollar sign
+--             then (n, [FragmentOfStaticSql $ encodeUtf8 before])
+--             else case Parsec.parseOnly ((,) <$> (Left <$> Parsec.string "?" <|> Right <$> (Parsec.string "$" *> Parsec.decimal)) <*> Parsec.takeText) rest of
+--               Left e -> error $ "Failed parsing query with HPgsql: " ++ e
+--               Right (pr, afterPlaceholder) ->
+--                 case pr of
+--                   Left _questionMark ->
+--                     let (n', rest') = replaceQuestionMarks (n + 1) afterPlaceholder
+--                      in (n', FragmentOfStaticSql (encodeUtf8 before) : QueryArgumentPlaceHolder n : rest')
+--                   Right numberedParam ->
+--                     let (n', rest') = replaceQuestionMarks (numberedParam + 1) afterPlaceholder
+--                      in (n', FragmentOfStaticSql (encodeUtf8 before) : QueryArgumentPlaceHolder n : rest')
+
+--     distributeParams :: [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> NonEmpty SqlStatement -> Query
+--     distributeParams params (stmt :| rest) =
+--       let (thisQueryFrags, numParams) = processStatement stmt
+--           (thisQueryParams, remainingParams) = splitAt numParams params
+--           thisQuery = Query thisQueryFrags thisQueryParams
+--        in case rest of
+--             [] -> thisQuery
+--             (s : ss) -> thisQuery <> distributeParams remainingParams (s :| ss)
 
 sql :: QuasiQuoter
 sql =
@@ -222,9 +235,11 @@ sql =
 
 liftQueries :: NonEmpty SqlStatement -> Q Exp
 liftQueries statements = do
-  queryExps <- mapM liftQuery statements
+  queryExps <- NE.toList <$> mapM liftQuery statements
   case queryExps of
-    (x :| xs) -> [|Query ($(pure x) NE.:| $(pure $ ListE xs))|]
+    [] -> error "impossible: NonEmpty produced empty list"
+    [single] -> pure single
+    (first : rest) -> foldM (\acc q -> [|$(pure acc) <> $(pure q)|]) first rest
 
 liftQuery :: SqlStatement -> Q Exp
 liftQuery stmt = do
@@ -240,10 +255,10 @@ liftQuery stmt = do
 -- | Static path: no ^{} expressions, SQL string is a compile-time literal.
 liftQueryStatic :: [SqlFragment] -> Q Exp
 liftQueryStatic allFragments = do
-  let (sqlText, varNames) = buildSqlAndVars allFragments 1
+  let (fragQExps, varNames) = buildQueryFragsAndVars allFragments 1
+  fragExps <- sequence fragQExps
   paramExps <- mapM generateParamExp varNames
-  let paramList = ListE paramExps
-  [|SingleQuery (encodeUtf8 $(litE (stringL (Text.unpack sqlText)))) $(pure paramList)|]
+  [|Query $(pure $ ListE fragExps) $(pure $ ListE paramExps)|]
 
 -- | Dynamic path: has ^{} expressions, build query at runtime via buildQueryQQ.
 liftQueryDynamic :: [SqlFragment] -> Q Exp
@@ -257,22 +272,22 @@ fragmentToPartExp (NonInterpolatedSqlFragment t) =
   [|StaticSqlPart $(litE (stringL (Text.unpack t)))|]
 fragmentToPartExp (InterpolatedHaskellExpr haskellExpr) =
   let name = mkName (Text.unpack haskellExpr)
-   in [|ParamPart (toTypeOid (proxyOf $(varE name)), toPgField $(varE name))|]
+   in [|ParamPart (\tyiCache -> (toTypeOid (proxyOf $(varE name)) tyiCache, toPgField tyiCache $(varE name)))|]
 fragmentToPartExp (EmbeddedQueryExpr haskellExpr) =
   let name = mkName (Text.unpack haskellExpr)
    in [|EmbeddedQueryPart $(varE name)|]
 
--- | Walk through fragments in order, building the SQL string with $N placeholders
+-- | Walk through fragments in order, building SingleQueryFragment TH expressions
 -- and collecting the interpolated Haskell expressions.
-buildSqlAndVars :: [SqlFragment] -> Int -> (Text, [Text])
-buildSqlAndVars [] _ = ("", [])
-buildSqlAndVars (NonInterpolatedSqlFragment t : rest) n =
-  let (restSql, restVars) = buildSqlAndVars rest n
-   in (t <> restSql, restVars)
-buildSqlAndVars (InterpolatedHaskellExpr var : rest) n =
-  let (restSql, restVars) = buildSqlAndVars rest (n + 1)
-   in ("$" <> Text.pack (show n) <> restSql, var : restVars)
-buildSqlAndVars (EmbeddedQueryExpr _ : _) _ =
+buildQueryFragsAndVars :: [SqlFragment] -> Int -> ([Q Exp], [Text])
+buildQueryFragsAndVars [] _ = ([], [])
+buildQueryFragsAndVars (NonInterpolatedSqlFragment t : rest) n =
+  let (restFrags, restVars) = buildQueryFragsAndVars rest n
+   in ([|FragmentOfStaticSql (encodeUtf8 $(litE (stringL (Text.unpack t))))|] : restFrags, restVars)
+buildQueryFragsAndVars (InterpolatedHaskellExpr var : rest) n =
+  let (restFrags, restVars) = buildQueryFragsAndVars rest (n + 1)
+   in ([|QueryArgumentPlaceHolder $(litE (integerL (fromIntegral n)))|] : restFrags, var : restVars)
+buildQueryFragsAndVars (EmbeddedQueryExpr _ : _) _ =
   error "Bug in HPgsql: EmbeddedQueryExpr should not appear in static path"
 
 -- | Parts used to build a SingleQuery at runtime when ^{} embedded queries are present.
@@ -282,17 +297,22 @@ data QueryBuildPartQQ
   | EmbeddedQueryPart !Query
 
 buildQueryQQ :: [QueryBuildPartQQ] -> Query
-buildQueryQQ parts = Query {queryString = fst $ foldr fromQQToFrag ([], 1) parts, queryParams = mapMaybe extractQQParam parts}
+buildQueryQQ parts =
+  let (queryFrags, allParams) = go parts 1
+   in Query {queryString = queryFrags, queryParams = allParams}
   where
-    fromQQToFrag part (accParts, argNum) = case part of
-      StaticSqlPart bs -> (FragmentOfStaticSql bs : accParts, argNum)
-      ParamPart _ -> (QueryArgumentPlaceHolder argNum : accParts, argNum + 1)
+    go [] _ = ([], [])
+    go (part : rest) argNum = case part of
+      StaticSqlPart bs ->
+        let (restFrags, restParams) = go rest argNum
+         in (FragmentOfStaticSql bs : restFrags, restParams)
+      ParamPart p ->
+        let (restFrags, restParams) = go rest (argNum + 1)
+         in (QueryArgumentPlaceHolder argNum : restFrags, p : restParams)
       EmbeddedQueryPart q ->
         let (newMaxArgNum, renumberedFrags) = renumberParamsFrom q.queryString argNum
-         in (renumberedFrags ++ accParts, newMaxArgNum + 1)
-    extractQQParam = \case
-      ParamPart p -> Just p
-      _ -> Nothing
+            (restFrags, restParams) = go rest (newMaxArgNum + 1)
+         in (renumberedFrags ++ restFrags, q.queryParams ++ restParams)
 
 -- processPart :: QueryBuildPartQQ -> (Text, [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)], Int) -> (Text, [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)], Int)
 -- processPart (StaticSqlPart bs) (sql', params, n) =
@@ -335,6 +355,8 @@ extractFragments (SqlStatement blocks) = concatMap parseBlock blocks
 parseBlock :: BlockOrNotBlock -> [SqlFragment]
 parseBlock (NotBlock text) = parseInterpolations text
 parseBlock (Block text) = [NonInterpolatedSqlFragment text]
+parseBlock (DollarNumberedArg n) = parseBlock $ Block $ "$" <> Text.pack (show n) -- If someone uses e.g. $2 in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
+parseBlock QuestionMarkArg = parseBlock $ Block "?" -- If someone uses a question mark in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
 
 -- | Parse text to find #{haskellExpr} interpolation patterns and ^{expr} embedded
 -- query patterns and return those separated from the rest.

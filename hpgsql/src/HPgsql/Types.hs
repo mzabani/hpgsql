@@ -2,6 +2,7 @@ module HPgsql.Types
   ( Aeson (..),
     PgJson, -- Do not export ctor
     Values (..),
+    PGArray (..),
     valuesToQuery,
   )
 where
@@ -25,6 +26,9 @@ newtype PGArray a = PGArray {fromPGArray :: [a]}
 instance forall a. (ToPgField a) => ToPgField (PGArray a) where
   toTypeOid _ = toTypeOid (Proxy @(Vector a))
   toPgField tyiCache = toPgField tyiCache . Vector.fromList . fromPGArray
+
+instance forall a. (FromPgField a) => FromPgField (PGArray a) where
+  fieldParser = PGArray . Vector.toList <$> fieldParser
 
 newtype Values a = Values [a]
 

@@ -99,7 +99,6 @@ errorStmts =
 
 runVariedPipelines :: HPgConnection -> PropertyT IO ()
 runVariedPipelines conn = hedgehog $ do
-  -- TODO: Use concurrency: run different pipelines in different threads!
   SomeRowReturningStatementTest (RowsStatement (rp1, qry1, check1, expectedLen1)) <- Gen.forAll $ Gen.element exampleStmt
   SomeRowReturningStatementTest (RowsStatement (rp2, qry2, check2, expectedLen2)) <- Gen.forAll $ Gen.element exampleStmt
   SomeRowReturningStatementTest (RowsStatement (rp3, qry3, check3, expectedLen3)) <- Gen.forAll $ Gen.element exampleStmt
