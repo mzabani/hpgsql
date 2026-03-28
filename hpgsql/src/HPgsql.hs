@@ -50,11 +50,11 @@ module HPgsql
 where
 
 import Control.Applicative (Alternative (..))
-import Control.Concurrent (ThreadId, mkWeakThreadId, modifyMVar, modifyMVar_, myThreadId, readMVar)
+import Control.Concurrent (mkWeakThreadId, modifyMVar, modifyMVar_, myThreadId, readMVar)
 import Control.Concurrent.MVar (MVar, newMVar)
-import Control.Concurrent.STM (STM, TQueue, TVar)
+import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, tryJust)
+import Control.Exception.Safe (MonadThrow, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
@@ -67,7 +67,6 @@ import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
-import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Serialize as Cereal
@@ -76,7 +75,6 @@ import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 #if MIN_VERSION_base(4,19,0)
-import Data.Word (Word64)
 import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
 #else
 import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
@@ -84,12 +82,13 @@ import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
 import HPgsql.Base
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Encoding (ColumnInfo (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..))
-import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), BindComplete, CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyInResponse, DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), FromPgMessage (..), NoData, NoticeResponse (..), NotificationResponse (..), ParameterStatus (..), Parse (..), ParseComplete (..), PgMsgParser (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), TransactionStatus (..), parsePgMessage)
+import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..))
+import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements)
-import HPgsql.TypeInfo (Format (..), Oid, TypeInfo (..), builtinPgTypesMap)
-import Network.Socket (AddrInfo (..), Socket)
+import HPgsql.TypeInfo (Format (..), TypeInfo (..), builtinPgTypesMap)
+import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
 import Streaming (Of (..), Stream)
@@ -98,111 +97,8 @@ import qualified Streaming.Internal as SInternal
 import qualified Streaming.Prelude as S
 import System.IO.Error (isResourceVanishedError)
 import System.IO.Unsafe (unsafePerformIO)
-import System.Mem.Weak (Weak, deRefWeak)
+import System.Mem.Weak (deRefWeak)
 import System.Timeout (timeout)
-
-data HPgConnection = HPgConnection
-  { socket :: !Socket,
-    -- | We've had weird CPU 100% stalls running tests when
-    -- this was an IORef (though it might've been something else;
-    -- I did not trace the behaviour back to its root cause), but
-    -- we've definitely had reproducible problems with out-of-order
-    -- message delivery in weakly ordered CPU architectures like aarch64.
-    -- The performance benefits of IORef in our benchmarks were ~1%, so
-    -- it does not feel worth the risk to use them.
-    -- See the test failures (if they're still available) at
-    -- https://github.com/mzabani/hpgsql/actions/runs/23076110595/job/67071616534
-    -- Failures were fairly consistent after a number of test retries.
-    recvBuffer :: !(MVar LBS.ByteString),
-    sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
-    originalConnStr :: !ConnString,
-    connectedTo :: !AddrInfo,
-    typeInfoCache :: !(MVar (Map Oid TypeInfo)),
-    parameterStatusMap :: !(MVar (Map Text Text)),
-    internalConnectionState :: !(TVar InternalConnectionState),
-    connPid :: !Int32,
-    cancelSecretKey :: !Int32,
-    connOpts :: !ConnectOpts
-  }
-
-instance Eq HPgConnection where
-  conn1 == conn2 = socket conn1 == socket conn2
-
-data InternalConnectionState = InternalConnectionState
-  { totalQueriesSent :: !Integer,
-    -- | We store the ThreadId holding the lock and an Int representing how many
-    -- nested lock grabs it took so we can nest `withControlMsgsLock` in the same
-    -- thread without running into deadlocks. This might no longer be useful after
-    -- some refactors, but it generally allows us not to worry about function
-    -- composition.
-    blockedForSendingOrReceivingMsgsAtomically :: !(Maybe (WeakThreadId, Int)),
-    -- | We support only one pipeline sent to the backend at a time
-    -- (i.e. we don't send any messages to the backend after a `Sync` and until all query results
-    -- are fully consumed, or while there's a COPY statement running) because otherwise we'd not
-    -- be able to reliably send a cancellation request to the backend.
-    -- Imagine we've sent messages for many pipelines, a user thread is killed waiting for results,
-    -- and we send a cancellation request. By the time it arrives, the backend might be processing
-    -- queries from the second pipeline, which we didn't want to cancel.
-    currentPipeline :: ![QueryState],
-    notificationsReceived :: !(TQueue Msgs.NotificationResponse)
-  }
-
-data CopyQueryState = StillCopying | CopyDoneAndSyncSent | CopyFailAndSyncSent
-  deriving stock (Eq, Show)
-
-data QueryProtocol
-  = CopyQuery CopyQueryState
-  | ExtendedQuery
-  deriving stock (Eq, Show)
-
-data ResponseMsg = RespParseComplete ParseComplete | RespBindComplete BindComplete | RespNoData NoData | RespRowDescription RowDescription | RespCopyInResponse CopyInResponse | RespErrorResponse ErrorResponse | RespCommandComplete CommandComplete | RespDataRow DataRow | RespReadyForQuery ReadyForQuery
-  deriving stock (Show)
-
-data ResponseMsgsReceived = NoMsgsReceived | ParseCompleteReceived ParseComplete | BindCompleteReceived BindComplete | RowDescriptionOrNoDataOrCopyInResponseReceived (Either3 NoData RowDescription CopyInResponse) | ErrorResponseReceived (Maybe (Either3 NoData RowDescription CopyInResponse)) ErrorResponse | CommandCompleteReceived (Either3 NoData RowDescription CopyInResponse) CommandComplete | ReadyForQueryReceived (Either ErrorResponse CommandComplete) ReadyForQuery
-  deriving stock (Show)
-
--- | From the docs, "in GHC, if you have a ThreadId, you essentially have a pointer to the thread itself. This means the thread itself can't be garbage collected until you drop the ThreadId. This misfeature will hopefully be corrected at a later date.".
--- And as per https://hackage-content.haskell.org/package/base-4.22.0.0/docs/Control-Concurrent.html#v:mkWeakThreadId even BlockedIndefinitely exceptions aren't delivered if we held a ThreadId directly, so we only keep a WeakThreadId.
-#if MIN_VERSION_base(4,19,0)
-data WeakThreadId = WeakThreadId !(Weak ThreadId) !Word64
-#else
--- fromThreadId is not available in GHC 9.6 and below, so
--- we rely on the String obtained from showThreadId instead
-data WeakThreadId = WeakThreadId !(Weak ThreadId) !String
-#endif
-
-instance Eq WeakThreadId where
-  WeakThreadId _ t1 == WeakThreadId _ t2 = t1 == t2
-
-#if MIN_VERSION_base(4,19,0)
-instance Show WeakThreadId where
-  show (WeakThreadId _ threadIdentifier) = "WeakThreadId " ++ show threadIdentifier
-#else
-instance Show WeakThreadId where
-  show (WeakThreadId _ threadIdentifier) = "WeakThreadId " ++ threadIdentifier
-#endif
-
-data QueryState = QueryState
-  { queryIdentifier :: !QueryId,
-    queryText :: !ByteString,
-    queryProtocol :: !QueryProtocol,
-    queryOwner :: !WeakThreadId,
-    -- | Storing every single "control" (i.e. not `DataRow`) message received for each query
-    -- means we can continue to drain its results from another thread at anytime, which is
-    -- necessary to continue using the connection in the presence of asynchronous exceptions.
-    -- We sadly cannot create a forkIO'd version of `atomicallyReceiveMsgs` because a query
-    -- like `pg_sleep(999)` will make postgres not send even the first `ParseComplete` message
-    -- for the sleep duration, meaning our internal lock would last that long and we wouldn't
-    -- be able to send a CancelMsg. We could make our locking more granular, but that seems
-    -- even more like a recipe for disaster.
-    responseMsgsState :: ResponseMsgsReceived
-  }
-  deriving stock (Show)
-
--- | An Integer avoids any headaches from wrap-around when comparing query ids.
--- An Int64 should be fine, but the cost of this is negligible.
-newtype QueryId = QueryId Integer
-  deriving newtype (Enum, Eq, Num, Ord, Show)
 
 -- | Returns a Left with the current pipeline if connection is not ready for a new pipeline, a Right
 -- with the current transaction status otherwise.
@@ -245,31 +141,6 @@ connectionTransactionStatus conn = STM.atomically $ updateConnStateTxn conn $ \s
           then
             TransInError
           else TransInTrans
-
-data ConnectOpts = ConnectOpts
-  { -- | How long in ms HPgsql will sleep before re-checking if active queries have been orphaned
-    -- from their issuing threads having died. The default is 500ms, and this is only relevant
-    -- if you plan on concurrently issuing queries on a single connection, and even then only
-    -- if you expect your threads to be killed by asynchronous exceptions frequently enough,
-    -- and you want resume using the connection and cannot wait ~500ms until HPgsql realizes
-    -- it's fine to do so.
-    -- You probably don't need to worry about this or tune it.
-    killedThreadPollIntervalMs :: Int,
-    -- | How long in ms HPgsql will wait before re-sending a cancellation request
-    -- while draining orphaned queries (queries from dead threads). The default is 500ms,
-    -- and this is only relevant if you plan on interrupting your queries with
-    -- asynchronous exceptions, either by use of concurrency primitives or functions like
-    -- `timeout`, and continue using the connection for new queries after that.
-    cancellationRequestResendIntervalMs :: Int,
-    -- | Immediately after connecting, run a query to fetch all types
-    -- from the `pg_type` table. This makes them available in FromPgField
-    -- instances.
-    -- The default is True. You probably want to set it to False if you have
-    -- a lot of custom types and are extremely latency sensitive.
-    -- Note that builtin postgres types are available in the connection's type
-    -- cache even if this is False, at no runtime cost.
-    fillTypeInfoCache :: Bool
-  }
 
 connect :: ConnString -> DiffTime -> IO HPgConnection
 connect =
@@ -410,16 +281,6 @@ getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup par
 
 getBackendPid :: HPgConnection -> Int32
 getBackendPid HPgConnection {connPid} = connPid
-
-data PoolCleanup = PoolCleanup
-  { -- | Runs `RESET ALL` and `RESET ROLE` on the connection. Defaults to True.
-    resetAll :: Bool,
-    -- | Runs `UNLISTEN *` on the connection and clears the internal queue of notifications. Defaults to True.
-    unlistenAll :: Bool,
-    -- | Throws an exception if there is an open transaction or if there's a transaction in error state. Defaults to True.
-    checkTransactionState :: Bool
-    -- TODO: Check for any temporary tables and throw?
-  }
 
 -- | Run this function before putting the connection back into a pool
 -- to run some health checks and reset some forms of connection state.
@@ -817,9 +678,6 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
           }
       pure (Just respMsg, newState)
 
-data Either3 a b c = Left3 a | Middle3 b | Right3 c
-  deriving stock (Show)
-
 -- | After sending one or more queries to the backend, run this function for each query to fetch that query's results.
 -- You must call the returned IO function and consume the returned Stream completely until you get to the
 -- `Either ErrorResponse CommandComplete` object.
@@ -894,17 +752,6 @@ consumeResults conn qryId = do
   where
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()
     receiveReadyForQueryIfNecessary thisThreadId = void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-
-data PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteString, failedStatement :: !ByteString}
-  deriving stock (Show)
-
-instance Exception PostgresError
-
--- | If you receive this exception, don't run any further SQL statements or use it for anything. Just close the connection with `closeForcefully` and discard it.
-data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: String, pgErrorDetails :: Map ErrorDetail LBS.ByteString, innerException :: Maybe SomeException, relatedStatement :: !(Maybe ByteString)}
-  deriving stock (Show)
-
-instance Exception IrrecoverableHpgsqlError
 
 throwPostgresError :: ByteString -> ErrorResponse -> IO a
 throwPostgresError stmtText (ErrorResponse errDetailMap) = throw $ PostgresError {pgErrorDetails = errDetailMap, failedStatement = stmtText}
@@ -1154,18 +1001,6 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
       deRefWeak wtid >>= \case
         Nothing -> pure True
         Just tid -> (`elem` [ThreadDied, ThreadFinished]) <$> threadStatus tid
-
-data Pipeline a = Pipeline [(SingleQuery, Maybe [Format])] (HPgConnection -> [QueryId] -> a)
-  deriving stock (Functor)
-
-instance Applicative Pipeline where
-  -- TODO: Test that this Applicative instance obeys Applicative laws
-  pure x = Pipeline [] (\_ _ -> x)
-  Pipeline queries runFunc <*> Pipeline moreQueries run2 = Pipeline (queries ++ moreQueries) $ \conn qryIds ->
-    let (firstQueries, lastQueries) = List.splitAt (length queries) qryIds
-        f = runFunc conn firstQueries
-        g = run2 conn lastQueries
-     in f g
 
 pipelineS :: RowParser a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineS rowparser@(RowParser _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =

@@ -53,7 +53,7 @@ format-hs:
     done
 
 ##
-# Runs tests in an environment where there is a postgresql DB listening.
+# Runs all tests.
 # OPTION PG --pg <pg> The version of the postgresql instance to start or 'all'. Defaults to 18 if unspecified.
 # OPTION NIX --nix Run tests in a Nix derivation's sandbox
 tests:
@@ -67,10 +67,13 @@ tests:
         if [ -n "$NIX" ]; then
             nix-build --no-out-link -A "testsPg${pg}" --argstr hspecArgs "$TARGS"
         else
-            cabal build -O0 hpgsql-tests
+            cabal build hpgsql-tests hpgsql-simple-compat-tests
             nix-shell -A "shellPg${pg}" ./default.nix --run "./scripts/run-tests-db-internal.sh $TARGS"
         fi
     done
+
+    echo "--- Running hlint"
+    hlint .
 
 ## 
 # Runs hpgsql-simple-compat's tests.

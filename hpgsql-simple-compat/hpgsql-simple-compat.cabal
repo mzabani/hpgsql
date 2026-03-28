@@ -87,8 +87,8 @@ library
     TypeOperators
     ViewPatterns
 
-  ghc-options:        -Wall -fno-warn-name-shadowing
+  ghc-options: -O1 -Wall -fno-warn-name-shadowing
 
 source-repository head
   type:     git
-  location: http://github.com/haskellari/hpgsql-simple-compat
+  location: http://github.com/mzabani/hpgsql/hpgsql-simple-compat

@@ -1,5 +1,7 @@
 module HPgsql.Msgs (AuthenticationOk (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), Sync (..), parsePgMessage) where
 
+-- Many types are defined in HPgsql.InternalTypes and re-exported here.
+
 -- TODO: Make this whole module internal!
 
 import Control.Applicative (Alternative (..))
@@ -14,7 +16,7 @@ import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Functor (void)
-import Data.Int (Int16, Int32, Int64)
+import Data.Int (Int16, Int32)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
@@ -22,7 +24,8 @@ import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
 import Data.Word (Word8)
-import HPgsql.TypeInfo (Format (..), Oid (..), TransactionStatus (..))
+import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
+import HPgsql.TypeInfo (Format (..), Oid (..))
 
 class ToPgMessage a where
   toPgMessage :: a -> Builder
@@ -77,14 +80,8 @@ data BackendKeyData = BackendKeyData {backendPid :: Int32, backendSecretKey :: I
 data Bind = Bind {paramsValuesInOrder :: [Maybe LBS.ByteString], resultColumnFmts :: [Format]}
   deriving stock (Show)
 
-data BindComplete = BindComplete
-  deriving stock (Show)
-
 -- | PId first, secret key second
 data CancelRequest = CancelRequest Int32 Int32
-  deriving stock (Show)
-
-newtype CommandComplete = CommandComplete {numRows :: Int64}
   deriving stock (Show)
 
 newtype CopyData = CopyData ByteString
@@ -93,9 +90,6 @@ instance Show CopyData where
   show _ = "CopyData"
 
 data Describe = Describe
-  deriving stock (Show)
-
-newtype ErrorResponse = ErrorResponse (Map ErrorDetail LBS.ByteString)
   deriving stock (Show)
 
 data Execute = Execute
@@ -107,47 +101,23 @@ data CopyDone = CopyDone
 newtype CopyFail = CopyFail {causeForFailure :: String}
   deriving stock (Show)
 
-data CopyInResponse = CopyInResponse
-  deriving stock (Show)
-
 data Flush = Flush
-  deriving stock (Show)
-
-data NoData = NoData
   deriving stock (Show)
 
 newtype NoticeResponse = NoticeResponse (Map ErrorDetail LBS.ByteString)
   deriving stock (Show)
-
-data NotificationResponse = NotificationResponse {notifierPid :: !Int32, channelName :: !Text, notifPayload :: !Text}
-  deriving stock (Eq, Show)
 
 newtype Query = Query ByteString
 
 instance Show Query where
   show _ = "Query"
 
-newtype DataRow = DataRow {rowColumnData :: LBS.ByteString}
-
-instance Show DataRow where
-  show _ = "DataRow"
-
 data Parse = Parse {queryString :: ByteString, specifiedParameterTypes :: [Maybe Oid]}
 
 instance Show Parse where
   show Parse {..} = "Parse (" ++ show (length specifiedParameterTypes) ++ " params specified) - " ++ show queryString
 
-data ParseComplete = ParseComplete
-  deriving stock (Show)
-
 data ParameterStatus = ParameterStatus {parameterName :: !Text, parameterValue :: !Text}
-  deriving stock (Show)
-
-newtype ReadyForQuery
-  = ReadyForQuery TransactionStatus
-  deriving stock (Show)
-
-newtype RowDescription = RowDescription {resultColumnTypes :: [Oid]}
   deriving stock (Show)
 
 data StartupMessage = StartupMessage {user :: String, database :: String, options :: String}
@@ -390,26 +360,6 @@ instance FromPgMessage NotificationResponse where
               channelNameAndPayload of
               Left _ -> Nothing
               Right notif -> Just notif
-
-data ErrorDetail
-  = ErrorSeverity
-  | ErrorCode
-  | ErrorHumanReadableMsg
-  | ErrorDetail
-  | ErrorHint
-  | ErrorPosition
-  | ErrorInternalPosition
-  | ErrorInternalCommand
-  | ErrorContext
-  | ErrorSchema
-  | ErrorTable
-  | ErrorColumn
-  | ErrorType
-  | ErrorConstraint
-  | ErrorSourceFile
-  | ErrorSourceLine
-  | ErrorSourceRoutine
-  deriving stock (Eq, Ord, Show)
 
 byteToErrorDetail :: Word8 -> Maybe ErrorDetail
 byteToErrorDetail b = case w2c b of

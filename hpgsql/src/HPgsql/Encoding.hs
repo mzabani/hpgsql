@@ -81,60 +81,6 @@ data RowParser a = RowParser
 
 instance Applicative RowParser where
   pure v = RowParser (const $ pure v) (map (,True)) []
-
-  -- TODO: We've changed `RowParser` quite a bit since this last proof.
-  -- Prove it again. But try to prove that `(->) a b` is Applicative if `b` is, and that
-  -- Product types of applicatives are applicatives, too?
-
-  -- Here's informal proof this is a sound Applicative as per its laws!
-  --   Identity
-
-  --     pure id <*> v = v
-  -- RowParser (pure id) (const True) 0 <*> RowParser v' check numcols =
-  -- RowParser (pure id <*> v') check numcols =
-  -- RowParser v' check numcols = v
-  -- Identity is good!
-
-  -- Composition
-
-  --     pure (.) <*> u <*> v <*> w = u <*> (v <*> w)
-  -- Left side:
-  -- RowParser (pure (.)) (const True) 0 <*> RowParser u' checkU numU <*> RowParser v' checkV numV <*> RowParser w' checkW numW =
-  -- RowParser (pure (.) <*> u') checkU numU <*> v <*> w =
-  -- RowParser (pure (.) <*> u' <*> v') (combination of checkU and checkV) (numU + numV) <*> w =
-  -- RowParser (pure (.) <*> u' <*> v' <*> w') (combination of (combination of checkU and checkV) and checkW) (numU + numV + numW) =
-  -- Right side:
-  -- RowParser u' checkU numU <*> (RowParser (v' <*> w') (combination of checkV and checkW) (numV + numW)) =
-  -- RowParser (u' <*> (v' <*> w')) (combination of checkU and (combination of checkV and checkW)) (numV + numW + numU)
-  -- The sum of ints is clearly the same on both sides.
-  -- The applicative Parsers are law-abinding and so Composition applies inside, meaning the parser bits are equal too.
-  -- The combined predicate functions remain. But it's "clear" that the list splitting is associative, so
-  -- it seems these functions are equal, too.
-  -- So composition applies!
-
-  -- Homomorphism
-
-  --     pure f <*> pure x = pure (f x)
-  -- RowParser (pure f) (const True) 0 <*> RowParser (pure x) (const True) 0 =
-  -- RowParser (pure f <*> pure x) (const True) 0 =
-  -- RowParser (f <$> pure x) (const True) 0 =
-  -- RowParser (pure (f x)) (const True) 0 = pure (f x)
-  -- Homomorphism is good!
-
-  -- Interchange
-
-  --     u <*> pure y = pure ($ y) <*> u
-  -- Left side:
-  -- RowParser u' check numcols <*> RowParser (pure y) (const True) 0 =
-  -- RowParser (u' <*> pure y) check numcols
-  -- Right side:
-  -- RowParser (pure ($ y)) (const True) 0 <*> RowParser u' check numcols =
-  -- RowParser (pure ($ y) <*> u') check numcols =
-  -- Since inside RowParser we have an attoparsec Parser, which is a law-abiding Applicative,
-  -- we can assume Interchange is valid for it, which means that:
-  -- u' <*> pure y = pure ($ y) <*> u'
-  -- And so left hand and right hand sides are equal, and Interchange applies!
-
   RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in tc1 cols1 ++ tc2 cols2) (nc1 ++ nc2)
 
 instance (TypeError (TypeLits.Text "RowParser does not have a Monad instance in HPgsql because HPgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances.")) => Monad RowParser where
@@ -165,6 +111,17 @@ singleColRowParser (FieldParser {..}) =
         _ -> error "singleColRowParser's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
       resultColumnsFmts = [fieldFmt]
     }
+
+int32Parser :: Parsec.Parser Int32
+int32Parser = either fail pure . Cereal.decode @Int32 =<< Parsec.take 4
+
+class FromPgField a where
+  fieldParser :: FieldParser a
+
+class FromPgRow a where
+  rowParser :: RowParser a
+  default rowParser :: (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
+  rowParser = genericFromPgRow
 
 data AllowNull (a :: Bool) where
   AllowNull :: AllowNull True
@@ -251,14 +208,6 @@ instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgFiel
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
   rowParser = (,,,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
-
-class FromPgField a where
-  fieldParser :: FieldParser a
-
-class FromPgRow a where
-  rowParser :: RowParser a
-  default rowParser :: (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
-  rowParser = genericFromPgRow
 
 class ToPgField a where
   toTypeOid :: proxy a -> Map Oid TypeInfo -> Maybe Oid
@@ -401,7 +350,7 @@ instance ToPgField Aeson.Value where
   toPgField _ v = Just $ LBS.cons 1 (Aeson.encode v)
 
 instance (ToPgField a) => ToPgField (Maybe a) where
-  toTypeOid _ typeInfoCache = toTypeOid (Proxy @a) typeInfoCache
+  toTypeOid _ = toTypeOid (Proxy @a)
   toPgField _ Nothing = Nothing
   toPgField tyiCache (Just n) = toPgField tyiCache n
 
@@ -466,7 +415,7 @@ instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgF
   toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h), \typeInfoCache -> (toTypeOid (Proxy @i) typeInfoCache, toPgField typeInfoCache i), \typeInfoCache -> (toTypeOid (Proxy @j) typeInfoCache, toPgField typeInfoCache j), \typeInfoCache -> (toTypeOid (Proxy @k) typeInfoCache, toPgField typeInfoCache k)]
 
 instance (ToPgField a) => ToPgRow [a] where
-  toPgParams colValues = map (\v -> \typeInfoCache -> let typOid = toTypeOid (Proxy @a) typeInfoCache in (typOid, toPgField typeInfoCache v)) colValues
+  toPgParams = map (\v typeInfoCache -> let typOid = toTypeOid (Proxy @a) typeInfoCache in (typOid, toPgField typeInfoCache v))
 
 -- | A way to compose rows.
 data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
@@ -882,9 +831,6 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
               case elementParser.fieldValueParser elementColInfo elementBs of
                 Left err -> fail $ "Error parsing array element: " ++ show err
                 Right el -> pure el
-
-int32Parser :: Parsec.Parser Int32
-int32Parser = either fail pure . Cereal.decode @Int32 =<< Parsec.take 4
 
 int16Parser :: Parsec.Parser Int16
 int16Parser = either fail pure . Cereal.decode @Int16 =<< Parsec.take 2

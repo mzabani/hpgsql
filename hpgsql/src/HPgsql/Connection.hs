@@ -35,7 +35,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
-import Data.Word (Word16)
+import HPgsql.InternalTypes (ConnString (..))
 import Network.URI
   ( URI (..),
     URIAuth (..),
@@ -43,17 +43,6 @@ import Network.URI
     unEscapeString,
   )
 import Prelude hiding (takeWhile)
-
--- TODO: Switch to Text as the default in record fields
-data ConnString = ConnString
-  { hostname :: String,
-    port :: Word16,
-    user :: String,
-    password :: String,
-    database :: String,
-    options :: String
-  }
-  deriving stock (Eq)
 
 -- | Renders a libpq compatible connection string.
 -- TODO: Copy tests from codd!
@@ -78,9 +67,6 @@ libpqConnString ConnString {..} =
         "'"
           <> Text.replace "'" "\\'" (Text.replace "\\" "\\\\" un)
           <> "'"
-
-instance Show ConnString where
-  show _ = "ConnectionString"
 
 parseConnString :: Text -> Either String ConnString
 parseConnString =

@@ -43,7 +43,7 @@ executable hpgsql-simple-compat-tests
       Rank2Types
       RecordWildCards
       ScopedTypeVariables
-  ghc-options: -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind
+  ghc-options: -O1 -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind
   if flag(threaded)
     ghc-options: -threaded
   build-depends:

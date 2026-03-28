@@ -57,6 +57,14 @@ data SingleQueryFragment
 -- Use `breakIntoQueryStatements` to get individual SQL statements that are good to send to Postgres.
 data Query = Query {queryString :: ![SingleQueryFragment], queryParams :: ![Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]}
 
+-- | A single statement, not multiple, with dollar-numbered query arguments
+-- starting from $1.
+data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]}
+
+instance Show SingleQuery where
+  -- Careful not exposing query arguments
+  show (SingleQuery {queryString}) = show queryString
+
 instance Show Query where
   -- Careful not exposing query arguments
   show = mconcat . map show . NE.toList . breakQueryIntoStatements
@@ -100,14 +108,6 @@ instance Semigroup Query where
             q2.queryString
             (maxArgQ1 + 1)
      in Query {queryString = q1.queryString <> remappedQ2, queryParams = q1.queryParams <> q2.queryParams}
-
--- | A single statement, not multiple, with dollar-numbered query arguments
--- starting from $1.
-data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]}
-
-instance Show SingleQuery where
-  -- Careful not exposing query arguments
-  show (SingleQuery {queryString}) = Text.unpack $ decodeUtf8 queryString
 
 breakQueryIntoStatements :: Query -> NonEmpty SingleQuery
 breakQueryIntoStatements Query {queryString, queryParams} = toEmptyQueryIfNecessary $ go queryString queryParams
