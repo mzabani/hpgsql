@@ -1,6 +1,8 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------
 
@@ -21,11 +23,12 @@
 -- elements.
 module Database.PostgreSQL.Simple.ToRow
   ( ToRow (..),
+    ToPgRow (..),
   )
 where
 
 import Database.PostgreSQL.Simple.ToField (Action (..))
-import GHC.Generics
+import HPgsql.Encoding (ToPgRow (..))
 
 -- | A collection type that can be turned into a list of rendering
 -- 'Action's.
@@ -51,3 +54,6 @@ import GHC.Generics
 class ToRow a where
   toRow :: a -> [Action]
   -- ^ ToField a collection of values.
+
+instance (ToPgRow a) => ToRow a where
+  toRow = map QueryArgument . toPgParams

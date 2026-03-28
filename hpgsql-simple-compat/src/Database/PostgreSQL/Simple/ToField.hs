@@ -24,27 +24,25 @@
 module Database.PostgreSQL.Simple.ToField
   ( Action (..),
     ToField (..),
+    ToPgField (..),
     inQuotes,
   )
 where
 
-import qualified Data.Aeson as JSON
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as SB
 import Data.ByteString.Builder
   ( Builder,
     char8,
   )
 import qualified Data.ByteString.Lazy as LB
+import Data.Map.Strict (Map)
 import Data.Typeable (Proxy (..), Typeable)
-import Database.PostgreSQL.Simple.Compat (toByteString)
 import HPgsql.Encoding (ToPgField (..))
-import qualified HPgsql.Encoding as HPgsql
-import HPgsql.TypeInfo (Oid)
+import HPgsql.TypeInfo (Oid, TypeInfo)
 
 -- | How to render an element when substituting it into a query.
 data Action
-  = QueryArgument (Maybe Oid, Maybe LB.ByteString)
+  = QueryArgument (Map Oid TypeInfo -> (Maybe Oid, Maybe LB.ByteString))
   | -- | Escape before substituting. Use for all sql identifiers like
     -- table, column names, etc. This is used by the 'Identifier' newtype
     -- wrapper.
@@ -54,7 +52,7 @@ data Action
   deriving (Typeable)
 
 instance Show Action where
-  show (QueryArgument (oid, _binRep)) = "QueryArgument " ++ show (oid)
+  show (QueryArgument _) = "QueryArgument"
   show (EscapeIdentifier b) = "EscapeIdentifier " ++ show b
   show (Many b) = "Many " ++ show b
 
@@ -64,10 +62,11 @@ proxyOf _ = Proxy
 -- | A type that may be used as a single parameter to a SQL query.
 class ToField a where
   toField :: a -> Action
-  default toField :: (HPgsql.ToPgField a) => a -> Action
-  toField v = QueryArgument (HPgsql.toTypeOid (proxyOf v), HPgsql.toPgField v)
+  default toField :: (ToPgField a) => a -> Action
+  -- TODO: Nothing as the typeOid so postgres has to infer it?
+  toField v = QueryArgument $ \tyiCache -> (toTypeOid (proxyOf v) tyiCache, toPgField tyiCache v)
 
-instance (HPgsql.ToPgField a) => ToField a
+instance (ToPgField a) => ToField a
 
 -- | Surround a string with single-quote characters: \"@'@\"
 --

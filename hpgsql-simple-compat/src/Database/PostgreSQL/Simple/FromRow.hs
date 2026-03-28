@@ -24,11 +24,12 @@
 -- it attempts a regular conversion.
 module Database.PostgreSQL.Simple.FromRow
   ( FromRow (..),
-    field
+    FromPgRow (..),
+    field,
   )
 where
 
-import HPgsql.Encoding (FromPgField(..), FromPgRow(..), RowParser, singleColRowParser)
+import HPgsql.Encoding (FromPgField (..), FromPgRow (..), RowParser, singleColRowParser)
 import Prelude hiding (null)
 
 class FromRow a where
@@ -38,5 +39,5 @@ class FromRow a where
 
 instance (FromPgRow a) => FromRow a
 
-field :: FromPgField a => RowParser a
+field :: (FromPgField a) => RowParser a
 field = singleColRowParser fieldParser

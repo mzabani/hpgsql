@@ -34,6 +34,7 @@ import qualified Database.PostgreSQL.Simple.Streaming as StreamingPostgresSimple
 import GHC.Generics (Generic)
 import qualified HPgsql
 import HPgsql.Connection (libpqConnString)
+import qualified HPgsql.Query as HPgsql
 import qualified Hasql.Connection as HasqlConn
 import qualified Hasql.Connection.Setting as HasqlSetting
 import qualified Hasql.Connection.Setting.Connection as HasqlConnSetting

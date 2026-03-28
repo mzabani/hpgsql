@@ -24,7 +24,6 @@
 -- client and server.
 module Database.PostgreSQL.Simple.TypeInfo
   ( getTypeInfo,
-    fromHpgsqlOid,
     TypeInfo (..),
     Attribute (..),
   )
@@ -46,7 +45,6 @@ import Database.PostgreSQL.Simple.TypeInfo.Types
 import Database.PostgreSQL.Simple.Types
 import qualified HPgsql as HPgsql
 import HPgsql.Encoding ()
-import qualified HPgsql.TypeInfo as HPgsql
 
 -- | Returns the metadata of the type with a particular oid.  To find
 --   this data, 'getTypeInfo' first consults hpgsql-simple-compat's
@@ -59,12 +57,6 @@ getTypeInfo conn@Connection {..} oid' =
   case staticTypeInfo oid' of
     Just name' -> return name'
     Nothing -> modifyMVar connectionObjects $ getTypeInfo' conn oid'
-
-fromHpgsqlOid :: HPgsql.Oid -> PQ.Oid
-fromHpgsqlOid = PQ.Oid . fromIntegral
-
-toHpgsqlOid :: PQ.Oid -> HPgsql.Oid
-toHpgsqlOid (PQ.Oid oid) = HPgsql.Oid $ fromIntegral oid
 
 getTypeInfo' ::
   Connection ->
@@ -81,11 +73,11 @@ getTypeInfo' conn oid' oidmap =
           "SELECT oid, typcategory, typdelim, typname,\
           \ typelem, typrelid\
           \ FROM pg_type WHERE oid = ?"
-          (Only $ toHpgsqlOid oid')
+          (Only oid')
       (oidmap', typeInfo) <-
         case names of
           [] -> return $ throw (fatalError "invalid type oid")
-          [(fromHpgsqlOid -> typoid, typcategory, typdelim, encodeUtf8 -> typname, fromHpgsqlOid -> typelem_, fromHpgsqlOid -> typrelid)] -> do
+          [(typoid, typcategory, typdelim, encodeUtf8 -> typname, typelem_, typrelid)] -> do
             case typcategory of
               'A' -> do
                 (oidmap', typelem) <- getTypeInfo' conn typelem_ oidmap
@@ -98,16 +90,16 @@ getTypeInfo' conn oid' oidmap =
                     "SELECT rngsubtype\
                     \ FROM pg_range\
                     \ WHERE rngtypid = ?"
-                    (Only $ toHpgsqlOid oid')
+                    (Only oid')
                 case rngsubtypeOids of
-                  [HPgsql.Only (fromHpgsqlOid -> rngsubtype_)] -> do
+                  [HPgsql.Only rngsubtype_] -> do
                     (oidmap', rngsubtype) <-
                       getTypeInfo' conn rngsubtype_ oidmap
                     let !typeInfo = Range {..}
                     return $! (oidmap', typeInfo)
                   _ -> fail "range subtype query failed to return exactly one result"
               'C' -> do
-                (map (second fromHpgsqlOid) -> cols) <-
+                cols <-
                   query
                     conn
                     "SELECT attname, atttypid\
@@ -116,7 +108,7 @@ getTypeInfo' conn oid' oidmap =
                     \ AND attnum > 0\
                     \ AND NOT attisdropped\
                     \ ORDER BY attnum"
-                    (Only $ toHpgsqlOid typrelid)
+                    (Only typrelid)
                 vec <- MV.new $! length cols
                 (oidmap', attributes) <- getAttInfos conn cols oidmap vec 0
                 let !typeInfo = Composite {..}

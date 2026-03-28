@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeApplications #-}
 
 ------------------------------------------------------------------------------
@@ -50,8 +51,9 @@ import Data.Tuple.Only (Only (..))
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.Compat (toByteString)
-import HPgsql.Encoding (ToPgField (..))
+import HPgsql.Encoding (ToPgField (..), (:.) (..))
 import qualified HPgsql.Encoding as HPgsql
+import HPgsql.Types (PGArray (..))
 
 -- | A placeholder for the SQL @NULL@ value.
 data Null = Null
@@ -157,8 +159,8 @@ instance HPgsql.FromPgField (Binary ByteString) where
   fieldParser = Binary <$> HPgsql.fieldParser
 
 instance ToPgField (Binary ByteString) where
-  toTypeOid _ = toTypeOid (Proxy @ByteString)
-  toPgField (Binary v) = toPgField v
+  toTypeOid _ tyiCache = toTypeOid (Proxy @ByteString) tyiCache
+  toPgField tyiCache (Binary v) = toPgField tyiCache v
 
 -- | Wrap text for use as sql identifier, i.e. a table or column name.
 newtype Identifier = Identifier {fromIdentifier :: Text}
@@ -187,30 +189,6 @@ instance IsString QualifiedIdentifier where
      in if T.null y
           then QualifiedIdentifier Nothing x
           else QualifiedIdentifier (Just x) (T.tail y)
-
--- | Wrap a list for use as a PostgreSQL array.
-newtype PGArray a = PGArray {fromPGArray :: [a]}
-  deriving (Eq, Ord, Read, Show, Typeable, Functor)
-
--- | A composite type to parse your custom data structures without
--- having to define dummy newtype wrappers every time.
---
---
--- > instance FromRow MyData where ...
---
--- > instance FromRow MyData2 where ...
---
---
--- then I can do the following for free:
---
--- @
--- res <- query' c "..."
--- forM res $ \\(MyData{..} :. MyData2{..}) -> do
---   ....
--- @
-data h :. t = h :. t deriving (Eq, Ord, Show, Read, Typeable)
-
-infixr 3 :.
 
 newtype Savepoint = Savepoint Query
   deriving (Eq, Ord, Show, Read, Typeable)

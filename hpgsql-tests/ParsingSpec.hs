@@ -30,7 +30,7 @@ import GHC.Num (Natural)
 import HPgsql (Only (..))
 import HPgsql.Encoding (ToPgRow (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
-import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, mkQueryWithQuestionMarks, sql)
+import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
 import Hedgehog (Gen, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range

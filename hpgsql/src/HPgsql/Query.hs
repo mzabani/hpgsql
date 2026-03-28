@@ -6,7 +6,7 @@ module HPgsql.Query
     SingleQuery (..), -- Nor this one
     sql,
     commaSeparatedRowTuples,
-    mkQueryWithQuestionMarks,
+    mkQueryInternal,
     breakQueryIntoStatements,
     mkQuery,
   )
@@ -36,8 +36,7 @@ import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
 
--- | Represents fragments of SQL text that can include interpolated Haskell expressions,
--- embedded Query expressions, or fragments of plain SQL.
+-- | A useful representation for our quasiquoter parsing.
 data SqlFragment
   = NonInterpolatedSqlFragment !Text
   | InterpolatedHaskellExpr !Text
@@ -62,11 +61,14 @@ instance Show Query where
   -- Careful not exposing query arguments
   show = mconcat . map show . NE.toList . breakQueryIntoStatements
 
--- | Takes a query string that has either ? or dollar-numbered query arguments (but not both) and returns
--- a `Query`. Note that if the number of arguments does not match what's in the query string,
+-- | Takes in a query string with query arguments either as question marks or as dollar-numbered arguments,
+-- but not both. Examples:
+-- - "SELECT * FROM table WHERE col1=? AND col2=?"
+-- - "SELECT * FROM table WHERE col1=$1 AND col2=$2"
+-- Note that if the number of arguments does not match what's in the query string,
 -- this will throw an error.
 mkQuery :: (ToPgRow a) => ByteString -> a -> Query
-mkQuery t p = mkQueryWithQuestionMarksFromStmts (parseSql $ decodeUtf8 t) (toPgParams p)
+mkQuery t p = mkQueryInternalFromSqlStatements (parseSql $ decodeUtf8 t) (toPgParams p)
 
 -- | Meant for internal usage, helps build "VALUES (..), (..)"-like statements.
 -- Users of hpgsql should just use the `Values` type instead of this.
@@ -107,22 +109,6 @@ instance Show SingleQuery where
   -- Careful not exposing query arguments
   show (SingleQuery {queryString}) = Text.unpack $ decodeUtf8 queryString
 
--- breakQueryIntoStatements :: Query -> [SingleQuery]
--- breakQueryIntoStatements q@Query {queryString, queryParams} = removeLastIfEmpty $ foldr go (NE.singleton "", 0, 1) queryString
---   where
---     -- TODO: List.break on semi-colon, take max argNum, yield one SingleQuery, repeat.
---     -- Much simpler than this.
---     removeLastIfEmpty (qs, _, _) = case (NE.length qs > 1, (NE.last qs).queryString) of
---       (True, "") -> NE.init qs
---       _ -> NE.toList qs
---     paramsPerIdx = Map.fromList $ zipWith [1 ..] queryParams
---     go (FragmentOfStaticSql t) ((currentSingleQuery :| otherQueries), !maxArgNumSoFar, !nextArgNumForQuery)
---       | ";" `BS.isSuffixOf` t = ("" :| (currentSingleQuery <> t : otherQueries), maxArgNumSoFar, 1) -- TODO: A proper ctor for semi-colons separating statements
---       | otherwise = (currentSingleQuery <> t :| otherQueries, maxArgNumSoFar, nextArgNumForQuery)
---     go (QueryArgumentPlaceHolder n) ((currentSingleQuery :| otherQueries), !maxArgNumSoFar, !nextArgNumForQuery) =
---       case Map.lookup n paramsPerIdx of
---         Nothing -> error $ "The " ++ show n ++ "th query argument was not supplied for query " ++ show q
---         Just v -> (currentSingleQuery <> "$" <> intToBs nextArgNumForQuery :| otherQueries, max maxArgNumSoFar n, nextArgNumForQuery + 1)
 breakQueryIntoStatements :: Query -> NonEmpty SingleQuery
 breakQueryIntoStatements Query {queryString, queryParams} = toEmptyQueryIfNecessary $ go queryString queryParams
   where
@@ -158,17 +144,18 @@ instance IsString Query where
         stmtToSingleQueryFrag = FragmentOfStaticSql . encodeUtf8 . sqlStatementText
      in Query {queryString = NE.toList $ fmap stmtToSingleQueryFrag statements, queryParams = []}
 
--- | Takes in a query string with question marks as placeholders for query arguments,
--- e.g. "SELECT * FROM table WHERE col1=? AND col2=?", and a list of query parameters, and returns
--- the equivalent query for Hpgsql to run.
+-- | Takes in a query string with query arguments either as question marks or as dollar-numbered arguments,
+-- but not both. Examples:
+-- - "SELECT * FROM table WHERE col1=? AND col2=?"
+-- - "SELECT * FROM table WHERE col1=$1 AND col2=$2"
 -- You should probably use `mkQuery` instead of this. It's here only for hpgsql-simple-compat.
-mkQueryWithQuestionMarks :: ByteString -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
-mkQueryWithQuestionMarks queryTemplate allParams =
+mkQueryInternal :: ByteString -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
+mkQueryInternal queryTemplate allParams =
   let statements = parseSql (decodeUtf8 queryTemplate)
-   in mkQueryWithQuestionMarksFromStmts statements allParams
+   in mkQueryInternalFromSqlStatements statements allParams
 
-mkQueryWithQuestionMarksFromStmts :: NonEmpty SqlStatement -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
-mkQueryWithQuestionMarksFromStmts statements allParams =
+mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
+mkQueryInternalFromSqlStatements statements allParams =
   let (_, queryFrags) =
         List.mapAccumL
           ( \(!maxArgSoFar) sqlPiece -> case sqlPiece of
@@ -180,49 +167,6 @@ mkQueryWithQuestionMarksFromStmts statements allParams =
           0
           (concatMap statementBlocks $ NE.toList statements)
    in Query {queryString = queryFrags, queryParams = allParams}
-
--- mkQueryWithQuestionMarksFromStmts statements allParams = distributeParams allParams statements
---   where
---     -- This function is a very roundabout way of doing things.
---     -- It wouldn't be crazy to make `SqlStatement` contain special constructors for
---     -- question marks in NonBlock segments, but rather we do a lot of parsing here
---     -- all over again when we could do a tiny bit more work in Parsing.hs.
-
---     processStatement :: SqlStatement -> ([SingleQueryFragment], Int)
---     processStatement (SqlStatement blks) =
---       let (finalN, frags) = List.foldl' processBlock (1, []) blks
---        in (frags, finalN - 1)
-
---     processBlock :: (Int, [SingleQueryFragment]) -> BlockOrNotBlock -> (Int, [SingleQueryFragment])
---     processBlock (n, acc) (Block t) = (n, FragmentOfStaticSql (encodeUtf8 t) : acc)
---     processBlock (n, acc) (NotBlock t) =
---       let (n', t') = replaceQuestionMarks n t
---        in (n', t' ++ acc)
-
---     replaceQuestionMarks :: Int -> Text -> (Int, [SingleQueryFragment])
---     replaceQuestionMarks n txt =
---       let (before, rest) = Text.break (\c -> c == '?' || c == '$') txt
---        in if Text.null rest -- No question mark or dollar sign
---             then (n, [FragmentOfStaticSql $ encodeUtf8 before])
---             else case Parsec.parseOnly ((,) <$> (Left <$> Parsec.string "?" <|> Right <$> (Parsec.string "$" *> Parsec.decimal)) <*> Parsec.takeText) rest of
---               Left e -> error $ "Failed parsing query with HPgsql: " ++ e
---               Right (pr, afterPlaceholder) ->
---                 case pr of
---                   Left _questionMark ->
---                     let (n', rest') = replaceQuestionMarks (n + 1) afterPlaceholder
---                      in (n', FragmentOfStaticSql (encodeUtf8 before) : QueryArgumentPlaceHolder n : rest')
---                   Right numberedParam ->
---                     let (n', rest') = replaceQuestionMarks (numberedParam + 1) afterPlaceholder
---                      in (n', FragmentOfStaticSql (encodeUtf8 before) : QueryArgumentPlaceHolder n : rest')
-
---     distributeParams :: [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> NonEmpty SqlStatement -> Query
---     distributeParams params (stmt :| rest) =
---       let (thisQueryFrags, numParams) = processStatement stmt
---           (thisQueryParams, remainingParams) = splitAt numParams params
---           thisQuery = Query thisQueryFrags thisQueryParams
---        in case rest of
---             [] -> thisQuery
---             (s : ss) -> thisQuery <> distributeParams remainingParams (s :| ss)
 
 sql :: QuasiQuoter
 sql =
@@ -313,19 +257,6 @@ buildQueryQQ parts =
         let (newMaxArgNum, renumberedFrags) = renumberParamsFrom q.queryString argNum
             (restFrags, restParams) = go rest (newMaxArgNum + 1)
          in (renumberedFrags ++ restFrags, q.queryParams ++ restParams)
-
--- processPart :: QueryBuildPartQQ -> (Text, [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)], Int) -> (Text, [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)], Int)
--- processPart (StaticSqlPart bs) (sql', params, n) =
---   (sql' <> decodeUtf8 bs, params, n)
--- processPart (ParamPart param) (sql', params, n) =
---   (sql' <> "$" <> Text.pack (show n), \typeInfoCache -> param typeInfoCache : params typeInfoCache, n + 1)
--- processPart (EmbeddedQueryPart (Query singleQueries)) (sql', params, n) =
---   case NE.toList singleQueries of
---     [SingleQuery innerSql innerParams] ->
---       let offset = n - 1
---           renumbered = if offset == 0 then decodeUtf8 innerSql else renumberParams offset (decodeUtf8 innerSql)
---        in (sql' <> renumbered, \typeInfoCache -> innerParams typeInfoCache ++ params typeInfoCache, n + length innerParams)
---     _ -> error "Embedded query (^{}) must contain exactly one SQL statement, but it contains multiple statements separated by semicolons"
 
 -- | Returns new fragments remapped with `renumberFrom` as the smallest query argument number,
 -- and also returns the maximum (new) query argument number, or 0 if there were no query arguments.

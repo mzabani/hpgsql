@@ -83,6 +83,7 @@
 -- instances use 'typename' instead.
 module Database.PostgreSQL.Simple.FromField
   ( FromField (..),
+    FromPgField (..),
     FieldParser (..),
     Conversion (),
     runConversion,
@@ -115,7 +116,7 @@ import Database.PostgreSQL.Simple.Compat
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
-import HPgsql.Encoding (FieldParser (..))
+import HPgsql.Encoding (FieldParser (..), FromPgField (..))
 import qualified HPgsql.Encoding as HPgsql
 import qualified HPgsql.TypeInfo as HPgsqlTI
 
@@ -208,16 +209,15 @@ instance (HPgsql.FromPgField a) => FromField a where
 hpgsqlTypeInfoCacheToCompat :: Map.Map HPgsqlTI.Oid HPgsqlTI.TypeInfo -> TypeInfoCache
 hpgsqlTypeInfoCacheToCompat = IntMap.fromList . map convert . Map.toList
   where
-    convert (hoid, ti) =
-      let pqOid = fromHpgsqlOid hoid
-       in ( oid2int pqOid,
-            Basic
-              { typoid = pqOid,
-                typcategory = error "typcategory not available in hpgsql-simple-compat",
-                typdelim = ',',
-                typname = ST.encodeUtf8 (HPgsqlTI.typeName ti)
-              }
-          )
+    convert (pqOid, ti) =
+      ( oid2int pqOid,
+        Basic
+          { typoid = pqOid,
+            typcategory = error "typcategory not available in hpgsql-simple-compat",
+            typdelim = ',',
+            typname = ST.encodeUtf8 (HPgsqlTI.typeName ti)
+          }
+      )
 
 -- | Returns the data type name.  This is the preferred way of identifying
 --   types that do not have a stable type oid, such as types provided by

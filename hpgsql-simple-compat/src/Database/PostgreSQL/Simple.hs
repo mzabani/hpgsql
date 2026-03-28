@@ -1,7 +1,9 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ViewPatterns #-}
 
@@ -138,7 +140,7 @@ import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
-import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
+import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery, toHpgsqlRowParams)
 import Database.PostgreSQL.Simple.Internal as Base
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Transaction
@@ -167,7 +169,7 @@ import qualified Streaming
 --
 -- Throws 'FormatError' if the query string could not be formatted
 -- correctly.
-formatMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO HPgsql.Query
+formatMany :: forall q. (ToRow q) => Connection -> Query -> [q] -> IO HPgsql.Query
 formatMany _ q [] = fmtError "no rows supplied" q []
 formatMany _conn q@(Query template) qs = do
   -- First we replace the query string's ? with (?,?,?,...) with as many
@@ -176,21 +178,22 @@ formatMany _conn q@(Query template) qs = do
     Nothing -> fmtError "query is not of the expected form" q
     Just (before, qbits, after) ->
       let numCols = B.count '?' qbits
-       in case filter (\r -> length (HPgsql.toPgParams r) /= numCols) qs of
+       in case filter (\r -> length (toHpgsqlRowParams r) /= numCols) qs of
             (bad : _) ->
               error
                 ( show numCols
                     ++ " single '?' characters, but "
-                    ++ show (length $ HPgsql.toPgParams bad)
+                    ++ show (length $ toHpgsqlRowParams bad)
                     ++ " parameters"
                 )
             [] ->
               pure $ before <> BS.intercalate "," (map renderRow qs) <> after
   -- Now we ask HPgsql to parse the query with one ? per query parameter
-  pure $ HPgsql.mkQueryWithQuestionMarks pgSimpleQuery (concatMap HPgsql.toPgParams qs)
+  pure $ HPgsql.mkQueryInternal pgSimpleQuery (concatMap toHpgsqlRowParams qs)
   where
+    renderRow :: (ToRow q) => q -> B.ByteString
     renderRow row =
-      let numCols = length $ HPgsql.toPgParams row
+      let numCols = length $ toHpgsqlRowParams row
        in toByteString $
             char8 '(' <> mconcat (intersperse (char8 ',') (replicate numCols "?")) <> char8 ')'
 
@@ -296,7 +299,7 @@ parseTemplate template =
 --
 -- Throws 'FormatError' if the query could not be formatted correctly, or
 -- a 'SqlError' exception if the backend returns an error.
-execute :: (HPgsql.ToPgRow q) => Connection -> Query -> q -> IO Int64
+execute :: (ToRow q) => Connection -> Query -> q -> IO Int64
 execute conn template qs =
   mapHpgsqlErrors $
     HPgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
@@ -330,7 +333,7 @@ execute conn template qs =
 --      WHERE sometable.x = upd.x
 --  |] [(1, \"hello\"),(2, \"world\")]
 -- @
-executeMany :: (HPgsql.ToPgRow q) => Connection -> Query -> [q] -> IO Int64
+executeMany :: (ToRow q) => Connection -> Query -> [q] -> IO Int64
 executeMany _ _ [] = return 0
 executeMany conn q qs = mapHpgsqlErrors $ do
   qry <- formatMany conn q qs
@@ -374,15 +377,15 @@ returningWith parser conn q qs = error "TODO HPgsql"
 --
 -- * 'SqlError':  the postgresql backend returned an error,  e.g.
 --   a syntax or type error,  or an incorrect table or column name.
-query :: (HPgsql.ToPgRow q, HPgsql.FromPgRow r) => Connection -> Query -> q -> IO [r]
-query conn q qs = queryWith HPgsql.rowParser conn q qs
+query :: (ToRow q, FromRow r) => Connection -> Query -> q -> IO [r]
+query conn q qs = queryWith fromRow conn q qs
 
 -- | A version of 'query' that does not perform query substitution.
-query_ :: (HPgsql.FromPgRow r) => Connection -> Query -> IO [r]
+query_ :: (FromRow r) => Connection -> Query -> IO [r]
 query_ conn q = query conn q ()
 
 -- | A version of 'query' taking parser as argument
-queryWith :: (HPgsql.ToPgRow q) => HPgsql.RowParser r -> Connection -> Query -> q -> IO [r]
+queryWith :: (ToRow q) => HPgsql.RowParser r -> Connection -> Query -> q -> IO [r]
 queryWith parser conn template qs =
   mapHpgsqlErrors $
     HPgsql.queryWith parser (hpgConn conn) (toHpgsqlQuery template qs)
