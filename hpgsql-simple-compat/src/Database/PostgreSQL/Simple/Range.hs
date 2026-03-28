@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 ------------------------------------------------------------------------------
 
@@ -23,17 +22,7 @@ module Database.PostgreSQL.Simple.Range
   )
 where
 
-import Control.Applicative hiding (empty)
-import Data.Attoparsec.ByteString.Char8 (Parser)
-import qualified Data.Attoparsec.ByteString.Char8 as A
-import qualified Data.ByteString as B
-import Data.ByteString.Builder
-  ( Builder,
-    byteString,
-    char8,
-  )
 import Data.Typeable (Typeable)
-import Database.PostgreSQL.Simple.Compat (toByteString)
 
 -- | Represents boundary of a range
 data RangeBound a
@@ -105,70 +94,3 @@ containsBy cmp rng x =
         Inclusive z -> cmp y z /= GT
         Exclusive z -> cmp y z == LT
 
-lowerBound :: Parser (a -> RangeBound a)
-lowerBound = (A.char '(' *> pure Exclusive) <|> (A.char '[' *> pure Inclusive)
-{-# INLINE lowerBound #-}
-
-upperBound :: Parser (a -> RangeBound a)
-upperBound = (A.char ')' *> pure Exclusive) <|> (A.char ']' *> pure Inclusive)
-{-# INLINE upperBound #-}
-
--- | Generic range parser
-pgrange :: Parser (RangeBound B.ByteString, RangeBound B.ByteString)
-pgrange = do
-  lb <- lowerBound
-  v1 <- (A.char ',' *> "") <|> (rangeElem (== ',') <* A.char ',')
-  v2 <- rangeElem $ \c -> c == ')' || c == ']'
-  ub <- upperBound
-  A.endOfInput
-  let low = if B.null v1 then NegInfinity else lb v1
-      up = if B.null v2 then PosInfinity else ub v2
-  return (low, up)
-
-rangeElem :: (Char -> Bool) -> Parser B.ByteString
-rangeElem end =
-  (A.char '"' *> doubleQuoted)
-    <|> A.takeTill end
-{-# INLINE rangeElem #-}
-
--- | Simple double quoted value parser
-doubleQuoted :: Parser B.ByteString
-doubleQuoted = toByteString <$> go mempty
-  where
-    go acc = do
-      h <- byteString <$> A.takeTill (\c -> c == '\\' || c == '"')
-      let rest = do
-            start <- A.anyChar
-            case start of
-              '\\' -> do
-                c <- A.anyChar
-                go (acc <> h <> char8 c)
-              '"' ->
-                (A.char '"' *> go (acc <> h <> char8 '"'))
-                  <|> pure (acc <> h)
-              _ -> error "impossible in doubleQuoted"
-      rest
-
-rangeToBuilder :: (Ord a) => (a -> Builder) -> PGRange a -> Builder
-rangeToBuilder = rangeToBuilderBy compare
-
--- | Generic range to builder for plain values
-rangeToBuilderBy :: (a -> a -> Ordering) -> (a -> Builder) -> PGRange a -> Builder
-rangeToBuilderBy cmp f x =
-  if isEmptyBy cmp x
-    then byteString "'empty'"
-    else
-      let (PGRange a b) = x
-       in buildLB a <> buildUB b
-  where
-    buildLB NegInfinity = byteString "'[,"
-    buildLB (Inclusive v) = byteString "'[\"" <> f v <> byteString "\","
-    buildLB (Exclusive v) = byteString "'(\"" <> f v <> byteString "\","
-    buildLB PosInfinity = error "impossible in rangeToBuilder"
-
-    buildUB NegInfinity = error "impossible in rangeToBuilder"
-    buildUB (Inclusive v) = char8 '"' <> f v <> byteString "\"]'"
-    buildUB (Exclusive v) = char8 '"' <> f v <> byteString "\")'"
-    buildUB PosInfinity = byteString "]'"
-
-{-# INLINE rangeToBuilder #-}

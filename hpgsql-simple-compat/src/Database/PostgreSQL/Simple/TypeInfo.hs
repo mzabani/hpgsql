@@ -31,7 +31,6 @@ where
 
 import Control.Concurrent.MVar
 import Control.Exception (throw)
-import Data.Bifunctor (second)
 import qualified Data.ByteString as B
 import qualified Data.IntMap as IntMap
 import Data.Text.Encoding (encodeUtf8)

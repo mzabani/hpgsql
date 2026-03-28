@@ -31,11 +31,7 @@ import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Exception
 import Control.Monad (MonadPlus (..))
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.Reader
-import Control.Monad.Trans.State.Strict
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as B
 import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LBS
@@ -50,7 +46,6 @@ import Data.Typeable
 import Data.Word
 import Database.PostgreSQL.LibPQ (ExecStatus (..), Oid (..))
 import qualified Database.PostgreSQL.LibPQ as PQ
-import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.ToField (Action (..), inQuotes)
 import Database.PostgreSQL.Simple.TypeInfo.Types (TypeInfo)

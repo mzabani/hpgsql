@@ -41,15 +41,9 @@ module Database.PostgreSQL.Simple.Copy
   )
 where
 
-import Control.Applicative
-import Control.Concurrent
-import Control.Exception (throwIO)
-import qualified Data.Attoparsec.ByteString.Char8 as P
 import qualified Data.ByteString.Char8 as B
 import Data.Int (Int64)
 import Data.Typeable (Typeable)
-import qualified Database.PostgreSQL.LibPQ as PQ
-import Database.PostgreSQL.Simple
 import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
 import Database.PostgreSQL.Simple.Internal hiding (result, row)
 import Database.PostgreSQL.Simple.Types

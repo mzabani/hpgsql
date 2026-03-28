@@ -107,9 +107,6 @@ where
 import Control.Exception (Exception (fromException, toException))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
-import qualified Data.IntMap as IntMap
-import qualified Data.Map.Strict as Map
-import qualified Data.Text.Encoding as ST
 import Data.Typeable (Typeable, typeOf)
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat
@@ -118,7 +115,6 @@ import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
 import HPgsql.Encoding (FieldParser (..), FromPgField (..))
 import qualified HPgsql.Encoding as HPgsql
-import qualified HPgsql.TypeInfo as HPgsqlTI
 
 -- | Exception thrown if conversion from a SQL value to a Haskell
 -- value fails.
@@ -203,21 +199,6 @@ instance (HPgsql.FromPgField a) => FromField a where
 --         HPgsql.fieldFmt = BadlySupportedTextFmt,
 --         HPgsql.allowedPgTypes = const True
 --       }
-
--- | Converts HPgsql's TypeInfo cache to one similar to postgresql-simple's, but
--- with lots of bottoms everywhere because hpgsql's typeInfo cache is less complete.
-hpgsqlTypeInfoCacheToCompat :: Map.Map HPgsqlTI.Oid HPgsqlTI.TypeInfo -> TypeInfoCache
-hpgsqlTypeInfoCacheToCompat = IntMap.fromList . map convert . Map.toList
-  where
-    convert (pqOid, ti) =
-      ( oid2int pqOid,
-        Basic
-          { typoid = pqOid,
-            typcategory = error "typcategory not available in hpgsql-simple-compat",
-            typdelim = ',',
-            typname = ST.encodeUtf8 (HPgsqlTI.typeName ti)
-          }
-      )
 
 -- | Returns the data type name.  This is the preferred way of identifying
 --   types that do not have a stable type oid, such as types provided by

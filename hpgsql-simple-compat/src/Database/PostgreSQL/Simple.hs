@@ -357,7 +357,7 @@ returning = returningWith fromRow
 -- | A version of 'returning' taking parser as argument
 returningWith :: (ToRow q) => HPgsql.RowParser r -> Connection -> Query -> [q] -> IO [r]
 returningWith _ _ _ [] = return []
-returningWith parser conn q qs = error "TODO HPgsql"
+returningWith _parser _conn _q _qs = error "TODO HPgsql"
 
 -- | Perform a @SELECT@ or other SQL query that is expected to return
 -- results. All results are retrieved and converted before this
@@ -554,7 +554,7 @@ doFold ::
   a ->
   (a -> row -> IO a) ->
   IO a
-doFold FoldOptions {..} parser conn qry a0 f = mapHpgsqlErrors $ do
+doFold FoldOptions {} parser conn qry _a0 _f = mapHpgsqlErrors $ do
   s <- HPgsql.queryWithStreaming parser (hpgConn conn) qry
   pure $ Streaming.streamFold undefined undefined undefined s
 
