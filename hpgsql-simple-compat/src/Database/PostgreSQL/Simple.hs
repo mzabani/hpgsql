@@ -152,7 +152,6 @@ import Database.PostgreSQL.Simple.Types
     (:.) (..),
   )
 import qualified HPgsql
-import qualified HPgsql.Encoding as HPgsql
 import qualified HPgsql.Query as HPgsql
 import qualified Streaming
 
@@ -422,7 +421,7 @@ queryWith_ parser conn q = queryWith parser conn q ()
 -- * 'SqlError':  the postgresql backend returned an error,  e.g.
 --   a syntax or type error,  or an incorrect table or column name.
 fold ::
-  (HPgsql.FromPgRow row, HPgsql.ToPgRow params) =>
+  (FromRow row, ToRow params) =>
   Connection ->
   Query ->
   params ->
@@ -433,7 +432,7 @@ fold = foldWithOptions defaultFoldOptions
 
 -- | A version of 'fold' taking a parser as an argument
 foldWith ::
-  (HPgsql.ToPgRow params) =>
+  (ToRow params) =>
   HPgsql.RowParser row ->
   Connection ->
   Query ->
@@ -471,7 +470,7 @@ defaultFoldOptions =
 --   then the existing transaction is used and thus the 'transactionMode'
 --   option is ignored.
 foldWithOptions ::
-  (HPgsql.FromPgRow row, HPgsql.ToPgRow params) =>
+  (FromRow row, ToRow params) =>
   FoldOptions ->
   Connection ->
   Query ->
@@ -479,11 +478,11 @@ foldWithOptions ::
   a ->
   (a -> row -> IO a) ->
   IO a
-foldWithOptions opts = foldWithOptionsAndParser opts HPgsql.rowParser
+foldWithOptions opts = foldWithOptionsAndParser opts fromRow
 
 -- | A version of 'foldWithOptions' taking a parser as an argument
 foldWithOptionsAndParser ::
-  (HPgsql.ToPgRow params) =>
+  (ToRow params) =>
   FoldOptions ->
   HPgsql.RowParser row ->
   Connection ->
@@ -498,7 +497,7 @@ foldWithOptionsAndParser opts parser conn template qs a f = do
 
 -- | A version of 'fold' that does not perform query substitution.
 fold_ ::
-  (HPgsql.FromPgRow r) =>
+  (FromRow r) =>
   Connection ->
   -- | Query.
   Query ->
@@ -520,7 +519,7 @@ foldWith_ ::
 foldWith_ = foldWithOptionsAndParser_ defaultFoldOptions
 
 foldWithOptions_ ::
-  (HPgsql.FromPgRow r) =>
+  (FromRow r) =>
   FoldOptions ->
   Connection ->
   -- | Query.
@@ -530,7 +529,7 @@ foldWithOptions_ ::
   -- | Result consumer.
   (a -> r -> IO a) ->
   IO a
-foldWithOptions_ opts conn query' a f = doFold opts HPgsql.rowParser conn (toHpgsqlQuery query' ()) a f
+foldWithOptions_ opts conn query' a f = doFold opts fromRow conn (toHpgsqlQuery query' ()) a f
 
 -- | A version of 'foldWithOptions_' taking a parser as an argument
 foldWithOptionsAndParser_ ::
@@ -560,7 +559,7 @@ doFold FoldOptions {} parser conn qry _a0 _f = mapHpgsqlErrors $ do
 
 -- | A version of 'fold' that does not transform a state value.
 forEach ::
-  (HPgsql.ToPgRow q, HPgsql.FromPgRow r) =>
+  (ToRow q, FromRow r) =>
   Connection ->
   -- | Query template.
   Query ->
@@ -569,12 +568,12 @@ forEach ::
   -- | Result consumer.
   (r -> IO ()) ->
   IO ()
-forEach = forEachWith HPgsql.rowParser
+forEach = forEachWith fromRow
 {-# INLINE forEach #-}
 
 -- | A version of 'forEach' taking a parser as an argument
 forEachWith ::
-  (HPgsql.ToPgRow q) =>
+  (ToRow q) =>
   HPgsql.RowParser r ->
   Connection ->
   Query ->
@@ -586,14 +585,14 @@ forEachWith parser conn template qs = foldWith parser conn template qs () . cons
 
 -- | A version of 'forEach' that does not perform query substitution.
 forEach_ ::
-  (HPgsql.FromPgRow r) =>
+  (FromRow r) =>
   Connection ->
   -- | Query template.
   Query ->
   -- | Result consumer.
   (r -> IO ()) ->
   IO ()
-forEach_ = forEachWith_ HPgsql.rowParser
+forEach_ = forEachWith_ fromRow
 {-# INLINE forEach_ #-}
 
 forEachWith_ ::

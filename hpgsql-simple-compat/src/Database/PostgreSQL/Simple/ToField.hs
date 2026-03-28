@@ -6,7 +6,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------
 
@@ -29,14 +28,24 @@ module Database.PostgreSQL.Simple.ToField
   )
 where
 
+import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString.Builder
   ( Builder,
     char8,
   )
 import qualified Data.ByteString.Lazy as LB
+import Data.Int (Int16, Int32, Int64)
 import Data.Map.Strict (Map)
+import Data.Scientific (Scientific)
+import Data.Text (Text)
+import qualified Data.Text.Lazy as LT
+import Data.Time.Compat (UTCTime)
+import Data.Time.Calendar.Compat (Day)
+import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
+import Data.Vector (Vector)
+import Database.PostgreSQL.Simple.Types (Binary (..))
 import HPgsql.Encoding (ToPgField (..))
 import HPgsql.TypeInfo (Oid, TypeInfo)
 
@@ -66,7 +75,30 @@ class ToField a where
   -- TODO: Nothing as the typeOid so postgres has to infer it?
   toField v = QueryArgument $ \tyiCache -> (toTypeOid (proxyOf v) tyiCache, toPgField tyiCache v)
 
-instance (ToPgField a) => ToField a
+instance ToField Int
+instance ToField Int16
+instance ToField Int32
+instance ToField Int64
+instance ToField Integer
+instance ToField Oid
+instance ToField Scientific
+instance ToField Float
+instance ToField Double
+instance ToField Bool
+instance ToField Day
+instance ToField CalendarDiffTime
+instance ToField UTCTime
+instance ToField ZonedTime
+instance ToField Char
+instance ToField ByteString
+instance ToField LB.ByteString
+instance ToField Text
+instance ToField LT.Text
+instance ToField String
+instance ToField Aeson.Value
+instance (ToPgField a) => ToField (Maybe a)
+instance (ToPgField a) => ToField (Vector a)
+instance ToField (Binary ByteString)
 
 -- | Surround a string with single-quote characters: \"@'@\"
 --
