@@ -8,6 +8,7 @@ module HPgsql.InternalTypes
     NotificationResponse (..),
     PoolCleanup (..),
     TransactionStatus (..),
+    EncodingContext (..), -- re-exported from HPgsql.TypeInfo
 
     -- * Msgs types (moved to avoid cycles)
     ParseComplete (..),
@@ -54,7 +55,7 @@ import Data.Word (Word16)
 
 #endif
 import HPgsql.Query (SingleQuery (..))
-import HPgsql.TypeInfo (Format (..), Oid (..), TransactionStatus (..), TypeInfo (..))
+import HPgsql.TypeInfo (EncodingContext (..), Format (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
 import System.Mem.Weak (Weak)
 
@@ -259,7 +260,7 @@ data HPgConnection = HPgConnection
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     originalConnStr :: !ConnString,
     connectedTo :: !AddrInfo,
-    typeInfoCache :: !(MVar (Map Oid TypeInfo)),
+    encodingContext :: !(MVar EncodingContext),
     parameterStatusMap :: !(MVar (Map Text Text)),
     internalConnectionState :: !(TVar InternalConnectionState),
     connPid :: !Int32,

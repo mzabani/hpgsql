@@ -86,6 +86,7 @@ module HPgsql.TypeInfo
     _jsonOid,
     _jsonbOid,
     _varcharOid,
+    EncodingContext (..),
     Format (..),
     Oid (..),
     TransactionStatus (..),
@@ -121,6 +122,10 @@ data TypeInfo = TypeInfo
   { typeName :: Text,
     -- | Only a Nothing if this is already an array type
     oidOfArrayType :: Maybe Oid
+  }
+
+newtype EncodingContext = EncodingContext
+  { typeInfoCache :: Map Oid TypeInfo
   }
 
 -- The query to get all the code you find in this file is:

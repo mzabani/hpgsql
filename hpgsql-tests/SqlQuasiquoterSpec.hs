@@ -14,7 +14,7 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql (Only (..))
 import HPgsql.Parsing (parseSql, sqlStatementText)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
-import HPgsql.TypeInfo (builtinPgTypesMap)
+import HPgsql.TypeInfo (EncodingContext (..), builtinPgTypesMap)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
@@ -58,7 +58,7 @@ checkQueryConcatenation gen = hedgehog $ do
     sqlStatementText (NE.head reparsed) === qText
 
     -- Query arguments must have been distributed correctly
-    map ($ builtinPgTypesMap) expectedParams === map ($ builtinPgTypesMap) qParams
+    map ($ EncodingContext builtinPgTypesMap) expectedParams === map ($ EncodingContext builtinPgTypesMap) qParams
 
     -- \$N placeholders start from 1 and are contiguous, matching param count
     let placeholders = extractPlaceholders qText

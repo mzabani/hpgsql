@@ -37,7 +37,6 @@ import Data.ByteString.Builder
   )
 import qualified Data.ByteString.Lazy as LB
 import Data.Int (Int16, Int32, Int64)
-import Data.Map.Strict (Map)
 import Data.Scientific (Scientific)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as LT
@@ -46,13 +45,13 @@ import Data.Time.Compat (UTCTime)
 import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Database.PostgreSQL.Simple.Types (Binary (..))
-import HPgsql.Encoding (ToPgField (..))
-import HPgsql.TypeInfo (Oid, TypeInfo)
+import HPgsql.Encoding (EncodingContext, ToPgField (..))
+import HPgsql.TypeInfo (Oid)
 import HPgsql.Types (Aeson)
 
 -- | How to render an element when substituting it into a query.
 data Action
-  = QueryArgument (Map Oid TypeInfo -> (Maybe Oid, Maybe LB.ByteString))
+  = QueryArgument (EncodingContext -> (Maybe Oid, Maybe LB.ByteString))
   | -- | Escape before substituting. Use for all sql identifiers like
     -- table, column names, etc. This is used by the 'Identifier' newtype
     -- wrapper.
@@ -74,7 +73,7 @@ class ToField a where
   toField :: a -> Action
   default toField :: (ToPgField a) => a -> Action
   -- TODO: Nothing as the typeOid so postgres has to infer it?
-  toField v = QueryArgument $ \tyiCache -> (toTypeOid (proxyOf v) tyiCache, toPgField tyiCache v)
+  toField v = QueryArgument $ \encCtx -> (toTypeOid (proxyOf v) encCtx, toPgField encCtx v)
 
 instance ToField Int
 

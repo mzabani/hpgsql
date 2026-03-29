@@ -254,9 +254,9 @@ instance (Aeson.FromJSON a) => FromField (Aeson a)
 --               strictBs = fmap LB.toStrict mbs
 --            in unsafePerformIO $ do
 --                 -- Build a Connection with a pre-populated TypeInfoCache from
---                 -- HPgsql's typeInfoCache. This allows 'typename', 'returnError',
+--                 -- HPgsql's encodingContext. This allows 'typename', 'returnError',
 --                 -- and 'typeInfo' to work for any type in the cache.
---                 connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (HPgsql.typeInfoCache colInfo)
+--                 connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (HPgsql.encodingContext colInfo)
 --                 let conn =
 --                       Connection
 --                         connectionObjects

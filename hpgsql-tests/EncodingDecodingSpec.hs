@@ -27,7 +27,7 @@ import DbUtils
 import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import HPgsql
-import HPgsql.Encoding (AllowNull (..), ColumnInfo (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
+import HPgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import HPgsql.Query (mkQuery, sql)
 import HPgsql.TypeInfo (Oid, TypeInfo (..))
 import HPgsql.Types (PGArray (..), PgJson, Values (..), valuesToQuery)
@@ -279,12 +279,12 @@ myEnumFieldParserWithTypeInfoCheck =
       base = convert <$> anyTypeDecoder
    in base
         { allowedPgTypes = \colInfo ->
-            (typeName <$> Map.lookup colInfo.typeOid colInfo.typeInfoCache) == Just "myenum"
+            (typeName <$> Map.lookup colInfo.typeOid colInfo.encodingContext.typeInfoCache) == Just "myenum"
         }
 
 instance ToPgField MyEnum where
-  toPgField tyiCache =
-    toPgField tyiCache . \case
+  toPgField encCtx =
+    toPgField encCtx . \case
       Val1 -> "val1" :: Text
       Val2 -> "val2"
       Val3 -> "val3"

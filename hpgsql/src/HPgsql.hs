@@ -82,7 +82,7 @@ import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
 import HPgsql.Base
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Encoding (ColumnInfo (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..))
-import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..))
+import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
@@ -176,7 +176,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
         True -> pure ()
       recvBuffer <- newMVar mempty
       sendBuffer <- newMVar mempty
-      typeInfoCache <- newMVar builtinPgTypesMap
+      encodingContext <- newMVar (EncodingContext builtinPgTypesMap)
       connParams <- newMVar mempty
       notifQueue <- STM.newTQueueIO
       currentConnectionState <-
@@ -187,7 +187,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
               currentPipeline = [],
               notificationsReceived = notifQueue
             }
-      let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr addrInfo typeInfoCache connParams currentConnectionState 0 0 connOpts
+      let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
         CancelNotConnect cancelRequest _ -> do
           -- TODO: We need to store the IP address of the server and reuse that,
@@ -269,12 +269,12 @@ refreshTypeInfoCache conn =
     fillTypeInfoCache queryResultsIO = do
       queryResults <- queryResultsIO
       let customTypes = Map.fromList $ map (\(oid, typname, typarray) -> (oid, TypeInfo typname (if typarray == 0 then Nothing else Just typarray))) queryResults
-      modifyMVar_ conn.typeInfoCache $ \_ -> pure $ customTypes `Map.union` builtinPgTypesMap
+      modifyMVar_ conn.encodingContext $ \_ -> pure $ EncodingContext $ customTypes `Map.union` builtinPgTypesMap
 
 -- | Useful to reset the connection's internal typeInfo cache
 -- to the builtin postgres types.
 resetTypeInfoCache :: HPgConnection -> IO ()
-resetTypeInfoCache conn = modifyMVar_ conn.typeInfoCache $ \_ -> pure builtinPgTypesMap
+resetTypeInfoCache conn = modifyMVar_ conn.encodingContext $ \_ -> pure $ EncodingContext builtinPgTypesMap
 
 getParameterStatus :: HPgConnection -> Text -> IO (Maybe Text)
 getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup paramName <$> readMVar parameterStatusMap
@@ -1040,9 +1040,9 @@ runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
   case mQueries of
     Nothing -> pure $ run conn []
     Just queries -> do
-      typeInfoCache <- readMVar conn.typeInfoCache
+      encodingContext <- readMVar conn.encodingContext
       let toMessages (SingleQuery qryString qryParams, mExpectedResultColFmts) =
-            let paramOidsAndValues = map ($ typeInfoCache) qryParams
+            let paramOidsAndValues = map ($ encodingContext) qryParams
              in [ SomeMessage $ Parse qryString (map fst paramOidsAndValues),
                   SomeMessage $
                     Bind
@@ -1074,10 +1074,10 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
     Just (Left3 _noData) -> throwIrrecoverableErrorWithStatement qText "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
     Just (Right3 _copyInResponse) -> throwIrrecoverableErrorWithStatement qText "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
     Just (Middle3 (RowDescription coltypes)) -> do
-      typeInfoCache <- readMVar conn.typeInfoCache
+      encodingContext <- readMVar conn.encodingContext
       let numResultColumns = length coltypes
           expectedNumCols = length expectedColFmts
-          mkColInfo oid = ColumnInfo oid typeInfoCache
+          mkColInfo oid = ColumnInfo oid encodingContext
           colInfos = map mkColInfo coltypes
           typecheckedColInfos = rtypecheck colInfos
       unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
@@ -1106,8 +1106,8 @@ withCopy :: HPgConnection -> Query -> IO () -> IO Int64
 withCopy conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) copyFn = do
   whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmdInternal fqne
   thisThreadId <- getMyWeakThreadId
-  typeInfoCache <- readMVar conn.typeInfoCache
-  let paramOidsAndValues = map ($ typeInfoCache) queryParams
+  encodingContext <- readMVar conn.encodingContext
+  let paramOidsAndValues = map ($ encodingContext) queryParams
   atomicallyInitiatePipelineOrPanicAndThenConsumeResults
     conn
     ((queryString, CopyQuery StillCopying) :| [])
@@ -1130,8 +1130,8 @@ copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Singl
   -- those. This is awkward, but what else should we do? Throw?
   whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmdInternal fqne
   thisThreadId <- getMyWeakThreadId
-  typeInfoCache <- readMVar conn.typeInfoCache
-  let paramOidsAndValues = map ($ typeInfoCache) queryParams
+  encodingContext <- readMVar conn.encodingContext
+  let paramOidsAndValues = map ($ encodingContext) queryParams
   atomicallyInitiatePipelineOrPanicAndThenConsumeResults
     conn
     ((queryString, CopyQuery StillCopying) :| [])

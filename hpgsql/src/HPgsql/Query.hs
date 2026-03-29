@@ -22,7 +22,6 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
-import Data.Map.Strict (Map)
 import Data.Proxy (Proxy (..))
 import Data.String (IsString (..))
 import Data.Text (Text)
@@ -31,7 +30,7 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql.Base (maximumOnOrDef, minimumOnOrDef)
 import HPgsql.Encoding (ToPgField (..), ToPgRow (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), parseSql, sqlStatementText)
-import HPgsql.TypeInfo (Oid, TypeInfo)
+import HPgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
@@ -55,11 +54,11 @@ data SingleQueryFragment
 -- | Zero, one, or more SQL statements. The query parameters and query fragments continue to go up in number across different
 -- statements, e.g. "SELECT $1; SELECT $2; SELECT $3; ...".
 -- Use `breakIntoQueryStatements` to get individual SQL statements that are good to send to Postgres.
-data Query = Query {queryString :: ![SingleQueryFragment], queryParams :: ![Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]}
+data Query = Query {queryString :: ![SingleQueryFragment], queryParams :: ![EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]}
 
 -- | A single statement, not multiple, with dollar-numbered query arguments
 -- starting from $1.
-data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]}
+data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]}
 
 instance Show SingleQuery where
   -- Careful not exposing query arguments
@@ -80,7 +79,7 @@ mkQuery t p = mkQueryInternalFromSqlStatements (parseSql $ decodeUtf8 t) (toPgPa
 
 -- | Meant for internal usage, helps build "VALUES (..), (..)"-like statements.
 -- Users of hpgsql should just use the `Values` type instead of this.
-commaSeparatedRowTuples :: [[Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]] -> Query
+commaSeparatedRowTuples :: [[EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]] -> Query
 commaSeparatedRowTuples rowTuples =
   let (_, queryFrags) =
         List.mapAccumR
@@ -120,7 +119,7 @@ breakQueryIntoStatements Query {queryString, queryParams} = toEmptyQueryIfNecess
     fragToBytestring = \case
       QueryArgumentPlaceHolder n -> "$" <> intToBs n
       FragmentOfStaticSql t -> t
-    go :: [SingleQueryFragment] -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> [SingleQuery]
+    go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)] -> [SingleQuery]
     go [] [] = []
     go [] _ = error "HPgsql error: empty query string but outstanding query params"
     go frags params =
@@ -149,12 +148,12 @@ instance IsString Query where
 -- - "SELECT * FROM table WHERE col1=? AND col2=?"
 -- - "SELECT * FROM table WHERE col1=$1 AND col2=$2"
 -- You should probably use `mkQuery` instead of this. It's here only for hpgsql-simple-compat.
-mkQueryInternal :: ByteString -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
+mkQueryInternal :: ByteString -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
 mkQueryInternal queryTemplate allParams =
   let statements = parseSql (decodeUtf8 queryTemplate)
    in mkQueryInternalFromSqlStatements statements allParams
 
-mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
+mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)] -> Query
 mkQueryInternalFromSqlStatements statements allParams =
   let (_, queryFrags) =
         List.mapAccumL
@@ -216,7 +215,7 @@ fragmentToPartExp (NonInterpolatedSqlFragment t) =
   [|StaticSqlPart $(litE (stringL (Text.unpack t)))|]
 fragmentToPartExp (InterpolatedHaskellExpr haskellExpr) =
   let name = mkName (Text.unpack haskellExpr)
-   in [|ParamPart (\tyiCache -> (toTypeOid (proxyOf $(varE name)) tyiCache, toPgField tyiCache $(varE name)))|]
+   in [|ParamPart (\encCtx -> (toTypeOid (proxyOf $(varE name)) encCtx, toPgField encCtx $(varE name)))|]
 fragmentToPartExp (EmbeddedQueryExpr haskellExpr) =
   let name = mkName (Text.unpack haskellExpr)
    in [|EmbeddedQueryPart $(varE name)|]
@@ -237,7 +236,7 @@ buildQueryFragsAndVars (EmbeddedQueryExpr _ : _) _ =
 -- | Parts used to build a SingleQuery at runtime when ^{} embedded queries are present.
 data QueryBuildPartQQ
   = StaticSqlPart !ByteString
-  | ParamPart !(Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString))
+  | ParamPart !(EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))
   | EmbeddedQueryPart !Query
 
 buildQueryQQ :: [QueryBuildPartQQ] -> Query
@@ -340,4 +339,4 @@ generateParamExp (Text.unpack -> haskellExpr) =
   case parseExp haskellExpr of
     Left err -> error $ "Could not parse Haskell expression '" ++ haskellExpr ++ "': " ++ err
     Right expr ->
-      [|\tyiCache -> (toTypeOid (proxyOf $(pure expr)) tyiCache, toPgField tyiCache $(pure expr))|]
+      [|\encCtx -> (toTypeOid (proxyOf $(pure expr)) encCtx, toPgField encCtx $(pure expr))|]

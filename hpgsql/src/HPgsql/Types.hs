@@ -25,7 +25,7 @@ newtype PGArray a = PGArray {fromPGArray :: [a]}
 
 instance forall a. (ToPgField a) => ToPgField (PGArray a) where
   toTypeOid _ = toTypeOid (Proxy @(Vector a))
-  toPgField tyiCache = toPgField tyiCache . Vector.fromList . fromPGArray
+  toPgField encCtx = toPgField encCtx . Vector.fromList . fromPGArray
 
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
   fieldParser = PGArray . Vector.toList <$> fieldParser

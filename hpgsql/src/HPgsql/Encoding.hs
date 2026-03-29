@@ -7,6 +7,7 @@ module HPgsql.Encoding
     ToPgRow (..),
     Only (..),
     ColumnInfo (..),
+    EncodingContext (..),
     FieldParser (..), -- TODO: Can we export ctor?
     RowParser (..), -- TODO: Can we export ctor?
     AllowNull (..),
@@ -53,12 +54,12 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
-import HPgsql.TypeInfo (Format (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
+import HPgsql.TypeInfo (EncodingContext (..), Format (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
   { typeOid :: !Oid,
-    -- | The TypeInfo cache as of the moment the query ran.
-    typeInfoCache :: !(Map Oid TypeInfo)
+    -- | The EncodingContext as of the moment the query ran.
+    encodingContext :: !EncodingContext
   }
 
 data FieldParser a = FieldParser
@@ -136,7 +137,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
       FieldParser
         { fieldValueParser = \compositeTypeOid -> \case
             Nothing -> Left "Got NULL in composite type but it was not allowed"
-            Just bs -> Parsec.parseOnly (parserForRecord compositeTypeOid.typeInfoCache <* Parsec.endOfInput) bs,
+            Just bs -> Parsec.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parsec.endOfInput) bs,
           allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
           fieldFmt = BinaryFmt -- TODO: What if the supplied RowParser has mixed Text and Binary formats?
         }
@@ -144,19 +145,19 @@ compositeTypeParser nullCheck (RowParser {..}) =
       FieldParser
         { fieldValueParser = \compositeTypeColInfo -> \case
             Nothing -> Right Nothing
-            Just bs -> Just <$> Parsec.parseOnly (parserForRecord compositeTypeColInfo.typeInfoCache <* Parsec.endOfInput) bs,
+            Just bs -> Just <$> Parsec.parseOnly (parserForRecord compositeTypeColInfo.encodingContext <* Parsec.endOfInput) bs,
           allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
           fieldFmt = BinaryFmt -- TODO: What if the supplied RowParser has mixed Text and Binary formats?
         }
   where
-    parserForRecord :: Map Oid TypeInfo -> Parsec.Parser a
-    parserForRecord typeInfoCache = do
+    parserForRecord :: EncodingContext -> Parsec.Parser a
+    parserForRecord encodingContext = do
       -- From https://github.com/postgres/postgres/blob/50ba65e73325cf55fedb3e1f14673d816726923b/src/backend/utils/adt/rowtypes.c#L687
       -- we can see a composite type's binary representation consists of: number of columns (Int32) + for_each_column { OID (Int32) + size_or_minus_1 (Int32) + Bytes }
       numCols <- fromIntegral <$> int32Parser
       let numColsExpected = length resultColumnsFmts
       unless (numCols == numColsExpected) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numColsExpected
-      let mkColInfo oid = ColumnInfo oid typeInfoCache
+      let mkColInfo oid = ColumnInfo oid encodingContext
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
         (LBS.fromStrict -> sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
@@ -208,9 +209,9 @@ instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgFiel
   rowParser = (,,,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
 
 class ToPgField a where
-  toTypeOid :: proxy a -> Map Oid TypeInfo -> Maybe Oid
+  toTypeOid :: proxy a -> EncodingContext -> Maybe Oid
   toTypeOid _ _ = Nothing -- Default definition so users don't have to write this
-  toPgField :: Map Oid TypeInfo -> a -> Maybe LBS.ByteString
+  toPgField :: EncodingContext -> a -> Maybe LBS.ByteString
 
 instance ToPgField Int where
   toTypeOid _ _ = Just haskellIntOid
@@ -230,7 +231,7 @@ instance ToPgField Int64 where
 
 instance ToPgField Integer where
   toTypeOid _ _ = Just numericOid
-  toPgField tyiCache n = toPgField @Scientific tyiCache (fromIntegral n)
+  toPgField encCtx n = toPgField @Scientific encCtx (fromIntegral n)
 
 instance ToPgField Oid where
   toTypeOid _ _ = Just oidOid
@@ -307,11 +308,11 @@ instance ToPgField UTCTime where
 
 instance ToPgField ZonedTime where
   toTypeOid _ _ = Just timestamptzOid
-  toPgField tyiCache = toPgField @UTCTime tyiCache . zonedTimeToUTC
+  toPgField encCtx = toPgField @UTCTime encCtx . zonedTimeToUTC
 
 instance ToPgField Char where
   toTypeOid _ _ = Just textOid
-  toPgField tyiCache t = toPgField tyiCache $ Text.singleton t
+  toPgField encCtx t = toPgField encCtx $ Text.singleton t
 
 instance ToPgField ByteString where
   toTypeOid _ _ = Just byteaOid
@@ -339,7 +340,7 @@ instance ToPgField String where
   toTypeOid _ _ = Just textOid
 
   -- TODO: What about client_encoding?
-  toPgField tyiCache = toPgField tyiCache . Text.pack
+  toPgField encCtx = toPgField encCtx . Text.pack
 
 instance ToPgField Aeson.Value where
   toTypeOid _ _ = Just jsonbOid
@@ -348,16 +349,16 @@ instance ToPgField Aeson.Value where
 instance (ToPgField a) => ToPgField (Maybe a) where
   toTypeOid _ = toTypeOid (Proxy @a)
   toPgField _ Nothing = Nothing
-  toPgField tyiCache (Just n) = toPgField tyiCache n
+  toPgField encCtx (Just n) = toPgField encCtx n
 
 instance (ToPgField a) => ToPgField (Vector a) where
-  toTypeOid _ typeInfoCache = do
+  toTypeOid _ encodingContext = do
     -- Maybe monad
-    elOid <- toTypeOid (Proxy @a) typeInfoCache
-    arrayTypInfo <- Map.lookup elOid typeInfoCache
+    elOid <- toTypeOid (Proxy @a) encodingContext
+    arrayTypInfo <- Map.lookup elOid encodingContext.typeInfoCache
     arrayTypInfo.oidOfArrayType
-  toPgField typeInfoCache vec =
-    let Oid elemOid = fromMaybe (Oid 0) (toTypeOid (Proxy @a) typeInfoCache)
+  toPgField encodingContext vec =
+    let Oid elemOid = fromMaybe (Oid 0) (toTypeOid (Proxy @a) encodingContext)
         ndim = Cereal.encodeLazy @Int32 1
         -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
         hasNull = Cereal.encodeLazy @Int32 0
@@ -366,52 +367,52 @@ instance (ToPgField a) => ToPgField (Vector a) where
         dim1 = Cereal.encodeLazy @Int32 (fromIntegral $ Vector.length vec)
         lb1 = Cereal.encodeLazy @Int32 1
         encodedElements = Vector.foldl' (\acc el -> acc <> encodeElement el) mempty vec
-        encodeElement el = case toPgField typeInfoCache el of
+        encodeElement el = case toPgField encodingContext el of
           Nothing -> Cereal.encodeLazy @Int32 (-1)
           Just bs -> Cereal.encodeLazy @Int32 (fromIntegral $ LBS.length bs) <> bs
      in Just $ ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
 
 class ToPgRow a where
-  toPgParams :: a -> [Map Oid TypeInfo -> (Maybe Oid, Maybe LBS.ByteString)]
+  toPgParams :: a -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
 
 instance ToPgRow () where
   toPgParams () = []
 
 instance (ToPgField a) => ToPgRow (Only a) where
-  toPgParams (Only a) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a)]
+  toPgParams (Only a) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a)]
 
 instance (ToPgField a, ToPgField b) => ToPgRow (a, b) where
-  toPgParams (a, b) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b)]
+  toPgParams (a, b) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b)]
 
 instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
-  toPgParams (a, b, c) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c)]
+  toPgParams (a, b, c) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
-  toPgParams (a, b, c, d) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d)]
+  toPgParams (a, b, c, d) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
-  toPgParams (a, b, c, d, e) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e)]
+  toPgParams (a, b, c, d, e) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f) => ToPgRow (a, b, c, d, e, f) where
-  toPgParams (a, b, c, d, e, f) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f)]
+  toPgParams (a, b, c, d, e, f) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g) => ToPgRow (a, b, c, d, e, f, g) where
-  toPgParams (a, b, c, d, e, f, g) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g)]
+  toPgParams (a, b, c, d, e, f, g) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h) => ToPgRow (a, b, c, d, e, f, g, h) where
-  toPgParams (a, b, c, d, e, f, g, h) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h)]
+  toPgParams (a, b, c, d, e, f, g, h) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i) => ToPgRow (a, b, c, d, e, f, g, h, i) where
-  toPgParams (a, b, c, d, e, f, g, h, i) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h), \typeInfoCache -> (toTypeOid (Proxy @i) typeInfoCache, toPgField typeInfoCache i)]
+  toPgParams (a, b, c, d, e, f, g, h, i) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h), \encodingContext -> (toTypeOid (Proxy @i) encodingContext, toPgField encodingContext i)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j) => ToPgRow (a, b, c, d, e, f, g, h, i, j) where
-  toPgParams (a, b, c, d, e, f, g, h, i, j) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h), \typeInfoCache -> (toTypeOid (Proxy @i) typeInfoCache, toPgField typeInfoCache i), \typeInfoCache -> (toTypeOid (Proxy @j) typeInfoCache, toPgField typeInfoCache j)]
+  toPgParams (a, b, c, d, e, f, g, h, i, j) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h), \encodingContext -> (toTypeOid (Proxy @i) encodingContext, toPgField encodingContext i), \encodingContext -> (toTypeOid (Proxy @j) encodingContext, toPgField encodingContext j)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [\typeInfoCache -> (toTypeOid (Proxy @a) typeInfoCache, toPgField typeInfoCache a), \typeInfoCache -> (toTypeOid (Proxy @b) typeInfoCache, toPgField typeInfoCache b), \typeInfoCache -> (toTypeOid (Proxy @c) typeInfoCache, toPgField typeInfoCache c), \typeInfoCache -> (toTypeOid (Proxy @d) typeInfoCache, toPgField typeInfoCache d), \typeInfoCache -> (toTypeOid (Proxy @e) typeInfoCache, toPgField typeInfoCache e), \typeInfoCache -> (toTypeOid (Proxy @f) typeInfoCache, toPgField typeInfoCache f), \typeInfoCache -> (toTypeOid (Proxy @g) typeInfoCache, toPgField typeInfoCache g), \typeInfoCache -> (toTypeOid (Proxy @h) typeInfoCache, toPgField typeInfoCache h), \typeInfoCache -> (toTypeOid (Proxy @i) typeInfoCache, toPgField typeInfoCache i), \typeInfoCache -> (toTypeOid (Proxy @j) typeInfoCache, toPgField typeInfoCache j), \typeInfoCache -> (toTypeOid (Proxy @k) typeInfoCache, toPgField typeInfoCache k)]
+  toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h), \encodingContext -> (toTypeOid (Proxy @i) encodingContext, toPgField encodingContext i), \encodingContext -> (toTypeOid (Proxy @j) encodingContext, toPgField encodingContext j), \encodingContext -> (toTypeOid (Proxy @k) encodingContext, toPgField encodingContext k)]
 
 instance (ToPgField a) => ToPgRow [a] where
-  toPgParams = map (\v typeInfoCache -> let typOid = toTypeOid (Proxy @a) typeInfoCache in (typOid, toPgField typeInfoCache v))
+  toPgParams = map (\v encodingContext -> let typOid = toTypeOid (Proxy @a) encodingContext in (typOid, toPgField encodingContext v))
 
 -- | A way to compose rows.
 data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
@@ -762,7 +763,7 @@ arrayField !elementParser =
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   FieldParser
     { fieldValueParser = \colInfo ->
-        let !arrayFieldParser = arrayParser colInfo.typeInfoCache <* Parsec.endOfInput
+        let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parsec.endOfInput
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
               Just bs -> Parsec.parseOnly arrayFieldParser bs,
@@ -770,12 +771,12 @@ arrayField !elementParser =
       allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
     }
   where
-    arrayParser :: Map Oid TypeInfo -> Parsec.Parser (Vector a)
-    arrayParser typeInfoCache = do
+    arrayParser :: EncodingContext -> Parsec.Parser (Vector a)
+    arrayParser encodingContext = do
       !ndim <- int32Parser
       !_hasNull <- int32Parser
       !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-      let !elementColInfo = ColumnInfo elementTypeOid typeInfoCache
+      let !elementColInfo = ColumnInfo elementTypeOid encodingContext
       when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
       if ndim == 0
         then pure mempty
@@ -799,7 +800,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
   fieldParser =
     FieldParser
       { fieldValueParser = \colInfo ->
-          let !arrayFieldParser = arrayParser colInfo.typeInfoCache <* Parsec.endOfInput
+          let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parsec.endOfInput
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector (Vector a))`"
                 Just bs -> Parsec.parseOnly arrayFieldParser bs,
@@ -808,12 +809,12 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
       }
     where
       !elementParser = fieldParser @a
-      arrayParser :: Map Oid TypeInfo -> Parsec.Parser (Vector (Vector a))
-      arrayParser typeInfoCache = do
+      arrayParser :: EncodingContext -> Parsec.Parser (Vector (Vector a))
+      arrayParser encodingContext = do
         !ndim <- int32Parser
         !_hasNull <- int32Parser
         !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-        let !elementColInfo = ColumnInfo elementTypeOid typeInfoCache
+        let !elementColInfo = ColumnInfo elementTypeOid encodingContext
         when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
         unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
         -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
