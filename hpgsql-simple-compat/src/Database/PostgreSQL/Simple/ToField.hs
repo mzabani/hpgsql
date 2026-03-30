@@ -37,6 +37,7 @@ import Data.ByteString.Builder
   )
 import qualified Data.ByteString.Lazy as LB
 import Data.Int (Int16, Int32, Int64)
+import qualified Data.List as List
 import Data.Scientific (Scientific)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as LT
@@ -44,7 +45,7 @@ import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (UTCTime)
 import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
-import Database.PostgreSQL.Simple.Types (Binary (..))
+import Database.PostgreSQL.Simple.Types (Binary (..), In (..))
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
 import HPgsql.TypeInfo (Oid)
 import HPgsql.Types (Aeson)
@@ -58,12 +59,15 @@ data Action
     EscapeIdentifier ByteString
   | -- | Concatenate a series of rendering actions.
     Many [Action]
+  | -- | Just a static SQL fragment to render
+    Plain LB.ByteString
   deriving (Typeable)
 
 instance Show Action where
   show (QueryArgument _) = "QueryArgument"
   show (EscapeIdentifier b) = "EscapeIdentifier " ++ show b
   show (Many b) = "Many " ++ show b
+  show (Plain b) = "Plain " ++ show b
 
 proxyOf :: a -> Proxy a
 proxyOf _ = Proxy
@@ -116,6 +120,10 @@ instance ToField LT.Text
 instance ToField String
 
 instance ToField Aeson.Value
+
+instance (ToField a) => ToField (In [a]) where
+  toField (In []) = Plain "(NULL)"
+  toField (In xs) = Many $ Plain "(" : (List.intersperse (Plain ",") (map toField xs) ++ [Plain ")"])
 
 instance (ToField a) => ToField (Maybe a) where
   toField = \case

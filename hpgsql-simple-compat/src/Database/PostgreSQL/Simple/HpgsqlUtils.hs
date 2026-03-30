@@ -18,6 +18,7 @@ toHpgsqlRowParams = concatMap actionToPgParams . toRow
   where
     actionToPgParams :: Action -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
     actionToPgParams = \case
+      Plain _sql -> [] -- Static SQL fragments go to the query string directly
       QueryArgument qa -> [qa]
       EscapeIdentifier _ -> [] -- These should be encoded into the query string directly
       Many actions -> concatMap actionToPgParams actions
