@@ -15,7 +15,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.Scientific (Scientific)
 import Data.Text (Text)
-import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
+import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
 import Data.Time.LocalTime (CalendarDiffTime (..))
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
@@ -29,6 +29,7 @@ import GHC.Generics (Generic)
 import HPgsql
 import HPgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import HPgsql.Query (mkQuery, sql)
+import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid, TypeInfo (..))
 import HPgsql.Types (PGArray (..), PgJson, Values (..), valuesToQuery)
 import Hedgehog (PropertyT, (===))
@@ -126,10 +127,10 @@ dateAndTimestampTzRoundTrip conn = hedgehog $ do
   let date = fromGregorian yearForDate month day
       timetz = UTCTime (fromGregorian yearForTimetz month day) timeOfDay
       someInterval = CalendarDiffTime someNumberOfMonths someIntervalLessThan1Month
-      row = (date, date, timetz, someInterval)
-      rowRes = (date, date, UTCTime (fromGregorian 1900 1 1) 13, UTCTime (fromGregorian 1993 4 15) (11 * 3600 + 49 * 60 + 55 + 0.5), timetz, someInterval)
+      row = (date, date, timetz, someInterval, Finite timetz, Finite date)
+      rowRes = (date, date, UTCTime (fromGregorian 1900 1 1) 13, UTCTime (fromGregorian 1993 4 15) (11 * 3600 + 49 * 60 + 55 + 0.5), timetz, someInterval, Finite timetz, Finite date)
   -- TODO: If we change the server's timezone, does this still round-trip?
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4" row)
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4, $5, $6" row)
   res === [rowRes]
 
 numericValuesRoundTrip :: HPgConnection -> PropertyT IO ()
@@ -198,8 +199,8 @@ jsonValuesRoundTrip conn = hedgehog $ do
 
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do
-  let rowRes = (fromGregorian 1999 12 31, fromGregorian 2010 01 01, fromGregorian 2011 07 04, fromGregorian 1981 03 17)
-  queryWith rowParser conn (mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date" ()) `shouldReturn` [rowRes]
+  let rowRes = (fromGregorian 1999 12 31, fromGregorian 2010 01 01, fromGregorian 2011 07 04, fromGregorian 1981 03 17, NegInfinity @UTCTime, PosInfinity @UTCTime, NegInfinity @Day, PosInfinity @Day)
+  queryWith rowParser conn (mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date, '-infinity'::timestamptz, '+infinity'::timestamptz, '-infinity'::date, '+infinity'::date" ()) `shouldReturn` [rowRes]
 
 dateEncoding :: HPgConnection -> IO ()
 dateEncoding conn = do

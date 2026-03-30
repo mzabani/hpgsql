@@ -33,7 +33,7 @@ copyStatementSucceeding conn = do
     ( do
         putCopyData conn "5,Dracula\n"
         putCopyData conn "6,The Grinch\n"
-        connectionTransactionStatus conn `shouldReturn` TransInTrans
+        connectionTransactionStatus conn `shouldReturn` TransActive
     )
     `shouldReturn` 2
   connectionTransactionStatus conn `shouldReturn` TransIdle

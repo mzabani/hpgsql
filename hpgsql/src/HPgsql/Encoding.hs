@@ -54,6 +54,7 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
+import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (EncodingContext (..), Format (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
@@ -283,6 +284,13 @@ instance ToPgField Day where
       -- TODO: Catch integer overflow and do what?
       daysSince2000 = fromIntegral $ diffDays d (fromGregorian 2000 1 1)
 
+instance ToPgField (Unbounded Day) where
+  toTypeOid _ = toTypeOid (Proxy @Day)
+  toPgField encCtx = \case
+    NegInfinity -> Just $ Cereal.encodeLazy @Int32 minBound
+    Finite v -> toPgField encCtx v
+    PosInfinity -> Just $ Cereal.encodeLazy @Int32 maxBound
+
 instance ToPgField CalendarDiffTime where
   toTypeOid _ _ = Just intervalOid
   toPgField _ CalendarDiffTime {..} =
@@ -306,9 +314,23 @@ instance ToPgField UTCTime where
       day :: Int64 = fromInteger $ parsedDate `diffDays` fromJulian 1999 12 19
       totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds timeinday `div` 1_000_000)
 
+instance ToPgField (Unbounded UTCTime) where
+  toTypeOid _ = toTypeOid (Proxy @UTCTime)
+  toPgField encCtx = \case
+    NegInfinity -> Just $ Cereal.encodeLazy @Int64 minBound
+    Finite v -> toPgField encCtx v
+    PosInfinity -> Just $ Cereal.encodeLazy @Int64 maxBound
+
 instance ToPgField ZonedTime where
   toTypeOid _ _ = Just timestamptzOid
   toPgField encCtx = toPgField @UTCTime encCtx . zonedTimeToUTC
+
+instance ToPgField (Unbounded ZonedTime) where
+  toTypeOid _ = toTypeOid (Proxy @ZonedTime)
+  toPgField encCtx = \case
+    NegInfinity -> Just $ Cereal.encodeLazy @Int64 minBound
+    Finite v -> toPgField encCtx v
+    PosInfinity -> Just $ Cereal.encodeLazy @Int64 maxBound
 
 instance ToPgField Char where
   toTypeOid _ _ = Just textOid
@@ -697,6 +719,23 @@ instance FromPgField UTCTime where
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
 
+instance FromPgField (Unbounded UTCTime) where
+  fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
+    Just bs -> do
+      -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+      totalusecs <- Cereal.decodeLazy @Int64 bs
+      Right $
+        if totalusecs == minBound
+          then NegInfinity
+          else
+            if totalusecs == maxBound
+              then PosInfinity
+              else
+                let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                    parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+                 in Finite $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    Nothing -> Left "Cannot decode SQL null as the Haskell (Unbounded UTCTime) type. Use a `Maybe (Unbounded UTCTime)`"
+
 instance FromPgField ZonedTime where
   fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
     Just bs -> do
@@ -705,6 +744,23 @@ instance FromPgField ZonedTime where
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
+
+instance FromPgField (Unbounded ZonedTime) where
+  fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
+    Just bs -> do
+      -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+      totalusecs <- Cereal.decodeLazy @Int64 bs
+      Right $
+        if totalusecs == minBound
+          then NegInfinity
+          else
+            if totalusecs == maxBound
+              then PosInfinity
+              else
+                let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                    parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+                 in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
 
 instance FromPgField Day where
@@ -716,6 +772,23 @@ instance FromPgField Day where
       jd <- Cereal.decodeLazy @Int32 bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
+
+instance FromPgField (Unbounded Day) where
+  fieldParser = parsePgType BinaryFmt [dateOid] $ \case
+    Just bs -> do
+      -- There is a very specific conversion function for these, which I poorly translated to Haskell
+      -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
+      -- But I found a simpler way to do this. Let's see if it works in our property based tests
+      jd <- Cereal.decodeLazy @Int32 bs
+      Right $
+        if jd == minBound
+          then NegInfinity
+          else
+            if jd == maxBound
+              then PosInfinity
+              else
+                Finite $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
+    Nothing -> Left "Cannot decode SQL null as the Haskell (Unbounded Day) type. Use a `Maybe (Unbounded Day)`"
 
 instance FromPgField CalendarDiffTime where
   fieldParser = parsePgType BinaryFmt [intervalOid] $ \case

@@ -127,6 +127,7 @@ import Database.PostgreSQL.Simple.TypeInfo as TI
 import Database.PostgreSQL.Simple.Types (Binary (..))
 import HPgsql.Encoding (FieldParser (..), FromPgField (..), arrayField, nullableField)
 import qualified HPgsql.Encoding as HPgsql
+import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid)
 import HPgsql.Types (Aeson, PGArray (..))
 
@@ -218,6 +219,12 @@ instance FromField Day
 instance FromField CalendarDiffTime
 
 instance FromField Aeson.Value
+
+instance FromField (Unbounded Day)
+
+instance FromField (Unbounded UTCTime)
+
+instance FromField (Unbounded ZonedTime)
 
 instance (FromField a) => FromField (Maybe a) where
   fromField = nullableField fromField

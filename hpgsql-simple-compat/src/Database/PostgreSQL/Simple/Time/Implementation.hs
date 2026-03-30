@@ -14,7 +14,6 @@
 module Database.PostgreSQL.Simple.Time.Implementation where
 
 import Control.Applicative
-import Control.Arrow ((***))
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import qualified Data.ByteString as B
 import Data.ByteString.Builder (Builder, byteString)
@@ -22,29 +21,10 @@ import Data.ByteString.Builder.Prim (primBounded)
 import Data.Maybe (fromMaybe)
 import Data.Time.Compat (Day, LocalTime, NominalDiffTime, TimeOfDay, TimeZone, UTCTime, ZonedTime, utc)
 import Data.Time.LocalTime.Compat (CalendarDiffTime)
-import Data.Typeable
 import qualified Database.PostgreSQL.Simple.Time.Internal.Parser as TP
 import qualified Database.PostgreSQL.Simple.Time.Internal.Printer as TPP
+import HPgsql.Time (Unbounded (..))
 import Prelude hiding (take)
-
-data Unbounded a
-  = NegInfinity
-  | Finite !a
-  | PosInfinity
-  deriving (Eq, Ord, Typeable, Functor)
-
-instance (Show a) => Show (Unbounded a) where
-  showsPrec prec x rest =
-    case x of
-      NegInfinity -> "-infinity" <> rest
-      Finite time -> showsPrec prec time rest
-      PosInfinity -> "infinity" <> rest
-
-instance (Read a) => Read (Unbounded a) where
-  readsPrec prec = readParen False $ \str -> case str of
-    ('-' : 'i' : 'n' : 'f' : 'i' : 'n' : 'i' : 't' : 'y' : xs) -> [(NegInfinity, xs)]
-    ('i' : 'n' : 'f' : 'i' : 'n' : 'i' : 't' : 'y' : xs) -> [(PosInfinity, xs)]
-    xs -> map (Finite *** id) (readsPrec prec xs)
 
 type LocalTimestamp = Unbounded LocalTime
 
