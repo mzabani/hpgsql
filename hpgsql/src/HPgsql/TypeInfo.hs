@@ -111,7 +111,7 @@ data Format = BadlySupportedTextFmt | BinaryFmt
   deriving stock (Eq, Show)
 
 -- | This replicates the postgresql-libpq constructor, because why not?
-data TransactionStatus = TransIdle | TransInTrans | TransInError
+data TransactionStatus = TransActive | TransIdle | TransInTrans | TransInError
   deriving stock (Eq, Show)
 
 newtype Oid = Oid Int32

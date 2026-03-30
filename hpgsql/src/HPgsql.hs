@@ -140,7 +140,7 @@ connectionTransactionStatus conn = STM.atomically $ updateConnStateTxn conn $ \s
           pipeline
           then
             TransInError
-          else TransInTrans
+          else TransActive
 
 connect :: ConnString -> DiffTime -> IO HPgConnection
 connect =
