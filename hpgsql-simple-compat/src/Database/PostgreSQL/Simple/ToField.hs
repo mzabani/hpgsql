@@ -40,11 +40,12 @@ import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
 import Data.Scientific (Scientific)
 import Data.Text (Text)
+import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
-import Database.PostgreSQL.Simple.Types (Binary (..), In (..))
+import Database.PostgreSQL.Simple.Types (Binary (..), Identifier (..), In (..))
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid)
@@ -81,6 +82,9 @@ class ToField a where
 
 instance ToField Action where
   toField v = v
+
+instance ToField Identifier where
+  toField (Identifier ident) = EscapeIdentifier $ encodeUtf8 ident
 
 instance ToField Int
 

@@ -3,10 +3,14 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 ------------------------------------------------------------------------------
 
@@ -52,7 +56,7 @@ import Database.PostgreSQL.Simple.TypeInfo.Types (TypeInfo)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import GHC.Generics
 import GHC.IO.Exception
-import HPgsql (ErrorDetail (..), HPgConnection, PostgresError (..))
+import HPgsql (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))
 import qualified HPgsql
 import qualified HPgsql.Connection
 
@@ -269,7 +273,7 @@ connectPostgreSQL connstr = do
   case HPgsql.Connection.parseConnString (TE.decodeUtf8 connstr) of
     Left err -> error err
     Right connStr -> do
-      hpgConn <- HPgsql.connect connStr 30
+      hpgConn <- mapHpgsqlErrors $ HPgsql.connect connStr 30
       pure $ Connection {..}
 
 -- | Turns a 'ConnectInfo' data structure into a libpq connection string.
@@ -310,22 +314,31 @@ oid2int :: Oid -> Int
 oid2int (Oid x) = fromIntegral x
 {-# INLINE oid2int #-}
 
--- | Maps HPgsql's 'PostgresError' to postgresql-simple's 'SqlError'.
-postgresErrorToSqlError :: PostgresError -> SqlError
-postgresErrorToSqlError PostgresError {..} =
-  SqlError
-    { sqlState = lookupDetail ErrorCode,
-      sqlExecStatus = FatalError,
-      sqlErrorMsg = lookupDetail ErrorHumanReadableMsg,
-      sqlErrorDetail = lookupDetail ErrorDetail,
-      sqlErrorHint = lookupDetail ErrorHint
-    }
+-- | Maps HPgsql's 'PostgresError' to postgresql-simple's 'SqlError', and
+-- some IrrecoverableHpgsqlError errors with a PostgresError behind them
+-- as well.
+postgresErrorToSqlError :: SomeException -> Maybe SqlError
+postgresErrorToSqlError e
+  | Just (sqlEx :: PostgresError) <- fromException e = Just $ mkSqlError sqlEx.pgErrorDetails
+  | Just irrecEx@IrrecoverableHpgsqlError {innerException} <- fromException e =
+      case fromException <$> innerException of
+        Just (Just (sqlEx :: PostgresError)) -> Just $ mkSqlError sqlEx.pgErrorDetails
+        _ -> if null irrecEx.pgErrorDetails then Nothing else Just $ mkSqlError irrecEx.pgErrorDetails
+  | otherwise = Nothing
   where
-    lookupDetail key = maybe "" LBS.toStrict (Map.lookup key pgErrorDetails)
+    mkSqlError pgErrorDetails =
+      let lookupDetail key = maybe "" LBS.toStrict (Map.lookup key pgErrorDetails)
+       in SqlError
+            { sqlState = lookupDetail ErrorCode,
+              sqlExecStatus = FatalError, -- TODO: lookupDetail ErrorSeverity,
+              sqlErrorMsg = lookupDetail ErrorHumanReadableMsg,
+              sqlErrorDetail = lookupDetail ErrorDetail,
+              sqlErrorHint = lookupDetail ErrorHint
+            }
 
 -- | Wraps an IO action to rethrow HPgsql's 'PostgresError' as postgresql-simple's 'SqlError'.
 mapHpgsqlErrors :: IO a -> IO a
-mapHpgsqlErrors = handle (throwIO . postgresErrorToSqlError)
+mapHpgsqlErrors = handleJust postgresErrorToSqlError throwIO
 
 -- | A version of 'execute' that does not perform query substitution.
 execute_ :: Connection -> Query -> IO Int64
@@ -337,7 +350,7 @@ disconnectedError :: SqlError
 disconnectedError = fatalError "connection disconnected"
 
 close :: Connection -> IO ()
-close Connection {..} = HPgsql.closeGracefully hpgConn
+close Connection {..} = mapHpgsqlErrors $ HPgsql.closeGracefully hpgConn
 
 data Row = Row
   { row :: {-# UNPACK #-} !PQ.Row,
