@@ -42,8 +42,7 @@ import Data.Scientific (Scientific)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
-import Data.Time.Compat (UTCTime)
-import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
+import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Database.PostgreSQL.Simple.Types (Binary (..), In (..))
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
@@ -80,6 +79,9 @@ class ToField a where
   -- TODO: Nothing as the typeOid so postgres has to infer it?
   toField v = QueryArgument $ \encCtx -> (toTypeOid (proxyOf v) encCtx, toPgField encCtx v)
 
+instance ToField Action where
+  toField v = v
+
 instance ToField Int
 
 instance ToField Int16
@@ -103,6 +105,8 @@ instance ToField Bool
 instance ToField Day
 
 instance ToField CalendarDiffTime
+
+instance ToField NominalDiffTime
 
 instance ToField UTCTime
 

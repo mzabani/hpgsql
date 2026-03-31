@@ -14,6 +14,7 @@ import qualified Data.List as List
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
 import Data.Scientific (Scientific)
+import Data.String (fromString)
 import Data.Text (Text)
 import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
 import Data.Time.LocalTime (CalendarDiffTime (..))
@@ -32,7 +33,7 @@ import HPgsql.Query (mkQuery, sql)
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid, TypeInfo (..))
 import HPgsql.Types (PGArray (..), PgJson, Values (..), valuesToQuery)
-import Hedgehog (PropertyT, (===))
+import Hedgehog (PropertyT, annotateShow, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
@@ -122,15 +123,19 @@ dateAndTimestampTzRoundTrip conn = hedgehog $ do
   month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
   day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 32 -- In case there are some weird calendar dates, go all the way to 32
   timeOfDay :: DiffTime <- Gen.forAll $ fmap (picosecondsToDiffTime . (* 1_000_000)) $ Gen.integral $ Gen.linear 0 86_400_000_000 -- Postgres has microsecond precision, so don't go beyond that
-  someIntervalLessThan1Month :: NominalDiffTime <- Gen.forAll $ fmap (realToFrac . picosecondsToDiffTime . (* 1_000_000)) $ Gen.integral $ Gen.linear 0 (27 * 86_400_000_000) -- Postgres has microsecond precision, so don't go beyond that
+  someIntervalTimeMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear (-100 * 86_400_000_000) (100 * 86_400_000_000) -- +-100 days in microseconds
   someNumberOfMonths :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear (-1000) 1000
+  someNominalDiffTimeMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear (-1_000_000_000_000) 1_000_000_000_000
   let date = fromGregorian yearForDate month day
       timetz = UTCTime (fromGregorian yearForTimetz month day) timeOfDay
-      someInterval = CalendarDiffTime someNumberOfMonths someIntervalLessThan1Month
-      row = (date, date, timetz, someInterval, Finite timetz, Finite date)
-      rowRes = (date, date, UTCTime (fromGregorian 1900 1 1) 13, UTCTime (fromGregorian 1993 4 15) (11 * 3600 + 49 * 60 + 55 + 0.5), timetz, someInterval, Finite timetz, Finite date)
+      someIntervalTime :: NominalDiffTime = realToFrac $ picosecondsToDiffTime (someIntervalTimeMicros * 1_000_000)
+      someCalendarDiffTime = CalendarDiffTime someNumberOfMonths someIntervalTime
+      someNominalDiffTime :: NominalDiffTime = realToFrac $ picosecondsToDiffTime (someNominalDiffTimeMicros * 1_000_000)
+      row = (date, date, timetz, someCalendarDiffTime, Finite timetz, Finite date, someNominalDiffTime)
+      rowRes = (date, date, UTCTime (fromGregorian 1900 1 1) 13, UTCTime (fromGregorian 1993 4 15) (11 * 3600 + 49 * 60 + 55 + 0.5), timetz, someCalendarDiffTime, Finite timetz, Finite date, CalendarDiffTime 0 0)
   -- TODO: If we change the server's timezone, does this still round-trip?
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4, $5, $6" row)
+  annotateShow someNominalDiffTime
+  res <- liftIO $ queryWith rowParser conn (mkQuery ("SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4, $5, $6, $7 - INTERVAL '" <> fromString (show someNominalDiffTimeMicros) <> " microseconds'") row)
   res === [rowRes]
 
 numericValuesRoundTrip :: HPgConnection -> PropertyT IO ()

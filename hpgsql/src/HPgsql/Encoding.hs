@@ -44,7 +44,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LT
-import Data.Time (CalendarDiffDays (..), CalendarDiffTime (..), Day, UTCTime (..), ZonedTime, diffDays, diffTimeToPicoseconds, fromGregorian, picosecondsToDiffTime, secondsToNominalDiffTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffDays (..), CalendarDiffTime (..), Day, NominalDiffTime, UTCTime (..), ZonedTime, diffDays, diffTimeToPicoseconds, fromGregorian, picosecondsToDiffTime, secondsToNominalDiffTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Calendar.Julian (addJulianDurationClip, fromJulian)
 import Data.Tuple.Only (Only (..))
 import Data.Vector (Vector)
@@ -294,8 +294,13 @@ instance ToPgField (Unbounded Day) where
 instance ToPgField CalendarDiffTime where
   toTypeOid _ _ = Just intervalOid
   toPgField _ CalendarDiffTime {..} =
-    let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400_000_000_000_000
+    let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400
      in Just $ Cereal.encodeLazy @(Int64, Int32, Int32) (round $ timeUnderOneDay * 1_000_000, days, fromIntegral ctMonths)
+
+instance ToPgField NominalDiffTime where
+  toTypeOid _ _ = Just intervalOid
+  toPgField _ ndt =
+    Just $ Cereal.encodeLazy @(Int64, Int32, Int32) (round $ ndt * 1_000_000, 0, 0)
 
 instance ToPgField UTCTime where
   toTypeOid _ _ = Just timestamptzOid
