@@ -205,7 +205,7 @@ jsonValuesRoundTrip conn = hedgehog $ do
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do
   let rowRes = (fromGregorian 1999 12 31, fromGregorian 2010 01 01, fromGregorian 2011 07 04, fromGregorian 1981 03 17, NegInfinity @UTCTime, PosInfinity @UTCTime, NegInfinity @Day, PosInfinity @Day)
-  queryWith rowParser conn (mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date, '-infinity'::timestamptz, '+infinity'::timestamptz, '-infinity'::date, '+infinity'::date" ()) `shouldReturn` [rowRes]
+  queryWith rowParser conn (mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date, '-infinity'::timestamptz, 'infinity'::timestamptz, '-infinity'::date, 'infinity'::date" ()) `shouldReturn` [rowRes]
 
 dateEncoding :: HPgConnection -> IO ()
 dateEncoding conn = do
