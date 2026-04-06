@@ -15,9 +15,11 @@ module HPgsql.Encoding
     AllowNull (..),
     LowerCasedPgEnum (..),
     (:.) (..),
+    ProductTypeDecoder (..),
     anyTypeDecoder,
     singleColRowParser,
     arrayField,
+    genericFromPgRow,
     nullableField,
     -- TODO: Methods below should be internal
     parsePgType,

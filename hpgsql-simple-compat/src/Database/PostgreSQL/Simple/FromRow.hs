@@ -1,7 +1,10 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------
@@ -31,15 +34,16 @@ module Database.PostgreSQL.Simple.FromRow
 where
 
 import Database.PostgreSQL.Simple.FromField (FromField (..))
-import HPgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), RowParserMonadic, singleColRowParser, toMonadicRowParser, (:.) (..))
+import GHC.Generics (Generic (..))
+import HPgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), ProductTypeDecoder (..), RowParserMonadic, singleColRowParser, toMonadicRowParser, (:.) (..))
 import Prelude hiding (null)
 
 type RowParser = RowParserMonadic
 
 class FromRow a where
   fromRow :: RowParser a
-  default fromRow :: (FromPgRow a) => RowParser a
-  fromRow = toMonadicRowParser rowParser
+  default fromRow :: (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
+  fromRow = genericFromPgRow
 
 instance (FromField a) => FromRow (Only a) where
   fromRow = Only <$> toMonadicRowParser (singleColRowParser fromField)
@@ -79,3 +83,6 @@ instance (FromRow a, FromRow b) => FromRow (a :. b) where
 
 field :: (FromPgField a) => RowParser a
 field = toMonadicRowParser $ singleColRowParser fieldParser
+
+genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
+genericFromPgRow = toMonadicRowParser $ to <$> genRowDecoder @(Rep a)
