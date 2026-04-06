@@ -46,6 +46,7 @@ module HPgsql
     getNotificationNonBlocking,
     refreshTypeInfoCache,
     resetTypeInfoCache,
+    queryWithM,
   )
 where
 
@@ -81,7 +82,7 @@ import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
 #endif
 import HPgsql.Base
 import HPgsql.Connection (ConnString (..))
-import HPgsql.Encoding (ColumnInfo (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..))
+import HPgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..))
 import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..))
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
@@ -1013,11 +1014,25 @@ pipelineS rowparser@(RowParser _ _ expectedColFmts) (lastAndInitNE . breakQueryI
         case lastAndInit qryIds of
           (firstQueries, mLastQry) -> do
             forM_ firstQueries $ consumeResultsIgnoreRows conn
-            pure $ consumeStreamingResults rowparser conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
+            pure $ consumeStreamingResults (ApplicativeRowParser rowparser) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
+    )
+
+pipelineSM :: RowParserMonadic a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
+pipelineSM rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
+  Pipeline
+    (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Nothing)])
+    ( \conn qryIds -> do
+        case lastAndInit qryIds of
+          (firstQueries, mLastQry) -> do
+            forM_ firstQueries $ consumeResultsIgnoreRows conn
+            pure $ consumeStreamingResults (MonadicRowParser rowparser) conn (fromMaybe (error "pipelineSM internal bug: no mLastQry") mLastQry)
     )
 
 pipelineL :: RowParser a -> Query -> Pipeline (IO [a])
 pipelineL rowparser q = (S.toList_ =<<) <$> pipelineS rowparser q
+
+pipelineLM :: RowParserMonadic a -> Query -> Pipeline (IO [a])
+pipelineLM rowparser q = (S.toList_ =<<) <$> pipelineSM rowparser q
 
 pipelineCmd :: Query -> Pipeline (IO Int64)
 pipelineCmd = pipelineCmdInternal . breakQueryIntoStatements
@@ -1061,8 +1076,10 @@ runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
         (concatMap toMessages queries ++ [SomeMessage Sync])
         $ \qryIds -> pure $ run conn (NE.toList qryIds)
 
-consumeStreamingResults :: RowParser a -> HPgConnection -> QueryId -> Stream (Of a) IO ()
-consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryId = S.effect $ do
+data WhichRowParser a = ApplicativeRowParser !(RowParser a) | MonadicRowParser !(RowParserMonadic a)
+
+consumeStreamingResults :: WhichRowParser a -> HPgConnection -> QueryId -> Stream (Of a) IO ()
+consumeStreamingResults rp conn qryId = S.effect $ do
   qText <- lookupQueryText conn qryId
   (mERowDesc, rowsStream) <- consumeResults conn qryId
   case mERowDesc of
@@ -1074,18 +1091,20 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
       case res of
         Left err -> throwPostgresError qText err
         Right _cmd -> throwIrrecoverableErrorWithStatement qText "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
-    Just (Left3 _noData) -> throwIrrecoverableErrorWithStatement qText "You have sent a count-returning query but expected it to be a rows-returning query, so we are aborting."
-    Just (Right3 _copyInResponse) -> throwIrrecoverableErrorWithStatement qText "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query, so we are aborting."
+    Just (Left3 _noData) -> throwIrrecoverableErrorWithStatement qText "You have sent a count-returning query but expected it to be a rows-returning query. This is not supported."
+    Just (Right3 _copyInResponse) -> throwIrrecoverableErrorWithStatement qText "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query. This is not supported."
     Just (Middle3 (RowDescription coltypes)) -> do
       encodingContext <- readMVar conn.encodingContext
       let numResultColumns = length coltypes
-          expectedNumCols = expectedColFmts
           mkColInfo oid = ColumnInfo oid encodingContext
           colInfos = map mkColInfo coltypes
-          typecheckedColInfos = rtypecheck colInfos
-      unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
-      unless (all snd typecheckedColInfos) $ throwIrrecoverableErrorWithStatement qText "Query result column types do not match expected column types"
-      let !rowparser = rparser colInfos <* Parsec.endOfInput
+      !rowparser <- case rp of
+        ApplicativeRowParser (RowParser rparser rtypecheck expectedNumCols) -> do
+          let typecheckedColInfos = rtypecheck colInfos
+          unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
+          unless (all snd typecheckedColInfos) $ throwIrrecoverableErrorWithStatement qText "Query result column types do not match expected column types"
+          pure $ rparser colInfos <* Parsec.endOfInput
+        MonadicRowParser (RowParserMonadic rparser) -> pure $ fmap fst $ rparser ConversionState {colsLeftToParse = colInfos} <* Parsec.endOfInput
       pure $ do
         errOrCmdComplete <-
           S.mapM
@@ -1104,6 +1123,9 @@ query = queryWith (rowParser @a)
 
 queryWith :: RowParser a -> HPgConnection -> Query -> IO [a]
 queryWith rparser conn qry = join $ runPipeline conn $ pipelineL rparser qry
+
+queryWithM :: RowParserMonadic a -> HPgConnection -> Query -> IO [a]
+queryWithM rparser conn qry = join $ runPipeline conn $ pipelineLM rparser qry
 
 withCopy :: HPgConnection -> Query -> IO () -> IO Int64
 withCopy conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) copyFn = do

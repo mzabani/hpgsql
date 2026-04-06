@@ -152,8 +152,8 @@ import Database.PostgreSQL.Simple.Types
     (:.) (..),
   )
 import qualified HPgsql
+import HPgsql.Encoding (RowParserMonadic)
 import qualified HPgsql.Query as HPgsql
-import qualified Streaming
 
 -- | Format a query string with a variable number of rows.
 --
@@ -354,7 +354,7 @@ returning :: (ToRow q, FromRow r) => Connection -> Query -> [q] -> IO [r]
 returning = returningWith fromRow
 
 -- | A version of 'returning' taking parser as argument
-returningWith :: (ToRow q) => HPgsql.RowParser r -> Connection -> Query -> [q] -> IO [r]
+returningWith :: (ToRow q) => RowParserMonadic r -> Connection -> Query -> [q] -> IO [r]
 returningWith _ _ _ [] = return []
 returningWith _parser _conn _q _qs = error "TODO HPgsql"
 
@@ -384,13 +384,13 @@ query_ :: (FromRow r) => Connection -> Query -> IO [r]
 query_ conn q = query conn q ()
 
 -- | A version of 'query' taking parser as argument
-queryWith :: (ToRow q) => HPgsql.RowParser r -> Connection -> Query -> q -> IO [r]
+queryWith :: (ToRow q) => RowParserMonadic r -> Connection -> Query -> q -> IO [r]
 queryWith parser conn template qs =
   mapHpgsqlErrors $
-    HPgsql.queryWith parser (hpgConn conn) (toHpgsqlQuery template qs)
+    HPgsql.queryWithM parser (hpgConn conn) (toHpgsqlQuery template qs)
 
 -- | A version of 'query_' taking parser as argument
-queryWith_ :: HPgsql.RowParser r -> Connection -> Query -> IO [r]
+queryWith_ :: RowParserMonadic r -> Connection -> Query -> IO [r]
 queryWith_ parser conn q = queryWith parser conn q ()
 
 -- | Perform a @SELECT@ or other SQL query that is expected to return
@@ -433,7 +433,7 @@ fold = foldWithOptions defaultFoldOptions
 -- | A version of 'fold' taking a parser as an argument
 foldWith ::
   (ToRow params) =>
-  HPgsql.RowParser row ->
+  RowParserMonadic row ->
   Connection ->
   Query ->
   params ->
@@ -484,7 +484,7 @@ foldWithOptions opts = foldWithOptionsAndParser opts fromRow
 foldWithOptionsAndParser ::
   (ToRow params) =>
   FoldOptions ->
-  HPgsql.RowParser row ->
+  RowParserMonadic row ->
   Connection ->
   Query ->
   params ->
@@ -510,7 +510,7 @@ fold_ = foldWithOptions_ defaultFoldOptions
 
 -- | A version of 'fold_' taking a parser as an argument
 foldWith_ ::
-  HPgsql.RowParser r ->
+  RowParserMonadic r ->
   Connection ->
   Query ->
   a ->
@@ -534,7 +534,7 @@ foldWithOptions_ opts conn query' a f = doFold opts fromRow conn (toHpgsqlQuery 
 -- | A version of 'foldWithOptions_' taking a parser as an argument
 foldWithOptionsAndParser_ ::
   FoldOptions ->
-  HPgsql.RowParser r ->
+  RowParserMonadic r ->
   Connection ->
   -- | Query.
   Query ->
@@ -547,15 +547,13 @@ foldWithOptionsAndParser_ opts parser conn query' a f = doFold opts parser conn 
 
 doFold ::
   FoldOptions ->
-  HPgsql.RowParser row ->
+  RowParserMonadic row ->
   Connection ->
   HPgsql.Query ->
   a ->
   (a -> row -> IO a) ->
   IO a
-doFold FoldOptions {} parser conn qry _a0 _f = mapHpgsqlErrors $ do
-  s <- HPgsql.queryWithStreaming parser (hpgConn conn) qry
-  pure $ Streaming.streamFold undefined undefined undefined s
+doFold FoldOptions {} _parser _conn _qry _a0 _f = mapHpgsqlErrors $ error "TODO Hpgsql"
 
 -- | A version of 'fold' that does not transform a state value.
 forEach ::
@@ -574,7 +572,7 @@ forEach = forEachWith fromRow
 -- | A version of 'forEach' taking a parser as an argument
 forEachWith ::
   (ToRow q) =>
-  HPgsql.RowParser r ->
+  RowParserMonadic r ->
   Connection ->
   Query ->
   q ->
@@ -596,7 +594,7 @@ forEach_ = forEachWith_ fromRow
 {-# INLINE forEach_ #-}
 
 forEachWith_ ::
-  HPgsql.RowParser r ->
+  RowParserMonadic r ->
   Connection ->
   Query ->
   (r -> IO ()) ->
