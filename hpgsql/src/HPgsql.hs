@@ -58,7 +58,6 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (MonadThrow, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
-import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
@@ -1109,7 +1108,7 @@ consumeStreamingResults rp conn qryId = S.effect $ do
         errOrCmdComplete <-
           S.mapM
             ( \(DataRow rowColumnData) ->
-                case LazyParsec.parseOnly rowparser rowColumnData of
+                case Parsec.parseOnly rowparser rowColumnData of
                   Right row -> pure row
                   Left err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " ++ show err
             )

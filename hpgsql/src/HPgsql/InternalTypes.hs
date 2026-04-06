@@ -171,7 +171,7 @@ newtype ErrorResponse = ErrorResponse (Map ErrorDetail LBS.ByteString)
 newtype CommandComplete = CommandComplete {numRows :: Int64}
   deriving stock (Show)
 
-newtype DataRow = DataRow {rowColumnData :: LBS.ByteString}
+newtype DataRow = DataRow {rowColumnData :: ByteString}
 
 instance Show DataRow where
   show _ = "DataRow"

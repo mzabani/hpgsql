@@ -30,11 +30,12 @@ where
 
 import Control.Monad (replicateM, unless, when)
 import qualified Data.Aeson as Aeson
-import qualified Data.Attoparsec.ByteString.Lazy as Parsec
+import qualified Data.Attoparsec.ByteString as Parsec
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Lazy.Char8
 import Data.Fixed (divMod')
 import Data.Int (Int16, Int32, Int64)
 import Data.Kind (Type)
@@ -70,7 +71,7 @@ data ColumnInfo = ColumnInfo
   }
 
 data FieldParser a = FieldParser
-  { fieldValueParser :: ColumnInfo -> Maybe LBS.ByteString -> Either String a,
+  { fieldValueParser :: ColumnInfo -> Maybe ByteString -> Either String a,
     allowedPgTypes :: ColumnInfo -> Bool
   }
   deriving stock (Functor)
@@ -141,7 +142,7 @@ singleColRowParser (FieldParser {..}) =
                     then
                       if lenNextCol == 0
                         then pure $ Just ""
-                        else Just . LBS.fromStrict <$> Parsec.take lenNextCol
+                        else Just <$> Parsec.take lenNextCol
                     else pure Nothing
                 case decode nextColBs of
                   Right v -> pure v
@@ -200,8 +201,8 @@ compositeTypeParser nullCheck (RowParser {..}) =
       let mkColInfo oid = ColumnInfo oid encodingContext
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
-        (LBS.fromStrict -> sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
-        !bs <- LBS.fromStrict <$> Parsec.take (max 0 size)
+        (sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
+        !bs <- Parsec.take (max 0 size)
         pure (oid, sizeBs <> bs)
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
       unless (all snd typecheckedCols) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
@@ -509,28 +510,28 @@ binaryIntEncoder
   | otherwise = Cereal.encodeLazy @Int16 . fromIntegral
 
 -- | Big-Endian binary decoder for Haskell's various IntXX types.
-binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> LBS.ByteString -> Either String a
+binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> ByteString -> Either String a
 binaryIntDecoder typOid = \bs ->
   if doesFit
     then intDecoder bs
     else Left $ "Chosen integral type does not fit every value for PG type with OID " ++ show typOid
   where
     maxBoundPgType :: Integer
-    intDecoder :: LBS.ByteString -> Either String a
+    intDecoder :: ByteString -> Either String a
     (maxBoundPgType, intDecoder)
-      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . Cereal.decodeLazy @Int64)
-      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . Cereal.decodeLazy @Int32)
-      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . Cereal.decodeLazy @Int16)
+      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . Cereal.decode @Int64)
+      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . Cereal.decode @Int32)
+      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . Cereal.decode @Int16)
       | otherwise = error "Bug in HPgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
-binaryFloat4Decoder :: LBS.ByteString -> Float
-binaryFloat4Decoder = castWord32ToFloat . either error id . Cereal.decodeLazy @Word32
+binaryFloat4Decoder :: ByteString -> Float
+binaryFloat4Decoder = castWord32ToFloat . either error id . Cereal.decode @Word32
 
-binaryFloat8Decoder :: LBS.ByteString -> Double
-binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decodeLazy @Word64
+binaryFloat8Decoder :: ByteString -> Double
+binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decode @Word64
 
-parsePgType :: [Oid] -> (Maybe LBS.ByteString -> Either String a) -> FieldParser a
+parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldParser a
 parsePgType requiredTypeOids fieldValueParser =
   FieldParser
     { fieldValueParser = \_oid -> fieldValueParser,
@@ -642,7 +643,7 @@ instance FromPgField Double where
 -- since postgres uses their UTF8 text representation even in the
 -- binary protocol, but otherwise it's easier to compose existing
 -- FieldParsers.
-anyTypeDecoder :: FieldParser LBS.ByteString
+anyTypeDecoder :: FieldParser ByteString
 anyTypeDecoder =
   FieldParser
     { fieldValueParser = \_oid -> \case
@@ -685,8 +686,8 @@ instance FromPgField Scientific where
         allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . typeOid
       }
 
-binaryTrue :: LBS.ByteString
-binaryTrue = Cereal.encodeLazy True
+binaryTrue :: ByteString
+binaryTrue = Cereal.encode True
 
 instance FromPgField Bool where
   fieldParser = parsePgType [boolOid] $ \case
@@ -704,7 +705,7 @@ instance FromPgField Char where
                       if oid == charOid
                         -- TODO: Postgres has values of type "char" in the pg_type.typcategory table.
                         -- We should test this instance works with those, and we haven't yet.
-                        then Right $ Data.ByteString.Lazy.Char8.head bs
+                        then Right $ BSC.head bs
                         else case decodeText mbs of
                           Left err -> Left err
                           Right t -> if Text.length t > 1 then Left "Cannot parse text with more than one character into a Haskell Char type." else Right (Text.head t)
@@ -715,29 +716,29 @@ instance FromPgField Char where
 
 instance FromPgField ByteString where
   fieldParser = parsePgType [byteaOid] $ \case
-    Just bs -> Right $ LBS.toStrict bs
+    Just bs -> Right bs
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
 
 instance FromPgField LBS.ByteString where
   fieldParser = parsePgType [byteaOid] $ \case
-    Just bs -> Right bs
+    Just bs -> Right $ LBS.fromStrict bs
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
 
 instance FromPgField Text where
   fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
-    Just bs -> Right $ decodeUtf8 $ LBS.toStrict bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
+    Just bs -> Right $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField LT.Text where
   fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
-    Just bs -> Right $ LT.decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
+    Just bs -> Right $ LT.fromStrict $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField String where
   fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
-    Just bs -> Right $ Text.unpack $ decodeUtf8 $ LBS.toStrict bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
+    Just bs -> Right $ Text.unpack $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
 
@@ -745,7 +746,7 @@ instance FromPgField UTCTime where
   fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decodeLazy @Int64 bs
+      totalusecs <- Cereal.decode @Int64 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -755,7 +756,7 @@ instance FromPgField (Unbounded UTCTime) where
   fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decodeLazy @Int64 bs
+      totalusecs <- Cereal.decode @Int64 bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -772,7 +773,7 @@ instance FromPgField ZonedTime where
   fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decodeLazy @Int64 bs
+      totalusecs <- Cereal.decode @Int64 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -782,7 +783,7 @@ instance FromPgField (Unbounded ZonedTime) where
   fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decodeLazy @Int64 bs
+      totalusecs <- Cereal.decode @Int64 bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -801,7 +802,7 @@ instance FromPgField Day where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- Cereal.decodeLazy @Int32 bs
+      jd <- Cereal.decode @Int32 bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
 
@@ -811,7 +812,7 @@ instance FromPgField (Unbounded Day) where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- Cereal.decodeLazy @Int32 bs
+      jd <- Cereal.decode @Int32 bs
       Right $
         if jd == minBound
           then NegInfinity
@@ -825,7 +826,7 @@ instance FromPgField (Unbounded Day) where
 instance FromPgField CalendarDiffTime where
   fieldParser = parsePgType [intervalOid] $ \case
     Just bs -> do
-      (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decodeLazy bs
+      (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decode bs
       Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
     Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
 
@@ -835,9 +836,9 @@ instance FromPgField Aeson.Value where
       { fieldValueParser =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
+                !fixJsonb = if typeOid == jsonbOid then BS.drop 1 else Prelude.id
              in \case
-                  Just bs -> case Aeson.decode $ fixJsonb bs of
+                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
                     Just d -> Right d
                     Nothing -> Left "Bug in HPgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
                   Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
@@ -889,7 +890,7 @@ arrayField !elementParser =
           unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
           Vector.replicateM dim_i $ do
             size :: Int <- fromIntegral <$> int32Parser
-            elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
+            elementBs <- if size == (-1) then pure Nothing else Just <$> Parsec.take size
             case elementParser.fieldValueParser elementColInfo elementBs of
               Left err -> fail $ "Error parsing array element: " ++ show err
               Right el -> pure el
@@ -932,7 +933,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
           Vector.replicateM lengthEachRow $
             do
               size :: Int <- fromIntegral <$> int32Parser
-              elementBs <- if size == (-1) then pure Nothing else Just . LBS.fromStrict <$> Parsec.take size
+              elementBs <- if size == (-1) then pure Nothing else Just <$> Parsec.take size
               case elementParser.fieldValueParser elementColInfo elementBs of
                 Left err -> fail $ "Error parsing array element: " ++ show err
                 Right el -> pure el
@@ -971,7 +972,7 @@ genericEnumFieldParser ::
 genericEnumFieldParser nameTransform = fromMaybe (error $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)) . flip Map.lookup allValuesMap <$> anyTypeDecoder
   where
     -- TODO: Vector of pointers to ByteStrings for a bit more memory locality? Does it make a perf difference?
-    allValuesMap = Map.mapKeys (LT.encodeUtf8 . nameTransform) $ fmap to genEnumDecoder
+    allValuesMap = Map.mapKeys (LBS.toStrict . LT.encodeUtf8 . nameTransform) $ fmap to genEnumDecoder
 
 class EnumDecoder f where
   -- | Returns the textual representation and constructed object for every possible

@@ -10,6 +10,8 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Encoding as AesonInternal
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
 import Data.Typeable (Proxy (..), Typeable)
@@ -48,14 +50,14 @@ valuesToQuery (Values rows) =
 -- Although it does have a `toJSON` method, using it will incur a
 -- deserialization cost, so if you find yourself using that too much consider just using
 -- `Aeson.Value` or the `Aeson` newtype instead of this.
-newtype PgJson = PgJson LBS.ByteString
+newtype PgJson = PgJson ByteString
 
 instance ToJSON PgJson where
-  toJSON (PgJson bs) = case Aeson.eitherDecode' bs of
+  toJSON (PgJson bs) = case Aeson.eitherDecodeStrict' bs of
     Left err -> error $ "Bug in HPgsql. PgJson not valid JSON: " ++ err
     Right v -> v
 
-  toEncoding (PgJson bs) = AesonInternal.unsafeToEncoding (Builder.lazyByteString bs)
+  toEncoding (PgJson bs) = AesonInternal.unsafeToEncoding (Builder.byteString bs)
 
 instance FromPgField PgJson where
   fieldParser =
@@ -63,7 +65,7 @@ instance FromPgField PgJson where
       { fieldValueParser =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
+                !fixJsonb = if typeOid == jsonbOid then BS.drop 1 else Prelude.id
              in \case
                   Just bs -> Right $ PgJson $ fixJsonb bs
                   Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
@@ -82,9 +84,9 @@ instance (FromJSON a) => FromPgField (Aeson a) where
       { fieldValueParser =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if typeOid == jsonbOid then LBS.drop 1 else Prelude.id
+                !fixJsonb = if typeOid == jsonbOid then BS.drop 1 else Prelude.id
              in \case
-                  Just bs -> case Aeson.decode $ fixJsonb bs of
+                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
                     Just v -> Right $ Aeson v
                     Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?"
                   Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",

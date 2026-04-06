@@ -207,7 +207,7 @@ instance FromPgMessage CopyInResponse where
 
 instance FromPgMessage DataRow where
   msgParser = PgMsgParser $ \c !restOfMsg -> case c of
-    'D' -> Just $ DataRow {rowColumnData = LBS.drop 2 restOfMsg}
+    'D' -> Just $ DataRow {rowColumnData = LBS.toStrict $ LBS.drop 2 restOfMsg}
     _ -> Nothing
 
 instance FromPgMessage NoData where
