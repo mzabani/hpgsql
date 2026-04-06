@@ -14,10 +14,14 @@ import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
+import Numeric (showHex)
 import Data.Scientific (Scientific)
 import Data.String (fromString)
 import Data.Text (Text)
+import qualified Data.Text as Text
+import qualified Data.Text.Encoding as TE
 import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (CalendarDiffTime (..))
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
@@ -81,6 +85,24 @@ spec = parallel $ do
     it
       "Less usual types"
       lessUsualTypes
+    it
+      "bytea text decoding"
+      byteaTextDecoding
+    it
+      "Date and timestamp text decoding"
+      dateAndTimestampTextDecoding
+    it
+      "Numeric text decoding"
+      numericTextDecoding
+    it
+      "Numeric text decoding with larger result types"
+      numericTextDecodingLargerTypes
+    it
+      "Numeric extreme text decoding"
+      numericExtremeTextDecoding
+    it
+      "Json text decoding"
+      jsonTextDecoding
   -- it
   --   "Values type round-trip"
   --   valuesTypeRoundTrip
@@ -228,6 +250,117 @@ lessUsualTypes conn = do
   -- Just making sure this doesn't throw is likely enough
   void $ queryWith (rowParser @(Oid, Int, String, Char)) conn "SELECT oid, typlen, typname, typcategory FROM pg_type"
   void $ queryWith (rowParser @(Oid, Int16, String, Char)) conn "SELECT oid, typlen, typname, typcategory FROM pg_type"
+
+byteaTextDecoding :: HPgConnection -> PropertyT IO ()
+byteaTextDecoding conn = hedgehog $ do
+  someBs :: ByteString <- Gen.forAll $ Gen.bytes (Gen.linear 0 50)
+  let lazyBs :: LBS.ByteString = LBS.fromStrict someBs
+      hexStr = concatMap (\w -> let s = showHex w "" in if length s < 2 then '0' : s else s) (BS.unpack someBs)
+  res <- liftIO $ queryWith rowParser conn (fromString $ "SELECT '\\x" <> hexStr <> "'::bytea, '\\x" <> hexStr <> "'::bytea")
+  res === [(someBs, lazyBs)]
+
+dateAndTimestampTextDecoding :: HPgConnection -> PropertyT IO ()
+dateAndTimestampTextDecoding conn = hedgehog $ do
+  yearForDate :: Integer <- Gen.forAll $ Gen.integral (Gen.linear 1 9999)
+  yearForTimetz :: Integer <- Gen.forAll $ Gen.integral (Gen.linear 1 9999)
+  month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
+  day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 28
+  timeOfDayMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear 0 86_399_999_999
+  someNumberOfMonths :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear (-1000) 1000
+  someIntervalTimeMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear (-100 * 86_400_000_000) (100 * 86_400_000_000)
+  someNominalDiffTimeMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear (-1_000_000_000_000) 1_000_000_000_000
+  let date = fromGregorian yearForDate month day
+      timeOfDay = picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
+      timetz = UTCTime (fromGregorian yearForTimetz month day) timeOfDay
+      someIntervalTime :: NominalDiffTime = realToFrac $ picosecondsToDiffTime (someIntervalTimeMicros * 1_000_000)
+      someCalendarDiffTime = CalendarDiffTime someNumberOfMonths someIntervalTime
+      someNominalDiffTime :: NominalDiffTime = realToFrac $ picosecondsToDiffTime (someNominalDiffTimeMicros * 1_000_000)
+  res <- liftIO $ queryWith rowParser conn
+    (fromString $ "SELECT '" <> iso8601Show date <> "'::date"
+              <> ", '" <> iso8601Show timetz <> "'::timestamptz"
+              <> ", '" <> show someNumberOfMonths <> " months " <> show someIntervalTimeMicros <> " microseconds'::interval"
+              <> ", '" <> iso8601Show timetz <> "'::timestamptz"
+              <> ", '" <> iso8601Show date <> "'::date"
+              <> ", '" <> show someNominalDiffTimeMicros <> " microseconds'::interval"
+    )
+  res === [(date, timetz, someCalendarDiffTime, Finite timetz, Finite date, CalendarDiffTime 0 someNominalDiffTime)]
+
+numericTextDecoding :: HPgConnection -> PropertyT IO ()
+numericTextDecoding conn = hedgehog $ do
+  floatVal :: Float <- Gen.forAll $ Gen.float $ Gen.exponentialFloatFrom 0 (-1e38) 1e38
+  floatVal2 :: Float <- Gen.forAll $ Gen.float $ Gen.linearFracFrom 0 (-1e38) 1e38
+  doubleVal :: Double <- Gen.forAll $ Gen.double $ Gen.exponentialFloatFrom 0 (-1e308) 1e308
+  doubleVal2 :: Double <- Gen.forAll $ Gen.double $ Gen.linearFracFrom 0 (-1e308) 1e308
+  integerVal :: Integer <- Gen.forAll $ (*) <$> (fromIntegral @Int64 <$> Gen.enumBounded) <*> (fromIntegral @Int64 <$> Gen.enumBounded)
+  res <- liftIO $ queryWith rowParser conn
+    (fromString $ "SELECT '1.521'::numeric, '1.521'::numeric(4,1), '1.521'::numeric"
+              <> ", '" <> show floatVal <> "'::float4"
+              <> ", '" <> show floatVal2 <> "'::float4"
+              <> ", '" <> show doubleVal <> "'::float8"
+              <> ", '" <> show doubleVal2 <> "'::float8"
+              <> ", '" <> show integerVal <> "'::numeric"
+    )
+  res === [(1.521 :: Scientific, 1.5 :: Scientific, 1.521 :: Scientific, floatVal, floatVal2, doubleVal, doubleVal2, integerVal)]
+
+numericTextDecodingLargerTypes :: HPgConnection -> PropertyT IO ()
+numericTextDecodingLargerTypes conn = hedgehog $ do
+  floatVal :: Float <- Gen.forAll $ Gen.float $ Gen.exponentialFloatFrom 0 (-1e38) 1e38
+  int2Val :: Int16 <- Gen.forAll Gen.enumBounded
+  int4Val :: Int32 <- Gen.forAll Gen.enumBounded
+  int8Val :: Int64 <- Gen.forAll Gen.enumBounded
+  res <- liftIO $ queryWith rowParser conn
+    (fromString $ "SELECT '" <> show floatVal <> "'::float4"
+              <> ", '" <> show int2Val <> "'::int2"
+              <> ", '" <> show int2Val <> "'::int2"
+              <> ", '" <> show int2Val <> "'::int2"
+              <> ", '" <> show int2Val <> "'::int2"
+              <> ", '" <> show int4Val <> "'::int4"
+              <> ", '" <> show int4Val <> "'::int4"
+              <> ", '" <> show int4Val <> "'::int4"
+              <> ", '" <> show int8Val <> "'::int8"
+              <> ", '" <> show int8Val <> "'::int8"
+    )
+  let rowRes = (float2Double floatVal, fromIntegral int2Val :: Int32, fromIntegral int2Val :: Int64, fromIntegral int2Val :: Integer, fromIntegral int2Val :: Scientific, fromIntegral int4Val :: Int64, fromIntegral int4Val :: Integer, fromIntegral int4Val :: Scientific, fromIntegral int8Val :: Integer, fromIntegral int8Val :: Scientific)
+  res === [rowRes]
+
+numericExtremeTextDecoding :: HPgConnection -> IO ()
+numericExtremeTextDecoding conn = do
+  queryWith rowParser conn (fromString $ "SELECT '" <> show (minBound :: Int16) <> "'::int2, '" <> show (maxBound :: Int16) <> "'::int2")
+    `shouldReturn` [(minBound :: Int16, maxBound :: Int16)]
+  queryWith rowParser conn (fromString $ "SELECT '" <> show (minBound :: Int32) <> "'::int4, '" <> show (maxBound :: Int32) <> "'::int4")
+    `shouldReturn` [(minBound :: Int32, maxBound :: Int32)]
+  queryWith rowParser conn (fromString $ "SELECT '" <> show (minBound :: Int64) <> "'::int8, '" <> show (maxBound :: Int64) <> "'::int8")
+    `shouldReturn` [(minBound :: Int64, maxBound :: Int64)]
+  [(f :: Float, d :: Double)] <- queryWith rowParser conn "SELECT 'NaN'::float4, 'NaN'::float8"
+  f `shouldSatisfy` isNaN
+  d `shouldSatisfy` isNaN
+  queryWith rowParser conn "SELECT 'Infinity'::float4, '-Infinity'::float4, 'Infinity'::float8, '-Infinity'::float8"
+    `shouldReturn` [((1 / 0) :: Float, ((-1) / 0) :: Float, (1 / 0) :: Double, ((-1) / 0) :: Double)]
+  [(d1 :: Double, d2 :: Double, d3 :: Double)] <- queryWith rowParser conn "SELECT 'NaN'::float4, 'Infinity'::float4, '-Infinity'::float4"
+  d1 `shouldSatisfy` isNaN
+  d2 `shouldBe` (1 / 0 :: Double)
+  d3 `shouldBe` ((-1) / 0 :: Double)
+
+jsonTextDecoding :: HPgConnection -> PropertyT IO ()
+jsonTextDecoding conn = hedgehog $ do
+  jsonVal1 :: Aeson.Value <- Gen.forAll genJsonValue
+  jsonVal2 :: Aeson.Value <- Gen.forAll genJsonValue
+  jsonVal3 :: Aeson.Value <- Gen.forAll genJsonValue
+  let encodeJson = pgEscape . Text.unpack . TE.decodeUtf8 . LBS.toStrict . Aeson.encode
+  [(v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson)] <- liftIO $ queryWith rowParser conn
+    (fromString $ "SELECT '" <> encodeJson jsonVal1 <> "'::json"
+              <> ", '" <> encodeJson jsonVal1 <> "'::jsonb"
+              <> ", '" <> encodeJson jsonVal2 <> "'::json"
+              <> ", '" <> encodeJson jsonVal3 <> "'::jsonb"
+    )
+  v1 === jsonVal1
+  v2 === jsonVal1
+  Aeson.toJSON v3 === jsonVal2
+  Aeson.toJSON v4 === jsonVal3
+  where
+    pgEscape = concatMap $ \case
+      '\'' -> "''"
+      c -> [c]
 
 queryCompositeType :: HPgConnection -> IO ()
 queryCompositeType conn = withRollback conn $ do
