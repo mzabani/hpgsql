@@ -1,6 +1,6 @@
 module DbUtils where
 
-import Control.Exception.Safe (throw, try)
+import Control.Exception.Safe (fromException, throw, try)
 import Control.Monad
   ( forM_,
     void,
@@ -41,7 +41,11 @@ pgErrorMustContain :: ByteString -> [(ErrorDetail, LBS.ByteString)] -> PostgresE
 pgErrorMustContain expectedStmt expected (PostgresError {pgErrorDetails, failedStatement}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails && expectedStmt `BS.isInfixOf` failedStatement
 
 irrecoverableErrorMustContain :: [(ErrorDetail, LBS.ByteString)] -> IrrecoverableHpgsqlError -> Bool
-irrecoverableErrorMustContain expected (IrrecoverableHpgsqlError {pgErrorDetails}) = Map.fromList expected `Map.isSubmapOf` pgErrorDetails
+irrecoverableErrorMustContain expected (IrrecoverableHpgsqlError {innerException}) =
+  let pgErrorDetails
+        | Just (Just (PostgresError {pgErrorDetails})) <- fromException <$> innerException = pgErrorDetails
+        | otherwise = mempty
+   in Map.fromList expected `Map.isSubmapOf` pgErrorDetails
 
 irrecoverableErrorWithMsg :: String -> IrrecoverableHpgsqlError -> Bool
 irrecoverableErrorWithMsg expectedInfixMsg (IrrecoverableHpgsqlError {hpgsqlDetails}) = expectedInfixMsg `List.isInfixOf` hpgsqlDetails

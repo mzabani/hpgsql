@@ -141,7 +141,7 @@ data PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteSt
 instance Exception PostgresError
 
 -- | If you receive this exception, don't run any further SQL statements or use it for anything. Just close the connection with `closeForcefully` and discard it.
-data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: String, pgErrorDetails :: Map ErrorDetail LBS.ByteString, innerException :: Maybe SomeException, relatedStatement :: !(Maybe ByteString)}
+data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: String, innerException :: Maybe SomeException, relatedStatement :: !(Maybe ByteString)}
   deriving stock (Show)
 
 instance Exception IrrecoverableHpgsqlError

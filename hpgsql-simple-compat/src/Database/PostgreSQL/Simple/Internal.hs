@@ -320,10 +320,10 @@ oid2int (Oid x) = fromIntegral x
 postgresErrorToSqlError :: SomeException -> Maybe SqlError
 postgresErrorToSqlError e
   | Just (sqlEx :: PostgresError) <- fromException e = Just $ mkSqlError sqlEx.pgErrorDetails
-  | Just irrecEx@IrrecoverableHpgsqlError {innerException} <- fromException e =
+  | Just IrrecoverableHpgsqlError {innerException} <- fromException e =
       case fromException <$> innerException of
         Just (Just (sqlEx :: PostgresError)) -> Just $ mkSqlError sqlEx.pgErrorDetails
-        _ -> if null irrecEx.pgErrorDetails then Nothing else Just $ mkSqlError irrecEx.pgErrorDetails
+        _ -> Nothing
   | otherwise = Nothing
   where
     mkSqlError pgErrorDetails =

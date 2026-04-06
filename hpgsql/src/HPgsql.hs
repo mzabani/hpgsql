@@ -54,7 +54,7 @@ import Control.Concurrent (mkWeakThreadId, modifyMVar, modifyMVar_, myThreadId, 
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (MonadThrow, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, tryJust)
+import Control.Exception.Safe (MonadThrow, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
@@ -206,11 +206,11 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
           -- TODO: Throw informative error for unimplemented authentication methods
           case errorOrBackendKeyData of
-            Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Socket connected but postgresql threw an error during connection startup handshake", pgErrorDetails = errDetails, innerException = Nothing, relatedStatement = Nothing}
+            Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Socket connected but postgresql threw an error during connection startup handshake", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
             Right backendKeyData -> do
               readyForQueryOrError <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @ReadyForQuery <|> Left <$> msgParser @ErrorResponse
               case readyForQueryOrError of
-                Left (ErrorResponse errDetails) -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", pgErrorDetails = errDetails, innerException = Nothing, relatedStatement = Nothing}
+                Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
                 Right ReadyForQuery {} -> pure ()
               debugPrint $ "Connected with backend PID " ++ show (backendPid backendKeyData)
               let finalConn = hpgConnPartialDoNotReturn {connPid = backendPid backendKeyData, cancelSecretKey = backendSecretKey backendKeyData}
@@ -753,14 +753,17 @@ consumeResults conn qryId = do
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()
     receiveReadyForQueryIfNecessary thisThreadId = void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
 
+mkPostgresError :: ByteString -> ErrorResponse -> PostgresError
+mkPostgresError stmtText (ErrorResponse errDetailMap) = PostgresError {pgErrorDetails = errDetailMap, failedStatement = stmtText}
+
 throwPostgresError :: ByteString -> ErrorResponse -> IO a
-throwPostgresError stmtText (ErrorResponse errDetailMap) = throw $ PostgresError {pgErrorDetails = errDetailMap, failedStatement = stmtText}
+throwPostgresError stmtText errResp = throw $ mkPostgresError stmtText errResp
 
 throwIrrecoverableError :: (MonadThrow m) => String -> m a
-throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty, innerException = Nothing, relatedStatement = Nothing}
+throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, innerException = Nothing, relatedStatement = Nothing}
 
 throwIrrecoverableErrorWithStatement :: (MonadThrow m) => ByteString -> String -> m a
-throwIrrecoverableErrorWithStatement stmtText errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, pgErrorDetails = mempty, innerException = Nothing, relatedStatement = Just stmtText}
+throwIrrecoverableErrorWithStatement stmtText errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, innerException = Nothing, relatedStatement = Just stmtText}
 
 lookupQueryText :: HPgConnection -> QueryId -> IO ByteString
 lookupQueryText conn qryId = STM.atomically $ do
@@ -1255,11 +1258,11 @@ nonAtomicSendMsg HPgConnection {socket} msg = do
   SocketLBS.sendAll socket $ Builder.toLazyByteString $ toPgMessage msg
   debugPrint $ "Sent " ++ show msg
 
--- | Wraps an IO action to rethrow HPgsql's 'PostgresError' as postgresql-simple's 'SqlError'.
+-- | Wraps an IO action to rethrow any exception as a IrrecoverableHpgsqlError.
 rethrowAsIrrecoverable :: IO a -> IO a
 rethrowAsIrrecoverable = handle (throw . asIrrec)
   where
-    asIrrec ex = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", pgErrorDetails = mempty, innerException = Just ex, relatedStatement = Nothing}
+    asIrrec ex = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", innerException = Just ex, relatedStatement = Nothing}
 
 {-# NOINLINE _globalDebugLock #-}
 _globalDebugLock :: MVar Bool
