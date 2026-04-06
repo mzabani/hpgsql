@@ -81,7 +81,17 @@ queryingAndReturningAFewRows conn =
   forM_ [1 .. 2] $
     const $ do
       queryWith (rowParser @(Int, Int)) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
+      -- Test the Aplicative and Monad instances of RowParserMonadic
       queryWithM ((,) <$> toMonadicRowParser (rowParser @(Only Int)) <*> toMonadicRowParser (rowParser @(Only Int))) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
+      queryWithM
+        ( do
+            f1 <- toMonadicRowParser (rowParser @(Only Int))
+            f2 <- toMonadicRowParser (rowParser @(Only Int))
+            pure (f1, f2)
+        )
+        conn
+        "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums"
+        `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
 
 queryingAndReturningAFewRowsMoreThanOneStatement :: HPgConnection -> IO ()
 queryingAndReturningAFewRowsMoreThanOneStatement conn = do
