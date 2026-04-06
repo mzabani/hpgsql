@@ -7,6 +7,7 @@ import Control.Monad (join, void)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Functor ((<&>))
 import Data.Int (Int16, Int32, Int64)

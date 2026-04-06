@@ -184,7 +184,7 @@ newtype ReadyForQuery
 -- Internal connection state types (moved from HPgsql)
 -- ------------------------------------------------------------------
 
-data Either3 a b c = Left3 a | Middle3 b | Right3 c
+data Either3 a b c = Left3 !a | Middle3 !b | Right3 !c
   deriving stock (Show)
 
 -- | An Integer avoids any headaches from wrap-around when comparing query ids.

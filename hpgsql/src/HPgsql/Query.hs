@@ -32,7 +32,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql.Base (maximumOnOrDef, minimumOnOrDef)
 import HPgsql.Encoding (ToPgField (..), ToPgRow (..))
-import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), hasDollarNumberedArg, hasQuestionMarkArg, parseSql, sqlStatementText)
+import HPgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), SqlStatement (..), hasDollarNumberedArg, hasQuestionMarkArg, parseSql, sqlStatementText)
 import HPgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
@@ -71,14 +71,16 @@ instance Show Query where
   -- Careful not exposing query arguments
   show = mconcat . map show . NE.toList . breakQueryIntoStatements
 
--- | Takes in a query string with query arguments either as question marks or as dollar-numbered arguments,
--- but not both. Examples:
--- - "SELECT * FROM table WHERE col1=? AND col2=?"
+-- | Takes in a query string with query arguments as dollar-numbered arguments and returns a Query you
+-- can run.
+-- Examples:
 -- - "SELECT * FROM table WHERE col1=$1 AND col2=$2"
+-- - "SELECT * FROM table WHERE (["a", "b", "c"]'::jsonb ? 'b') = $1"
+-- Question marks are interpreted literally, i.e. they have no special meaning.
 -- Note that if the number of arguments does not match what's in the query string,
 -- this will throw an error.
 mkQuery :: (ToPgRow a) => ByteString -> a -> Query
-mkQuery t p = mkQueryInternalFromSqlStatements (parseSql $ decodeUtf8 t) (map Right $ toPgParams p)
+mkQuery t p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarNumberedArgs $ decodeUtf8 t) (map Right $ toPgParams p)
 
 -- | Meant for internal usage, helps build "VALUES (..), (..)"-like statements.
 -- Users of hpgsql should just use the `Values` type instead of this.
@@ -141,24 +143,23 @@ instance IsString Query where
   fromString s =
     -- For a string to be a `Query` all by itself, it means it can't have query
     -- arguments. Users should use the quasiquoter or `mkQuery` for query arguments.
-    let statements = parseSql (Text.pack s)
+    let statements = parseSql AcceptOnlyDollarNumberedArgs (Text.pack s)
         stmtToSingleQueryFrag :: SqlStatement -> SingleQueryFragment
         stmtToSingleQueryFrag = FragmentOfStaticSql . encodeUtf8 . sqlStatementText
      in Query {queryString = NE.toList $ fmap stmtToSingleQueryFrag statements, queryParams = []}
 
--- | Takes in a query string with query arguments either as question marks or as dollar-numbered arguments,
--- but not both. Examples:
+-- | Takes in a query string with query arguments as question marks (NOT dollar-numbered arguments).
+-- Example:
 -- - "SELECT * FROM table WHERE col1=? AND col2=?"
--- - "SELECT * FROM table WHERE col1=$1 AND col2=$2"
 -- You should really use `mkQuery` instead of this. This is here only for hpgsql-simple-compat.
 mkQueryInternal :: ByteString -> [Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))] -> Query
 mkQueryInternal queryTemplate allParams =
-  let statements = parseSql (decodeUtf8 queryTemplate)
+  let statements = parseSql AcceptQuestionMarksAsQueryArgs (decodeUtf8 queryTemplate)
    in mkQueryInternalFromSqlStatements statements allParams
 
 mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))] -> Query
 mkQueryInternalFromSqlStatements statements allParams
-  | any hasQuestionMarkArg statements && any hasDollarNumberedArg statements = error $ "A query cannot contain both question marks and dollar-numbered arguments: " ++ show statements
+  | any hasQuestionMarkArg statements && any hasDollarNumberedArg statements = error $ "A query cannot contain both question marks and dollar-numbered arguments. If you are using postgres operators that contain question marks, escape them with a double question mark, e.g. SELECT $1 ?? 'a'. Query: " ++ show (mconcat $ map sqlStatementText $ NE.toList statements)
   | otherwise =
       let -- \| paramsByIdx has the number of fake query arguments preceding each query argument in the tuple.
           paramsByIdx :: Map Int (Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)), Int)
@@ -204,7 +205,7 @@ mkQueryInternalFromSqlStatements statements allParams
 sql :: QuasiQuoter
 sql =
   QuasiQuoter
-    { quoteExp = liftQueries . parseSql . Text.pack,
+    { quoteExp = liftQueries . parseSql AcceptOnlyDollarNumberedArgs . Text.pack,
       quotePat = error "HPgsql's sql quasiquoter does not implement quotePat",
       quoteType = error "HPgsql's sql quasiquoter does not implement quoteType",
       quoteDec = error "HPgsql's sql quasiquoter does not implement quoteDec"

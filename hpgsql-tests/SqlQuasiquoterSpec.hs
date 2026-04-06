@@ -12,7 +12,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql (Only (..))
-import HPgsql.Parsing (parseSql, sqlStatementText)
+import HPgsql.Parsing (ParsingOpts (..), parseSql, sqlStatementText)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
 import HPgsql.TypeInfo (EncodingContext (..), builtinPgTypesMap)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
@@ -53,7 +53,7 @@ checkQueryConcatenation gen = hedgehog $ do
     annotateShow qText
 
     -- Re-parsing the query string produces exactly one statement with matching text
-    let reparsed = parseSql qText
+    let reparsed = parseSql AcceptOnlyDollarNumberedArgs qText
     length reparsed === 1
     sqlStatementText (NE.head reparsed) === qText
 
@@ -228,7 +228,8 @@ oneParamTemplates =
   [ "SELECT $1;",
     "SELECT $1 FROM generate_series(1, 10);",
     "SELECT $1 WHERE $1 > 0;",
-    "SELECT $1, $1 + 1;"
+    "SELECT $1, $1 + 1;",
+    "SELECT '{\"a\":1, \"b\":2}'::jsonb ? $1;"
   ]
 
 twoParamTemplates :: [ByteString]
@@ -236,7 +237,8 @@ twoParamTemplates =
   [ "SELECT $1, $2;",
     "SELECT $1 FROM t WHERE x = $2;",
     "SELECT $1, $2, $1 + $2;",
-    "SELECT COALESCE($1, $2), COALESCE($2, $1);"
+    "SELECT COALESCE($1, $2), COALESCE($2, $1);",
+    "SELECT $1::jsonb ?| $2;"
   ]
 
 threeParamTemplates :: [ByteString]

@@ -29,7 +29,7 @@ import qualified Data.Text.IO as Text
 import GHC.Num (Natural)
 import HPgsql (Only (..))
 import HPgsql.Encoding (ToPgRow (..))
-import HPgsql.Parsing (BlockOrNotBlock (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
+import HPgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
 import Hedgehog (Gen, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
@@ -282,7 +282,7 @@ spec = do
       liftIO $ do
         let stmts :: [NonEmpty SqlStatement] =
               map
-                parseSql
+                (parseSql AcceptOnlyDollarNumberedArgs)
                 [ "CREATE TABLE hello;",
                   "CREATE TABLE hello",
                   "CREATE TABLE hello; -- Comment",
@@ -316,19 +316,19 @@ spec = do
               map sqlStatementText $
                 NE.toList origPieces
       annotateShow allSqlAsOneBigText
-      let parsedPieces = parseSql allSqlAsOneBigText
+      let parsedPieces = parseSql AcceptOnlyDollarNumberedArgs allSqlAsOneBigText
       fmap flattenBlocksInPieces parsedPieces
         === fmap flattenBlocksInPieces origPieces
     it "Statements concatenation matches original" $ hedgehog $ do
       SyntacticallyValidRandomSql {..} <- forAll genSyntacticallyValidRandomSql
       liftIO $ do
-        let stmts = parseSql unSyntRandomSql
+        let stmts = parseSql AcceptOnlyDollarNumberedArgs unSyntRandomSql
         mconcat (map sqlStatementText (NE.toList stmts)) `shouldBe` Text.strip unSyntRandomSql
 
     it "Sql Migration Parser never fails, even for random text" $ hedgehog $ do
       RandomSql {unRandomSql} <- forAll genRandomSql
       liftIO $ do
-        let stmts = parseSql unRandomSql
+        let stmts = parseSql AcceptOnlyDollarNumberedArgs unRandomSql
         let t = mconcat $ map sqlStatementText $ NE.toList stmts
         t `shouldBe` Text.strip unRandomSql
 
