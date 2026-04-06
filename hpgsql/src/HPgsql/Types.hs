@@ -17,7 +17,7 @@ import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import HPgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
 import HPgsql.Query (Query (..), commaSeparatedRowTuples)
-import HPgsql.TypeInfo (Format (..), jsonOid, jsonbOid)
+import HPgsql.TypeInfo (jsonOid, jsonbOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
 newtype PGArray a = PGArray {fromPGArray :: [a]}
@@ -67,7 +67,6 @@ instance FromPgField PgJson where
              in \case
                   Just bs -> Right $ PgJson $ fixJsonb bs
                   Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
 
@@ -89,7 +88,6 @@ instance (FromJSON a) => FromPgField (Aeson a) where
                     Just v -> Right $ Aeson v
                     Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?"
                   Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
 

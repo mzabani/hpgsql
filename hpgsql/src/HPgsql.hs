@@ -87,7 +87,7 @@ import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequ
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements)
-import HPgsql.TypeInfo (Format (..), TypeInfo (..), builtinPgTypesMap)
+import HPgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
@@ -1047,7 +1047,7 @@ runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
                   SomeMessage $
                     Bind
                       { paramsValuesInOrder = map snd paramOidsAndValues,
-                        resultColumnFmts = fromMaybe [BinaryFmt] mExpectedResultColFmts
+                        resultColumnFmts = fromMaybe 1 mExpectedResultColFmts
                       },
                   SomeMessage Describe,
                   SomeMessage Execute
@@ -1076,7 +1076,7 @@ consumeStreamingResults (RowParser rparser rtypecheck expectedColFmts) conn qryI
     Just (Middle3 (RowDescription coltypes)) -> do
       encodingContext <- readMVar conn.encodingContext
       let numResultColumns = length coltypes
-          expectedNumCols = length expectedColFmts
+          expectedNumCols = expectedColFmts
           mkColInfo oid = ColumnInfo oid encodingContext
           colInfos = map mkColInfo coltypes
           typecheckedColInfos = rtypecheck colInfos
@@ -1112,7 +1112,7 @@ withCopy conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Single
     conn
     ((queryString, CopyQuery StillCopying) :| [])
     [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),
-      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = []},
+      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0},
       -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
       SomeMessage Execute,
       SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
@@ -1136,7 +1136,7 @@ copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Singl
     conn
     ((queryString, CopyQuery StillCopying) :| [])
     [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),
-      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = []},
+      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0},
       -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
       SomeMessage Execute,
       SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?

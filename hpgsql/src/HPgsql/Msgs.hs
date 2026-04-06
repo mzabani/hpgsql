@@ -25,7 +25,7 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
 import Data.Word (Word8)
 import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
-import HPgsql.TypeInfo (Format (..), Oid (..))
+import HPgsql.TypeInfo (Oid (..))
 
 class ToPgMessage a where
   toPgMessage :: a -> Builder
@@ -77,7 +77,7 @@ data AuthenticationOk = AuthenticationOk
 data BackendKeyData = BackendKeyData {backendPid :: Int32, backendSecretKey :: Int32}
   deriving stock (Show)
 
-data Bind = Bind {paramsValuesInOrder :: [Maybe LBS.ByteString], resultColumnFmts :: [Format]}
+data Bind = Bind {paramsValuesInOrder :: ![Maybe LBS.ByteString], resultColumnFmts :: !Int}
   deriving stock (Show)
 
 -- | PId first, secret key second
@@ -258,15 +258,12 @@ instance ToPgMessage Bind where
                   Just val -> Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val
               )
               paramsValuesInOrder
-        numResultColumnsFmtCodes :: Int16 = fromIntegral $ length resultColumnFmts
+        numResultColumnsFmtCodes :: Int16 = fromIntegral resultColumnFmts
         resultColumnsFmtCodes =
           mconcat $
             map
-              ( \case
-                  BinaryFmt -> Builder.int16BE 1
-                  BadlySupportedTextFmt -> Builder.int16BE 0
-              )
-              resultColumnFmts
+              (const $ Builder.int16BE 1)
+              [1 .. resultColumnFmts]
         contents = unnamedDestPortal <> unnamedSourcePreparedStmt <> Builder.int16BE numParamFmtCodesAllBinary <> Builder.int16BE fmtCodesBinary <> Builder.int16BE numQryParams <> paramsLenAndVals <> Builder.int16BE numResultColumnsFmtCodes <> resultColumnsFmtCodes
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
      in Builder.char7 'B' <> Builder.int32BE (4 + contentsLen) <> contents

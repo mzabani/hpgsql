@@ -55,7 +55,7 @@ import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
 import HPgsql.Time (Unbounded (..))
-import HPgsql.TypeInfo (EncodingContext (..), Format (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
+import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
   { typeOid :: !Oid,
@@ -65,7 +65,6 @@ data ColumnInfo = ColumnInfo
 
 data FieldParser a = FieldParser
   { fieldValueParser :: ColumnInfo -> Maybe LBS.ByteString -> Either String a,
-    fieldFmt :: !Format,
     allowedPgTypes :: ColumnInfo -> Bool
   }
   deriving stock (Functor)
@@ -75,13 +74,13 @@ data RowParser a = RowParser
     -- | Returns the same colInfos with a boolean indicating if
     -- the expected types match for each colInfo.
     rowColumnsTypeCheck :: [ColumnInfo] -> [(ColumnInfo, Bool)],
-    resultColumnsFmts :: ![Format]
+    numExpectedColumns :: !Int
   }
   deriving stock (Functor, Generic)
 
 instance Applicative RowParser where
-  pure v = RowParser (const $ pure v) (map (,True)) []
-  RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt (length nc1) colTypes in tc1 cols1 ++ tc2 cols2) (nc1 ++ nc2)
+  pure v = RowParser (const $ pure v) (map (,True)) 0
+  RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in tc1 cols1 ++ tc2 cols2) (nc1 + nc2)
 
 instance (TypeError (TypeLits.Text "RowParser does not have a Monad instance in HPgsql because HPgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances.")) => Monad RowParser where
   (>>=) = error "inaccessible bind in Monad RowParser instance"
@@ -109,7 +108,7 @@ singleColRowParser (FieldParser {..}) =
       rowColumnsTypeCheck = \case
         [singleColInfo] -> [(singleColInfo, allowedPgTypes singleColInfo)]
         _ -> error "singleColRowParser's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-      resultColumnsFmts = [fieldFmt]
+      numExpectedColumns = 1
     }
 
 int32Parser :: Parsec.Parser Int32
@@ -131,6 +130,7 @@ type family ResAllowNull (r :: Bool) (a :: Type) :: Type where
   ResAllowNull True a = Maybe a
   ResAllowNull False a = a
 
+-- | TODO: Allow users to supply a typeInfo predicate?
 compositeTypeParser :: forall a t. AllowNull t -> RowParser a -> FieldParser (ResAllowNull t a)
 compositeTypeParser nullCheck (RowParser {..}) =
   case nullCheck of
@@ -139,16 +139,14 @@ compositeTypeParser nullCheck (RowParser {..}) =
         { fieldValueParser = \compositeTypeOid -> \case
             Nothing -> Left "Got NULL in composite type but it was not allowed"
             Just bs -> Parsec.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parsec.endOfInput) bs,
-          allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
-          fieldFmt = BinaryFmt -- TODO: What if the supplied RowParser has mixed Text and Binary formats?
+          allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
         }
     AllowNull ->
       FieldParser
         { fieldValueParser = \compositeTypeColInfo -> \case
             Nothing -> Right Nothing
             Just bs -> Just <$> Parsec.parseOnly (parserForRecord compositeTypeColInfo.encodingContext <* Parsec.endOfInput) bs,
-          allowedPgTypes = const True, -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
-          fieldFmt = BinaryFmt -- TODO: What if the supplied RowParser has mixed Text and Binary formats?
+          allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
         }
   where
     parserForRecord :: EncodingContext -> Parsec.Parser a
@@ -156,8 +154,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
       -- From https://github.com/postgres/postgres/blob/50ba65e73325cf55fedb3e1f14673d816726923b/src/backend/utils/adt/rowtypes.c#L687
       -- we can see a composite type's binary representation consists of: number of columns (Int32) + for_each_column { OID (Int32) + size_or_minus_1 (Int32) + Bytes }
       numCols <- fromIntegral <$> int32Parser
-      let numColsExpected = length resultColumnsFmts
-      unless (numCols == numColsExpected) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numColsExpected
+      unless (numCols == numExpectedColumns) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numExpectedColumns
       let mkColInfo oid = ColumnInfo oid encodingContext
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
@@ -491,11 +488,10 @@ binaryFloat4Decoder = castWord32ToFloat . either error id . Cereal.decodeLazy @W
 binaryFloat8Decoder :: LBS.ByteString -> Double
 binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decodeLazy @Word64
 
-parsePgType :: Format -> [Oid] -> (Maybe LBS.ByteString -> Either String a) -> FieldParser a
-parsePgType fieldFmt requiredTypeOids fieldValueParser =
+parsePgType :: [Oid] -> (Maybe LBS.ByteString -> Either String a) -> FieldParser a
+parsePgType requiredTypeOids fieldValueParser =
   FieldParser
     { fieldValueParser = \_oid -> fieldValueParser,
-      fieldFmt,
       allowedPgTypes = (`elem` requiredTypeOids) . typeOid
     }
 
@@ -506,7 +502,6 @@ instance FromPgField () where
           Just "" -> Right ()
           Just bs -> Left $ "Invalid value '" ++ show bs ++ "' for postgres void type"
           Nothing -> Left "Cannot decode SQL null as the Haskell () type. Use a `Maybe ()`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (== voidOid) . typeOid
       }
 
@@ -518,7 +513,6 @@ instance FromPgField Int where
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` haskellIntOids) . typeOid
       }
 
@@ -530,7 +524,6 @@ instance FromPgField Int16 where
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int16 type. Use a `Maybe Int16`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (== int2Oid) . typeOid
       }
 
@@ -542,7 +535,6 @@ instance FromPgField Int32 where
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int32 type. Use a `Maybe Int32`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [int2Oid, int4Oid]) . typeOid
       }
 
@@ -554,7 +546,6 @@ instance FromPgField Int64 where
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int64 type. Use a `Maybe Int64`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [int2Oid, int4Oid, int8Oid]) . typeOid
       }
 
@@ -572,7 +563,6 @@ instance FromPgField Integer where
                         Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
                       Left err -> Left err
                 Nothing -> Left "Cannot decode SQL null as the Haskell Integer type. Use a `Maybe Integer`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [int8Oid, numericOid, int4Oid, int2Oid]) . typeOid
       }
 
@@ -583,12 +573,11 @@ instance FromPgField Oid where
           -- Oids are just int4
           Just bs -> Oid <$> binaryIntDecoder int4Oid bs
           Nothing -> Left "Cannot decode SQL null as the Haskell Oid type. Use a `Maybe Oid`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (== oidOid) . typeOid
       }
 
 instance FromPgField Float where
-  fieldParser = parsePgType BinaryFmt [float4Oid] $ \case
+  fieldParser = parsePgType [float4Oid] $ \case
     Just bs -> Right $ binaryFloat4Decoder bs
     Nothing -> Left "Cannot decode SQL null as the Haskell Float type. Use a `Maybe Float`"
 
@@ -602,7 +591,6 @@ instance FromPgField Double where
            in \case
                 Just bs -> Right $ decoder bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [float8Oid, float4Oid]) . typeOid
       }
 
@@ -618,7 +606,6 @@ anyTypeDecoder =
     { fieldValueParser = \_oid -> \case
         Nothing -> Left "Cannot decode SQL null as the `anyTypeDecoder`."
         Just bs -> Right bs,
-      fieldFmt = BinaryFmt,
       allowedPgTypes = const True
     }
 
@@ -653,7 +640,6 @@ instance FromPgField Scientific where
                     then Parsec.parseOnly (scientificDecoder False <* Parsec.endOfInput) bs
                     else flip scientific 0 . fromIntegral <$> decodeInt bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . typeOid
       }
 
@@ -661,7 +647,7 @@ binaryTrue :: LBS.ByteString
 binaryTrue = Cereal.encodeLazy True
 
 instance FromPgField Bool where
-  fieldParser = parsePgType BinaryFmt [boolOid] $ \case
+  fieldParser = parsePgType [boolOid] $ \case
     Just bs -> Right $ bs == binaryTrue
     Nothing -> Left "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
 
@@ -681,41 +667,40 @@ instance FromPgField Char where
                           Left err -> Left err
                           Right t -> if Text.length t > 1 then Left "Cannot parse text with more than one character into a Haskell Char type." else Right (Text.head t)
                     Nothing -> Left "Cannot decode SQL null as the Haskell Char type. Use a `Maybe Char`",
-            fieldFmt = BinaryFmt,
             -- TODO: All the varchar types?
             allowedPgTypes = (`elem` [charOid, textOid]) . typeOid
           }
 
 instance FromPgField ByteString where
-  fieldParser = parsePgType BinaryFmt [byteaOid] $ \case
+  fieldParser = parsePgType [byteaOid] $ \case
     Just bs -> Right $ LBS.toStrict bs
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
 
 instance FromPgField LBS.ByteString where
-  fieldParser = parsePgType BinaryFmt [byteaOid] $ \case
+  fieldParser = parsePgType [byteaOid] $ \case
     Just bs -> Right bs
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
 
 instance FromPgField Text where
-  fieldParser = parsePgType BinaryFmt [textOid, varcharOid, nameOid] $ \case
+  fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
     Just bs -> Right $ decodeUtf8 $ LBS.toStrict bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField LT.Text where
-  fieldParser = parsePgType BinaryFmt [textOid, varcharOid, nameOid] $ \case
+  fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
     Just bs -> Right $ LT.decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField String where
-  fieldParser = parsePgType BinaryFmt [textOid, varcharOid, nameOid] $ \case
+  fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
     Just bs -> Right $ Text.unpack $ decodeUtf8 $ LBS.toStrict bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
 
 instance FromPgField UTCTime where
-  fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
+  fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decodeLazy @Int64 bs
@@ -725,7 +710,7 @@ instance FromPgField UTCTime where
     Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
 
 instance FromPgField (Unbounded UTCTime) where
-  fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
+  fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decodeLazy @Int64 bs
@@ -742,7 +727,7 @@ instance FromPgField (Unbounded UTCTime) where
     Nothing -> Left "Cannot decode SQL null as the Haskell (Unbounded UTCTime) type. Use a `Maybe (Unbounded UTCTime)`"
 
 instance FromPgField ZonedTime where
-  fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
+  fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decodeLazy @Int64 bs
@@ -752,7 +737,7 @@ instance FromPgField ZonedTime where
     Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
 
 instance FromPgField (Unbounded ZonedTime) where
-  fieldParser = parsePgType BinaryFmt [timestamptzOid] $ \case
+  fieldParser = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decodeLazy @Int64 bs
@@ -769,7 +754,7 @@ instance FromPgField (Unbounded ZonedTime) where
     Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
 
 instance FromPgField Day where
-  fieldParser = parsePgType BinaryFmt [dateOid] $ \case
+  fieldParser = parsePgType [dateOid] $ \case
     Just bs -> do
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
@@ -779,7 +764,7 @@ instance FromPgField Day where
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
 
 instance FromPgField (Unbounded Day) where
-  fieldParser = parsePgType BinaryFmt [dateOid] $ \case
+  fieldParser = parsePgType [dateOid] $ \case
     Just bs -> do
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
@@ -796,7 +781,7 @@ instance FromPgField (Unbounded Day) where
     Nothing -> Left "Cannot decode SQL null as the Haskell (Unbounded Day) type. Use a `Maybe (Unbounded Day)`"
 
 instance FromPgField CalendarDiffTime where
-  fieldParser = parsePgType BinaryFmt [intervalOid] $ \case
+  fieldParser = parsePgType [intervalOid] $ \case
     Just bs -> do
       (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decodeLazy bs
       Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
@@ -814,7 +799,6 @@ instance FromPgField Aeson.Value where
                     Just d -> Right d
                     Nothing -> Left "Bug in HPgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
                   Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
-        fieldFmt = BinaryFmt,
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
 
@@ -828,7 +812,6 @@ nullableField FieldParser {..} =
          in \case
               Nothing -> Right Nothing
               justBs -> Just <$> origFieldValueParser justBs,
-      fieldFmt,
       allowedPgTypes
     }
 
@@ -845,7 +828,6 @@ arrayField !elementParser =
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
               Just bs -> Parsec.parseOnly arrayFieldParser bs,
-      fieldFmt = BinaryFmt,
       allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
     }
   where
@@ -882,7 +864,6 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector (Vector a))`"
                 Just bs -> Parsec.parseOnly arrayFieldParser bs,
-        fieldFmt = BinaryFmt,
         allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
       }
     where

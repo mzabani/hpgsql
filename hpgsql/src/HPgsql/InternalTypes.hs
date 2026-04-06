@@ -55,7 +55,7 @@ import Data.Word (Word16)
 
 #endif
 import HPgsql.Query (SingleQuery (..))
-import HPgsql.TypeInfo (EncodingContext (..), Format (..), Oid (..), TransactionStatus (..))
+import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
 import System.Mem.Weak (Weak)
 
@@ -271,7 +271,7 @@ data HPgConnection = HPgConnection
 instance Eq HPgConnection where
   conn1 == conn2 = socket conn1 == socket conn2
 
-data Pipeline a = Pipeline [(SingleQuery, Maybe [Format])] (HPgConnection -> [QueryId] -> a)
+data Pipeline a = Pipeline [(SingleQuery, Maybe Int)] (HPgConnection -> [QueryId] -> a)
   deriving stock (Functor)
 
 instance Applicative Pipeline where
