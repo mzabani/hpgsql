@@ -38,6 +38,7 @@ import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Debug.Trace
 import Prelude hiding (takeWhile)
 
 newtype SqlStatement = SqlStatement {statementBlocks :: [BlockOrNotBlock]}
@@ -50,6 +51,7 @@ data BlockOrNotBlock = Block !Text | NotBlock !Text | DollarNumberedArg !Int | Q
   deriving stock (Eq, Show)
 
 data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs
+  deriving stock (Show)
 
 -- | Parses one or more SQL statements (separated by semi-colons).
 parseSql :: ParsingOpts -> Text -> NonEmpty SqlStatement
@@ -67,36 +69,16 @@ sqlStatementParser :: ParsingOpts -> Parser [BlockOrNotBlock]
 sqlStatementParser popts = do
   t1 <-
     takeWhile
-      (\c -> not (isPossibleBlockStartingChar c) && c /= ';' && c /= '$' && c /= '?')
-  -- We treat $ especially to avoid detecting dollar quoted strings as query
-  -- arguments. Dollar-quoted strings cannot begin with a digit.
-  -- We also treat '??' as an escaped question mark if question marks are acceptable
-  -- as query argument placeholders.
-  mc <- case popts of
-    AcceptQuestionMarksAsQueryArgs -> Right <$> peekChar
-    AcceptOnlyDollarNumberedArgs -> Left <$> (char '$' *> Parsec.decimal) <|> Right <$> peekChar
+      (\c -> not (isPossibleBlockStartingChar c) && c /= ';')
+  mc <- peekChar
   case mc of
-    Right Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [NotBlock t1]
-    Right (Just '?') -> do
-      void $ char '?'
-      questionMark <- case popts of
-        AcceptOnlyDollarNumberedArgs -> pure $ NotBlock "?"
-        AcceptQuestionMarksAsQueryArgs -> do
-          escapedQuestionMark <- Just <$> char '?' <|> pure Nothing
-          case escapedQuestionMark of
-            Just _ -> pure $ NotBlock "?"
-            Nothing -> pure QuestionMarkArg
-      t2 <- sqlStatementParser popts <|> ([] <$ endOfInput)
-      pure $ NotBlock t1 : questionMark : t2
-    Left argNum -> do
-      t2 <- sqlStatementParser popts <|> ([] <$ endOfInput)
-      pure $ NotBlock t1 : DollarNumberedArg argNum : t2
-    Right (Just ';') -> do
+    Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [NotBlock t1]
+    Just ';' -> do
       void $ char ';'
       -- We take any comments followed by EOF here
       cws <- optional $ commentOrSpaceParser True <* endOfInput
       pure $ [NotBlock t1, NotBlock ";"] ++ fromMaybe [] cws
-    Right (Just _) -> do
+    Just _ -> do
       t2 <- many1 (blockParser popts) <|> (\pt -> [[NotBlock pt]]) <$> Parsec.take 1
       -- After reading blocks or just a char, we still need to find a semi-colon
       -- or EOF to get a statement from start to finish!
@@ -139,7 +121,17 @@ blockParser popts =
   (: []) <$> parseStdConformingString
     <|> parenthesisedExpression popts
     <|> (: []) <$> cStyleComment
+    <|> (: [])
+      <$> ( case popts of
+              AcceptOnlyDollarNumberedArgs -> dollarNumberedQueryArgParser
+              _ -> fail "No dollar-numbered query args"
+          )
     <|> (: []) <$> dollarStringParser
+    <|> (: [])
+      <$> ( case popts of
+              AcceptQuestionMarksAsQueryArgs -> questionMarkQueryArgParser
+              _ -> fail "No question marks as query args"
+          )
     <|> (: []) <$> doubleDashComment
     <|> (: []) <$> doubleQuotedIdentifier
     <|> (: []) <$> cStyleEscapedString
@@ -162,6 +154,21 @@ isPossibleBlockStartingChar c =
       == '\''
     || c
       == 'E'
+    || c
+      == '?'
+
+dollarNumberedQueryArgParser :: Parser BlockOrNotBlock
+dollarNumberedQueryArgParser = do
+  void $ char '$'
+  DollarNumberedArg <$> Parsec.decimal
+
+questionMarkQueryArgParser :: Parser BlockOrNotBlock
+questionMarkQueryArgParser = do
+  void $ char '?'
+  escapedQuestionMark <- optional $ char '?'
+  case escapedQuestionMark of
+    Just _ -> pure $ NotBlock "?"
+    Nothing -> pure QuestionMarkArg
 
 dollarStringParser :: Parser BlockOrNotBlock
 dollarStringParser = fmap Block $ do
@@ -227,35 +234,15 @@ parenthesisedExpression popts = do
     insideParenParser = do
       more <-
         takeWhile
-          (\c -> not (isPossibleBlockStartingChar c) && c /= ')' && c /= '$' && c /= '?')
-      -- We treat $ especially to avoid detecting dollar quoted strings as query
-      -- arguments. Dollar-quoted strings cannot begin with a digit.
-      -- We also treat '??' as an escaped question mark if question marks are acceptable
-      -- as query argument placeholders.
-      nextChar <- case popts of
-        AcceptQuestionMarksAsQueryArgs -> Right <$> peekChar
-        AcceptOnlyDollarNumberedArgs -> Left <$> (char '$' *> Parsec.decimal) <|> Right <$> peekChar
+          (\c -> not (isPossibleBlockStartingChar c) && c /= ')')
+      nextChar <- peekChar
       case nextChar of
-        Right Nothing -> pure [NotBlock more] -- Be gentle with EOF
-        Right (Just ')') -> do
+        Nothing -> pure [NotBlock more] -- Be gentle with EOF
+        Just ')' -> do
           closeParen <- string ")"
           pure [NotBlock more, NotBlock closeParen]
-        Right (Just '?') -> do
-          void $ char '?'
-          questionMark <- case popts of
-            AcceptOnlyDollarNumberedArgs -> pure $ NotBlock "?"
-            AcceptQuestionMarksAsQueryArgs -> do
-              escapedQuestionMark <- Just <$> char '?' <|> pure Nothing
-              case escapedQuestionMark of
-                Just _ -> pure $ NotBlock "?"
-                Nothing -> pure QuestionMarkArg
-          rest <- insideParenParser -- We're still inside an openParen
-          pure $ NotBlock more : questionMark : rest
-        Left argNum -> do
-          rest <- insideParenParser -- We're still inside an openParen
-          pure $ NotBlock more : DollarNumberedArg argNum : rest
-        Right (Just _) -> do
-          blocksOrOtherwise <- (blockParser popts) <|> (\t -> [NotBlock t]) <$> Parsec.take 1
+        Just _ -> do
+          blocksOrOtherwise <- blockParser popts <|> (\t -> [NotBlock t]) <$> Parsec.take 1
           rest <- insideParenParser -- We're still inside an openParen after parsing a block or a character
           pure $ NotBlock more : blocksOrOtherwise ++ rest
 

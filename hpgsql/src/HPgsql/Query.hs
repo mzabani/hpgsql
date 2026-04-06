@@ -114,9 +114,9 @@ instance Semigroup Query where
      in Query {queryString = q1.queryString <> remappedQ2, queryParams = q1.queryParams <> q2.queryParams}
 
 breakQueryIntoStatements :: Query -> NonEmpty SingleQuery
-breakQueryIntoStatements qry@Query {queryString, queryParams} = toEmptyQueryIfNecessary $ go queryString queryParams
+breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams = allQueryParams} = toEmptyQueryIfNecessary $ go fullQueryString allQueryParams
   where
-    toEmptyQueryIfNecessary [] = NE.singleton $ SingleQuery {queryString = "", queryParams}
+    toEmptyQueryIfNecessary [] = NE.singleton $ SingleQuery {queryString = "", queryParams = allQueryParams}
     toEmptyQueryIfNecessary (x : xs) = x :| xs
     isLastFragmentOfAStatement = \case
       FragmentOfStaticSql t -> ";" `BS.isSuffixOf` t -- TODO: A proper ctor for semi-colons separating statements
@@ -126,7 +126,7 @@ breakQueryIntoStatements qry@Query {queryString, queryParams} = toEmptyQueryIfNe
       FragmentOfStaticSql t -> t
     go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)] -> [SingleQuery]
     go [] [] = []
-    go [] _ = error $ "HPgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length queryParams) ++ " and query is " ++ show qry
+    go [] _ = error $ "HPgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
     go frags params =
       let (stmtFrags, nextFrags) = case List.break isLastFragmentOfAStatement frags of
             (firstStmts, []) -> (firstStmts, [])
@@ -141,12 +141,12 @@ intToBs = encodeUtf8 . Text.pack . show
 
 instance IsString Query where
   fromString s =
-    -- For a string to be a `Query` all by itself, it means it can't have query
-    -- arguments. Users should use the quasiquoter or `mkQuery` for query arguments.
     let statements = parseSql AcceptOnlyDollarNumberedArgs (Text.pack s)
         stmtToSingleQueryFrag :: SqlStatement -> SingleQueryFragment
         stmtToSingleQueryFrag = FragmentOfStaticSql . encodeUtf8 . sqlStatementText
-     in Query {queryString = NE.toList $ fmap stmtToSingleQueryFrag statements, queryParams = []}
+     in -- For a string to be a `Query` all by itself, it means it can't have query
+        -- arguments. Users should use the quasiquoter or `mkQuery` for query arguments.
+        Query {queryString = NE.toList $ fmap stmtToSingleQueryFrag statements, queryParams = []}
 
 -- | Takes in a query string with query arguments as question marks (NOT dollar-numbered arguments).
 -- Example:
@@ -159,7 +159,7 @@ mkQueryInternal queryTemplate allParams =
 
 mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))] -> Query
 mkQueryInternalFromSqlStatements statements allParams
-  | any hasQuestionMarkArg statements && any hasDollarNumberedArg statements = error $ "A query cannot contain both question marks and dollar-numbered arguments. If you are using postgres operators that contain question marks, escape them with a double question mark, e.g. SELECT $1 ?? 'a'. Query: " ++ show (mconcat $ map sqlStatementText $ NE.toList statements)
+  | any hasQuestionMarkArg statements && any hasDollarNumberedArg statements = error $ "A query cannot contain both question marks and dollar-numbered arguments. Query: " ++ show (mconcat $ map sqlStatementText $ NE.toList statements)
   | otherwise =
       let -- \| paramsByIdx has the number of fake query arguments preceding each query argument in the tuple.
           paramsByIdx :: Map Int (Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)), Int)
@@ -180,7 +180,7 @@ mkQueryInternalFromSqlStatements statements allParams
                   Block t -> ((maxArgSoFar, realQueryArgCount), FragmentOfStaticSql $ encodeUtf8 t)
                   NotBlock t -> ((maxArgSoFar, realQueryArgCount), FragmentOfStaticSql $ encodeUtf8 t)
                   DollarNumberedArg n -> case Map.lookup n paramsByIdx of
-                    Nothing -> error $ "Could not find query argument of number " ++ show n ++ " in query " ++ show statements
+                    Nothing -> error $ "Could not find query argument of number " ++ show n ++ " in query " ++ show (mconcat $ map sqlStatementText $ NE.toList statements)
                     -- The case below is when hpgsql-simple-compat uses e.g. an Identifier
                     -- as a query argument
                     -- Think about:
@@ -192,7 +192,7 @@ mkQueryInternalFromSqlStatements statements allParams
                     Just (Right _, fakeArgsBefore) -> ((0, 0), QueryArgumentPlaceHolder $ n - fakeArgsBefore)
                   QuestionMarkArg ->
                     case Map.lookup (maxArgSoFar + 1) paramsByIdx of
-                      Nothing -> error $ "Could not find query argument of number " ++ show (maxArgSoFar + 1) ++ " in query " ++ show statements
+                      Nothing -> error $ "Could not find query argument of number " ++ show (maxArgSoFar + 1) ++ " in query. Total args supplied is " ++ show (length allParams) ++ ". Query is " ++ show (mconcat $ map sqlStatementText $ NE.toList statements)
                       -- The case below is when hpgsql-simple-compat uses e.g. an Identifier
                       -- as a query argument
                       Just (Left notTrueQueryArg, _) -> ((maxArgSoFar + 1, realQueryArgCount), FragmentOfStaticSql notTrueQueryArg)

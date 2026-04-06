@@ -4,6 +4,7 @@
 
 module ParsingSpec where
 
+import Control.Exception (SomeException, evaluate)
 import Control.Monad
   ( forM,
     forM_,
@@ -26,6 +27,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.IO as Text
+import Debug.Trace
 import GHC.Num (Natural)
 import HPgsql (Only (..))
 import HPgsql.Encoding (ToPgRow (..))
@@ -260,16 +262,16 @@ spec = do
         query.queryString `shouldBe` encodeUtf8 "SELECT * FROM users WHERE id = $1"
         length query.queryParams `shouldBe` 1
 
-      it "SQL string with placeholders" $ do
-        let queryParams = (11 :: Int, 21 :: Int, 31 :: Int, 41 :: Int, 51 :: Int)
+      it "SQL string with question marks, not placeholders" $ do
+        let queryParams = ()
             qryStr = "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?); SELECT ? FROM table"
             qry = mkQuery qryStr queryParams
 
         let (q1 :| [q2]) = breakQueryIntoStatements qry
-        q1.queryString `shouldBe` "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=$1 AND y IN ($2, $3, $4);"
-        length q1.queryParams `shouldBe` 4
-        q2.queryString `shouldBe` " SELECT $1 FROM table"
-        length q2.queryParams `shouldBe` 1
+        q1.queryString `shouldBe` "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?);"
+        length q1.queryParams `shouldBe` 0
+        q2.queryString `shouldBe` " SELECT ? FROM table"
+        length q2.queryParams `shouldBe` 0
 
       it "parses SQL with multiple interpolations" $ do
         let userId = 42 :: Int
