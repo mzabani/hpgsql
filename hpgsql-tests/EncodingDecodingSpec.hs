@@ -158,7 +158,8 @@ dateAndTimestampTzRoundTrip conn = hedgehog $ do
       rowRes = (date, date, UTCTime (fromGregorian 1900 1 1) 13, UTCTime (fromGregorian 1993 4 15) (11 * 3600 + 49 * 60 + 55 + 0.5), timetz, someCalendarDiffTime, Finite timetz, Finite date, CalendarDiffTime 0 0)
   -- TODO: If we change the server's timezone, does this still round-trip?
   annotateShow someNominalDiffTime
-  res <- liftIO $ queryWith rowParser conn (mkQuery ("SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4, $5, $6, $7 - INTERVAL '" <> fromString (show someNominalDiffTimeMicros) <> " microseconds'") row)
+  let (nomSecs, nomRemMicros) = someNominalDiffTimeMicros `quotRem` 1_000_000
+  res <- liftIO $ queryWith rowParser conn (mkQuery ("SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4, $5, $6, $7 - INTERVAL '" <> fromString (show nomSecs) <> " seconds " <> fromString (show nomRemMicros) <> " microseconds'") row)
   res === [rowRes]
 
 numericValuesRoundTrip :: HPgConnection -> PropertyT IO ()
@@ -275,13 +276,15 @@ dateAndTimestampTextDecoding conn = hedgehog $ do
       someIntervalTime :: NominalDiffTime = realToFrac $ picosecondsToDiffTime (someIntervalTimeMicros * 1_000_000)
       someCalendarDiffTime = CalendarDiffTime someNumberOfMonths someIntervalTime
       someNominalDiffTime :: NominalDiffTime = realToFrac $ picosecondsToDiffTime (someNominalDiffTimeMicros * 1_000_000)
+      (intervalSecs, intervalRemMicros) = someIntervalTimeMicros `quotRem` 1_000_000
+      (nomSecs, nomRemMicros) = someNominalDiffTimeMicros `quotRem` 1_000_000
   res <- liftIO $ queryWith rowParser conn
     (fromString $ "SELECT '" <> iso8601Show date <> "'::date"
               <> ", '" <> iso8601Show timetz <> "'::timestamptz"
-              <> ", '" <> show someNumberOfMonths <> " months " <> show someIntervalTimeMicros <> " microseconds'::interval"
+              <> ", '" <> show someNumberOfMonths <> " months " <> show intervalSecs <> " seconds " <> show intervalRemMicros <> " microseconds'::interval"
               <> ", '" <> iso8601Show timetz <> "'::timestamptz"
               <> ", '" <> iso8601Show date <> "'::date"
-              <> ", '" <> show someNominalDiffTimeMicros <> " microseconds'::interval"
+              <> ", '" <> show nomSecs <> " seconds " <> show nomRemMicros <> " microseconds'::interval"
     )
   res === [(date, timetz, someCalendarDiffTime, Finite timetz, Finite date, CalendarDiffTime 0 someNominalDiffTime)]
 
