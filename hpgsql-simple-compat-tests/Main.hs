@@ -32,7 +32,7 @@ import Database.PostgreSQL.Simple.Copy
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes
 import qualified Database.PostgreSQL.Simple.Transaction as ST
-import Database.PostgreSQL.Simple.Types (Query (..))
+import Database.PostgreSQL.Simple.Types (Identifier (..), Query (..))
 import Exception (testExceptions)
 import Notify
 import Serializable
@@ -51,7 +51,11 @@ tests env =
       -- Some files for the tests below have been removed
       -- to make hpgsql-simple-compat simply compile.
       -- We should bring them back little by little.
-      [ testBytea,
+      [ -- This first test is added to test hpgsql query generation
+        -- with Identifiers, since they're not truly query arguments and
+        -- so complicate query generation code a bit.
+        testCase "Query generation with identifiers" . testQueryGenWithIdents,
+        testBytea,
         testCase "ExecuteMany" . testExecuteMany,
         -- testCase "Fold"                 . testFold
         testCase "Notify" . testNotify,
@@ -101,6 +105,15 @@ testBytea TestEnv {..} =
       assertBool "SQL -> Haskell conversion altered the string" $ bs == r
 
     doubleUp = concatMap (\x -> [x, x])
+
+testQueryGenWithIdents :: TestEnv -> Assertion
+testQueryGenWithIdents TestEnv {..} = do
+  res <- query conn "SELECT ? AS ?, ? AS ?, ? AS ?, ?, ?" (1 :: Int, Identifier "col1", 37 :: Int, Identifier "COL2", (-5) :: Int, Identifier "CoL3", "abc" :: String, True)
+  res @?= [(1 :: Int, 37 :: Int, (-5) :: Int, "abc" :: String, True)]
+
+  -- Dollar-numbered query arguments
+  res2 <- query conn "SELECT $1 AS $2, $3 AS $4, $1 AS $4, $5, $1" (1 :: Int, Identifier "col1", 37 :: Int, Identifier "COL2", True)
+  res2 @?= [(1 :: Int, 37 :: Int, 1 :: Int, True, 1 :: Int)]
 
 testExecuteMany :: TestEnv -> Assertion
 testExecuteMany TestEnv {..} = do
