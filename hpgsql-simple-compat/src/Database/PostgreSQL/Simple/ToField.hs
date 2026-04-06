@@ -45,11 +45,12 @@ import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
+import Data.Vector (Vector)
 import Database.PostgreSQL.Simple.Types (Binary (..), Identifier (..), In (..))
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid)
-import HPgsql.Types (Aeson)
+import HPgsql.Types (Aeson, PGArray)
 
 -- | How to render an element when substituting it into a query.
 data Action
@@ -147,11 +148,9 @@ instance (ToField a) => ToField (Maybe a) where
       QueryArgument enc -> QueryArgument enc
       _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"
 
--- TODO this instance
--- instance (ToField a) => ToField (Vector a) where
---   toField v
---     | Vector.length v == 0 = QueryArgument
---     | otherwise =
+instance (ToPgField a) => ToField (Vector a)
+
+instance (ToPgField a) => ToField (PGArray a)
 
 instance ToField (Binary ByteString)
 
