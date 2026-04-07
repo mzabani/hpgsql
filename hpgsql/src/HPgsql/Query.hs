@@ -126,6 +126,7 @@ breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams =
       FragmentOfStaticSql t -> t
     go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)] -> [SingleQuery]
     go [] [] = []
+    -- go [] _ = []
     go [] _ = error $ "HPgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
     go frags params =
       let (stmtFrags, nextFrags) = case List.break isLastFragmentOfAStatement frags of
@@ -152,10 +153,38 @@ instance IsString Query where
 -- Example:
 -- - "SELECT * FROM table WHERE col1=? AND col2=?"
 -- You should really use `mkQuery` instead of this. This is here only for hpgsql-simple-compat.
-mkQueryInternal :: ByteString -> [Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))] -> Query
+mkQueryInternal :: ByteString -> [[Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))]] -> Query
 mkQueryInternal queryTemplate allParams =
   let statements = parseSql AcceptQuestionMarksAsQueryArgs (decodeUtf8 queryTemplate)
-   in mkQueryInternalFromSqlStatements statements allParams
+      paramsByIdx = Map.fromList $ zip [(1 :: Int) ..] allParams
+      (_, queryFrags) =
+        List.mapAccumL
+          ( \(!maxArgSoFar, !maxRealArgSoFar) sqlPiece -> case sqlPiece of
+              Block t -> ((maxArgSoFar, maxRealArgSoFar), [FragmentOfStaticSql $ encodeUtf8 t])
+              NotBlock t -> ((maxArgSoFar, maxRealArgSoFar), [FragmentOfStaticSql $ encodeUtf8 t])
+              DollarNumberedArg _ ->
+                error $ "Bug in HPgsql: parsed a DollarNumberedArg in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
+              QuestionMarkArg ->
+                let thisParamNum = maxArgSoFar + 1
+                 in case Map.lookup thisParamNum paramsByIdx of
+                      Nothing -> error $ "Could not find query argument of number " <> show thisParamNum <> " for query with " <> show (length allParams) <> " arguments supplied. Did you supply an insufficient amount of query arguments? Query is " ++ show (mconcat $ map sqlStatementText $ NE.toList statements)
+                      Just [] -> error "ToPgField instance produced an empty list of Actions"
+                      Just args ->
+                        let (newMaxRealArg, frags) =
+                              List.mapAccumL
+                                ( \(!newArgNum) arg -> case arg of
+                                    Left fakeArg ->
+                                      (newArgNum, FragmentOfStaticSql fakeArg)
+                                    Right _properArg ->
+                                      (newArgNum + 1, QueryArgumentPlaceHolder $ newArgNum + 1)
+                                )
+                                maxRealArgSoFar
+                                args
+                         in ((thisParamNum, newMaxRealArg), frags)
+          )
+          (0, 0)
+          (concatMap statementBlocks $ NE.toList statements)
+   in Query {queryString = mconcat queryFrags, queryParams = concatMap rights allParams}
 
 mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))] -> Query
 mkQueryInternalFromSqlStatements statements allParams

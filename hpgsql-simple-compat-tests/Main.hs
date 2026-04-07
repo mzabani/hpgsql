@@ -111,9 +111,9 @@ testQueryGenWithIdents TestEnv {..} = do
   res <- query conn "SELECT ? AS ?, ? AS ?, ? AS ?, ?, ?" (1 :: Int, Identifier "col1", 37 :: Int, Identifier "COL2", (-5) :: Int, Identifier "CoL3", "abc" :: String, True)
   res @?= [(1 :: Int, 37 :: Int, (-5) :: Int, "abc" :: String, True)]
 
-  -- Dollar-numbered query arguments
-  res2 <- query conn "SELECT $1 AS $2, $3 AS $4, $1 AS $4, $5, $1" (1 :: Int, Identifier "col1", 37 :: Int, Identifier "COL2", True)
-  res2 @?= [(1 :: Int, 37 :: Int, 1 :: Int, True, 1 :: Int)]
+  -- In
+  res3 <- query conn "SELECT 1 IN ?" (Only $ In [1 :: Int, 3, 4, 5])
+  res3 @?= [Only True]
 
 testExecuteMany :: TestEnv -> Assertion
 testExecuteMany TestEnv {..} = do

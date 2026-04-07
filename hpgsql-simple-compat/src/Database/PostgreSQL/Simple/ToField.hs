@@ -47,6 +47,7 @@ import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Simple.Types (Binary (..), Identifier (..), In (..))
+import Debug.Trace
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid)
@@ -133,7 +134,7 @@ instance ToField Aeson.Value
 
 instance (ToField a) => ToField (In [a]) where
   toField (In []) = Plain "(NULL)"
-  toField (In xs) = Many $ Plain "(" : (List.intersperse (Plain ",") (map toField xs) ++ [Plain ")"])
+  toField (In xs) = Many $ Plain "(" : List.intersperse (Plain ",") (map toField xs) ++ [Plain ")"]
 
 instance ToField (Unbounded Day)
 
