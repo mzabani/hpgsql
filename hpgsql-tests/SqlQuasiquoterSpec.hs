@@ -203,14 +203,14 @@ genMixedQuery =
         z <- genInt
         w <- genInt
         let inner = mkQuery "$1, $2" (y, z)
-        pure [sql|SELECT #{x}, ^{inner}, #{w};|],
+        pure [sql|SELECT #{x}, '#{x}', ^{inner}, (#{w});|],
       do
         x <- genInt
         y <- genInt
         z <- genInt
         let inner1 = mkQuery "$1" (Only y)
             inner2 = mkQuery "$1" (Only z)
-        pure [sql|SELECT #{x}, ^{inner1}, ^{inner2};|]
+        pure [sql|SELECT '#{x}', '^{inner1}', (#{x}), (^{inner1}), ^{inner2};|]
     ]
 
 -- Templates --
