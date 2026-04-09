@@ -174,6 +174,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       Socket.withFdSocket sock Socket.getNonBlock >>= \case
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
+      socketIsClosed <- newMVar False
       recvBuffer <- newMVar mempty
       sendBuffer <- newMVar mempty
       encodingContext <- newMVar (EncodingContext builtinPgTypesMap)
@@ -187,7 +188,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
               currentPipeline = [],
               notificationsReceived = notifQueue
             }
-      let hpgConnPartialDoNotReturn = HPgConnection sock recvBuffer sendBuffer originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
+      let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
         CancelNotConnect cancelRequest _ -> do
           -- TODO: We need to store the IP address of the server and reuse that,
@@ -311,7 +312,7 @@ beforeReturningToPool conn@HPgConnection {internalConnectionState} mCleanOpts = 
 -- | Closes the connection with postgres. Do not use this in exception handlers; use `closeForcefully`
 -- instead.
 closeGracefully :: HPgConnection -> IO ()
-closeGracefully conn@(HPgConnection {socket}) = flip finally (Socket.close socket) $ do
+closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finally (Socket.close socket >> (modifyMVar_ conn.socketClosed $ const $ pure True)) $ do
   withControlMsgsLock
     conn
     (const $ pure ())
@@ -326,7 +327,14 @@ closeGracefully conn@(HPgConnection {socket}) = flip finally (Socket.close socke
 -- Use this if you need to close the connection in exception handlers or
 -- if you received an irrecoverable HPgsql exception.
 closeForcefully :: HPgConnection -> IO ()
-closeForcefully (HPgConnection {socket}) = Socket.close socket
+closeForcefully conn@(HPgConnection {socket}) = whenNotClosed conn $ do
+  Socket.close socket
+  modifyMVar_ conn.socketClosed $ const $ pure True
+
+whenNotClosed :: HPgConnection -> IO () -> IO ()
+whenNotClosed conn f = do
+  isClosed <- readMVar conn.socketClosed
+  unless isClosed f
 
 withConnection :: ConnString -> DiffTime -> (HPgConnection -> IO a) -> IO a
 withConnection connstr conntimeout f = bracketOnError (connect connstr conntimeout) closeForcefully $ \conn -> do

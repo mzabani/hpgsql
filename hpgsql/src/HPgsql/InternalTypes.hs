@@ -256,6 +256,7 @@ data InternalConnectionState = InternalConnectionState
 
 data HPgConnection = HPgConnection
   { socket :: !Socket,
+    socketClosed :: !(MVar Bool),
     recvBuffer :: !(MVar LBS.ByteString),
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     originalConnStr :: !ConnString,
