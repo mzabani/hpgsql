@@ -108,12 +108,15 @@ data SqlError = SqlError
     sqlExecStatus :: ExecStatus,
     sqlErrorMsg :: ByteString,
     sqlErrorDetail :: ByteString,
-    sqlErrorHint :: ByteString
+    sqlErrorHint :: ByteString,
+    -- | This is a new field present only in hpgsql-simple-compat,
+    -- to help debugging the source of errors.
+    sqlStatement :: ByteString
   }
   deriving (Eq, Show, Typeable)
 
 fatalError :: ByteString -> SqlError
-fatalError msg = SqlError "" FatalError msg "" ""
+fatalError msg = SqlError "" FatalError msg "" "" ""
 
 instance Exception SqlError where
   toException = postgresqlExceptionToException
@@ -318,21 +321,22 @@ oid2int (Oid x) = fromIntegral x
 -- as well.
 postgresErrorToSqlError :: SomeException -> Maybe SqlError
 postgresErrorToSqlError e
-  | Just (sqlEx :: PostgresError) <- fromException e = Just $ mkSqlError sqlEx.pgErrorDetails
+  | Just (sqlEx :: PostgresError) <- fromException e = Just $ mkSqlError sqlEx
   | Just IrrecoverableHpgsqlError {innerException} <- fromException e =
       case fromException <$> innerException of
-        Just (Just (sqlEx :: PostgresError)) -> Just $ mkSqlError sqlEx.pgErrorDetails
+        Just (Just (sqlEx :: PostgresError)) -> Just $ mkSqlError sqlEx
         _ -> Nothing
   | otherwise = Nothing
   where
-    mkSqlError pgErrorDetails =
+    mkSqlError PostgresError {pgErrorDetails, failedStatement} =
       let lookupDetail key = maybe "" LBS.toStrict (Map.lookup key pgErrorDetails)
        in SqlError
             { sqlState = lookupDetail ErrorCode,
               sqlExecStatus = FatalError, -- TODO: lookupDetail ErrorSeverity,
               sqlErrorMsg = lookupDetail ErrorHumanReadableMsg,
               sqlErrorDetail = lookupDetail ErrorDetail,
-              sqlErrorHint = lookupDetail ErrorHint
+              sqlErrorHint = lookupDetail ErrorHint,
+              sqlStatement = failedStatement
             }
 
 -- | Wraps an IO action to rethrow HPgsql's 'PostgresError' as postgresql-simple's 'SqlError'.

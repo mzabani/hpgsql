@@ -1,1 +1,1 @@
-SqlError {sqlState = "22P02", sqlExecStatus = FatalError, sqlErrorMsg = "invalid input syntax for type integer: \"z\"", sqlErrorDetail = "", sqlErrorHint = ""}
+SqlError {sqlState = "22P02", sqlExecStatus = FatalError, sqlErrorMsg = "invalid input syntax for type integer: \"z\"", sqlErrorDetail = "", sqlErrorHint = "", sqlStatement = "COPY copy_unique_constraint_error_test FROM STDIN (FORMAT CSV)"}
