@@ -1,0 +1,1 @@
+SqlError {sqlState = "23505", sqlExecStatus = FatalError, sqlErrorMsg = "duplicate key value violates unique constraint \"copy_unique_constraint_error_test_pkey\"", sqlErrorDetail = "Key (x)=(1) already exists.", sqlErrorHint = ""}

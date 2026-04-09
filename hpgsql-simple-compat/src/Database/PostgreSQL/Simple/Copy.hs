@@ -69,7 +69,7 @@ copy_ conn template = do
   doCopy "Database.PostgreSQL.Simple.Copy.copy_" conn qry
 
 doCopy :: B.ByteString -> Connection -> HPgsql.Query -> IO ()
-doCopy _funcName conn q = do
+doCopy _funcName conn q = mapHpgsqlErrors $ do
   HPgsql.copyStart (hpgConn conn) q
 
 data CopyOutResult
@@ -82,75 +82,6 @@ data CopyOutResult
     CopyOutDone {-# UNPACK #-} !Int64
   deriving (Eq, Typeable, Show)
 
--- -- | Fold over @COPY TO STDOUT@ query passing each copied row to an accumulator
--- --   and calling a post-process at the end. A connection must be in the
--- --   @CopyOut@ state in order to call this function.
--- --
--- --   __Example__
--- --
--- --   > (acc, count) <- foldCopyData conn
--- --   >     (\acc row -> return (row:acc))
--- --   >     (\acc count -> return (acc, count))
--- --   >     []
--- foldCopyData ::
---   -- | Database connection
---   Connection ->
---   -- | Accumulate one row of the result
---   (a -> B.ByteString -> IO a) ->
---   -- | Post-process accumulator with a count of rows
---   (a -> Int64 -> IO b) ->
---   -- | Initial accumulator
---   a ->
---   -- | Result
---   IO b
--- foldCopyData conn f g !acc = do
---   result <- getCopyData conn
---   case result of
---     CopyOutRow row -> f acc row >>= foldCopyData conn f g
---     CopyOutDone count -> g acc count
-
--- | Retrieve some data from a @COPY TO STDOUT@ query.   A connection
---   must be in the @CopyOut@ state in order to call this function.  If this
---   returns a 'CopyOutRow', the connection remains in the @CopyOut@ state,
---   if it returns 'CopyOutDone', then the connection has reverted to the
---   ready state.
-
--- getCopyData :: Connection -> IO CopyOutResult
--- getCopyData conn = withConnection conn loop
---   where
---     funcName = "Database.PostgreSQL.Simple.Copy.getCopyData"
---     loop pqconn = do
--- #if defined(mingw32_HOST_OS)
---       row <- PQ.getCopyData pqconn False
--- #else
---       row <- PQ.getCopyData pqconn True
--- #endif
---       case row of
---         PQ.CopyOutRow rowdata -> return $! CopyOutRow rowdata
---         PQ.CopyOutDone -> CopyOutDone <$> getCopyCommandTag funcName pqconn
--- #if defined(mingw32_HOST_OS)
---         PQ.CopyOutWouldBlock -> do
---             fail (B.unpack funcName ++ ": the impossible happened")
--- #else
---         PQ.CopyOutWouldBlock -> do
---             mfd <- PQ.socket pqconn
---             case mfd of
---               Nothing -> throwIO (fdError funcName)
---               Just fd -> do
---                   threadWaitRead fd
---                   _ <- PQ.consumeInput pqconn
---                   loop pqconn
--- #endif
---         PQ.CopyOutError -> do
---             mmsg <- PQ.errorMessage pqconn
---             throwIO SqlError {
---                           sqlState       = "",
---                           sqlExecStatus  = FatalError,
---                           sqlErrorMsg    = maybe "" id mmsg,
---                           sqlErrorDetail = "",
---                           sqlErrorHint   = funcName
---                         }
-
 -- | Feed some data to a @COPY FROM STDIN@ query.  Note that
 --   the data does not need to represent a single row,  or even an
 --   integral number of rows.  The net result of
@@ -162,7 +93,7 @@ data CopyOutResult
 --   connection remains in the @CopyIn@ state after this function
 --   is called.
 putCopyData :: Connection -> B.ByteString -> IO ()
-putCopyData conn dat = HPgsql.putCopyData (hpgConn conn) dat
+putCopyData conn dat = mapHpgsqlErrors $ HPgsql.putCopyData (hpgConn conn) dat
 
 -- | Completes a @COPY FROM STDIN@ query.  Returns the number of rows
 --   processed.
@@ -172,73 +103,4 @@ putCopyData conn dat = HPgsql.putCopyData (hpgConn conn) dat
 --   connection's state changes back to ready after this function
 --   is called.
 putCopyEnd :: Connection -> IO Int64
-putCopyEnd conn = HPgsql.copyEnd (hpgConn conn)
-
--- | Aborts a @COPY FROM STDIN@ query.  The string parameter is simply
---   an arbitrary error message that may show up in the PostgreSQL
---   server's log.
---
---   A connection must be in the @CopyIn@ state in order to call this
---   function,  otherwise a 'SqlError' exception will result.  The
---   connection's state changes back to ready after this function
---   is called.
--- putCopyError :: Connection -> B.ByteString -> IO ()
--- putCopyError conn err = withConnection conn $ \pqconn -> do
---   doCopyIn funcName (\c -> PQ.putCopyEnd c (Just err)) pqconn
---   consumeResults pqconn
---   where
---     funcName = "Database.PostgreSQL.Simple.Copy.putCopyError"
-
--- doCopyIn ::
---   B.ByteString ->
---   (PQ.Connection -> IO PQ.CopyInResult) ->
---   PQ.Connection ->
---   IO ()
--- doCopyIn funcName action = loop
---   where
---     loop pqconn = do
---       stat <- action pqconn
---       case stat of
---         PQ.CopyInOk -> return ()
---         PQ.CopyInError -> do
---           mmsg <- PQ.errorMessage pqconn
---           throwIO
---             SqlError
---               { sqlState = "",
---                 sqlExecStatus = FatalError,
---                 sqlErrorMsg = maybe "" id mmsg,
---                 sqlErrorDetail = "",
---                 sqlErrorHint = funcName
---               }
---         PQ.CopyInWouldBlock -> do
---           mfd <- PQ.socket pqconn
---           case mfd of
---             Nothing -> throwIO (fdError funcName)
---             Just fd -> do
---               threadWaitWrite fd
---               loop pqconn
--- {-# INLINE doCopyIn #-}
-
--- getCopyCommandTag :: B.ByteString -> PQ.Connection -> IO Int64
--- getCopyCommandTag funcName pqconn = do
---   result <- maybe (fail errCmdStatus) return =<< PQ.getResult pqconn
---   cmdStat <- maybe (fail errCmdStatus) return =<< PQ.cmdStatus result
---   consumeResults pqconn
---   let rowCount = P.string "COPY " *> (P.decimal <* P.endOfInput)
---   case P.parseOnly rowCount cmdStat of
---     Left _ -> do
---       mmsg <- PQ.errorMessage pqconn
---       fail $
---         errCmdStatusFmt
---           ++ maybe "" (\msg -> "\nConnection error: " ++ B.unpack msg) mmsg
---     Right n -> return $! n
---   where
---     errCmdStatus = B.unpack funcName ++ ": failed to fetch command status"
---     errCmdStatusFmt = B.unpack funcName ++ ": failed to parse command status"
-
--- consumeResults :: PQ.Connection -> IO ()
--- consumeResults pqconn = do
---   mres <- PQ.getResult pqconn
---   case mres of
---     Nothing -> return ()
---     Just _ -> consumeResults pqconn
+putCopyEnd conn = mapHpgsqlErrors $ HPgsql.copyEnd (hpgConn conn)

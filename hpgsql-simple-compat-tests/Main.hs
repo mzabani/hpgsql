@@ -527,7 +527,7 @@ goldenTest :: TestName -> IO BL.ByteString -> TestTree
 goldenTest testName =
   goldenVsStringDiff testName diff (resultsDir </> fileName <.> "expected")
   where
-    resultsDir = "results"
+    resultsDir = "hpgsql-simple-compat-tests/results"
     fileName = map normalize testName
     normalize c
       | not (isAlpha c) = '-'

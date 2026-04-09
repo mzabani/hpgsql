@@ -5,5 +5,3 @@ dist-newstyle/
 .direnv/
 cabal.project.local
 
-# Nix build outputs
-results/
