@@ -6,6 +6,9 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
 ------------------------------------------------------------------------------
@@ -136,12 +139,26 @@ instance ToField (Unbounded UTCTime)
 
 instance ToField (Unbounded ZonedTime)
 
-instance (ToField a) => ToField (Maybe a) where
+class HasFieldType a where
+  typeOid :: Proxy a -> EncodingContext -> Maybe Oid
+
+instance (ToPgField a) => HasFieldType a where
+  typeOid = toTypeOid
+
+instance forall a. (ToField a, HasFieldType a) => ToField (Maybe a) where
   toField = \case
-    Nothing -> QueryArgument $ \_ -> (Nothing, Nothing) -- Postgres will infer the type, which is not the same as hpgsql, but perhaps fine? It's at least similar to what happens when using the text format.
+    Nothing -> QueryArgument $ \encCtx -> (typeOid (Proxy @a) encCtx, Nothing)
     Just v -> case toField v of
       QueryArgument enc -> QueryArgument enc
       _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"
+
+-- instance {-# OVERLAPPING #-} (ToPgField a) => ToField (Maybe a)
+
+-- toField = \case
+--   Nothing -> QueryArgument $ \_ -> (Nothing, Nothing) -- Postgres can't always infer types in this case, and then throws an error. This is why we have overlapping instances for `ToField (Maybe a)`
+--   Just v -> case toField v of
+--     QueryArgument enc -> QueryArgument enc
+--     _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"
 
 instance (ToPgField a) => ToField (Vector a)
 

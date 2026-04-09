@@ -250,7 +250,7 @@ instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgFiel
   rowParser = (,,,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
 
 class ToPgField a where
-  toTypeOid :: proxy a -> EncodingContext -> Maybe Oid
+  toTypeOid :: Proxy a -> EncodingContext -> Maybe Oid
   toTypeOid _ _ = Nothing -- Default definition so users don't have to write this
   toPgField :: EncodingContext -> a -> Maybe LBS.ByteString
 
