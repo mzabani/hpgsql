@@ -36,7 +36,6 @@ import Control.Concurrent.MVar
 import Control.Exception
 import Control.Monad (MonadPlus (..))
 import Data.ByteString (ByteString)
-import Data.ByteString.Builder (Builder, byteString)
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LBS
 import Data.IORef
@@ -51,7 +50,7 @@ import Data.Word
 import Database.PostgreSQL.LibPQ (ExecStatus (..), Oid (..))
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Ok
-import Database.PostgreSQL.Simple.ToField (Action (..), inQuotes)
+import Database.PostgreSQL.Simple.ToField (Action (..))
 import Database.PostgreSQL.Simple.TypeInfo.Types (TypeInfo)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import GHC.Generics
@@ -440,7 +439,3 @@ fmtError msg q =
 
 fmtErrorBs :: Query -> [Action] -> ByteString -> a
 fmtErrorBs q xs msg = fmtError (T.unpack $ TE.decodeUtf8 msg) q xs
-
--- | Quote bytestring or throw 'FormatError'
-quote :: Query -> [Action] -> Either ByteString ByteString -> Builder
-quote q xs = either (fmtErrorBs q xs) (inQuotes . byteString)

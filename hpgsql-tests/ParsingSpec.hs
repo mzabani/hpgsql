@@ -4,7 +4,7 @@
 
 module ParsingSpec where
 
-import Control.Exception (SomeException, evaluate)
+import Control.Exception (SomeException, evaluate, try)
 import Control.Monad
   ( forM,
     forM_,
@@ -263,15 +263,24 @@ spec = do
         length query.queryParams `shouldBe` 1
 
       it "SQL string with question marks, not placeholders" $ do
-        let queryParams = ()
-            qryStr = "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?); SELECT ? FROM table"
-            qry = mkQuery qryStr queryParams
+        let qryStr = "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?); SELECT ? FROM table"
+            qry = mkQuery qryStr ()
 
-        let (q1 :| [q2]) = breakQueryIntoStatements qry
-        q1.queryString `shouldBe` "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?);"
-        length q1.queryParams `shouldBe` 0
-        q2.queryString `shouldBe` " SELECT ? FROM table"
-        length q2.queryParams `shouldBe` 0
+        case breakQueryIntoStatements qry of
+          (q1 :| [q2]) -> do
+            q1.queryString `shouldBe` "/* Comment ??? */ SELECT 'text ? string ?' WHERE x=? AND y IN (?, ?, ?);"
+            length q1.queryParams `shouldBe` 0
+            q2.queryString `shouldBe` " SELECT ? FROM table"
+            length q2.queryParams `shouldBe` 0
+          _ -> expectationFailure "Expected the query to be composed of two statements"
+
+      it "Supplying more params than placeholders throws an error" $ do
+        let qryStr = "SELECT 1"
+            qry = mkQuery qryStr (1 :: Int, 2 :: Int)
+        result <- try @SomeException $ evaluate $ length $ NE.toList $ breakQueryIntoStatements qry
+        case result of
+          Left _ -> pure ()
+          Right _ -> expectationFailure "Expected an error when supplying more params than placeholders"
 
       it "parses SQL with multiple interpolations" $ do
         let userId = 42 :: Int

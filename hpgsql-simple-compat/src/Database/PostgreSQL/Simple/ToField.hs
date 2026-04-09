@@ -25,16 +25,11 @@ module Database.PostgreSQL.Simple.ToField
   ( Action (..),
     ToField (..),
     ToPgField (..),
-    inQuotes,
   )
 where
 
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
-import Data.ByteString.Builder
-  ( Builder,
-    char8,
-  )
 import qualified Data.ByteString.Lazy as LB
 import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
@@ -47,7 +42,6 @@ import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
 import Database.PostgreSQL.Simple.Types (Binary (..), Identifier (..), In (..))
-import Debug.Trace
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid)
@@ -156,11 +150,3 @@ instance (ToPgField a) => ToField (PGArray a)
 instance ToField (Binary ByteString)
 
 instance (Aeson.ToJSON a) => ToField (Aeson a)
-
--- | Surround a string with single-quote characters: \"@'@\"
---
--- This function /does not/ perform any other escaping.
-inQuotes :: Builder -> Builder
-inQuotes b = quote `mappend` b `mappend` quote
-  where
-    quote = char8 '\''

@@ -8,8 +8,6 @@ module HPgsql.Parsing
     SqlStatement (..),
     BlockOrNotBlock (..),
     ParsingOpts (..),
-    hasQuestionMarkArg,
-    hasDollarNumberedArg,
   )
 where
 
@@ -326,15 +324,3 @@ flattenBlocks =
 flattenBlocksInPieces :: SqlStatement -> SqlStatement
 flattenBlocksInPieces (SqlStatement blks) =
   SqlStatement $ flattenBlocks blks
-
-hasDollarNumberedArg :: SqlStatement -> Bool
-hasDollarNumberedArg (SqlStatement blks) =
-  any
-    ( \case
-        DollarNumberedArg _ -> True
-        _ -> False
-    )
-    blks
-
-hasQuestionMarkArg :: SqlStatement -> Bool
-hasQuestionMarkArg (SqlStatement blks) = QuestionMarkArg `elem` blks
