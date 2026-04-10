@@ -42,15 +42,19 @@ import qualified Data.ByteString as B
 import Data.ByteString.Builder (stringUtf8)
 import Data.Foldable (toList)
 import Data.Hashable (Hashable (hashWithSalt))
+import qualified Data.List as List
 import Data.Proxy (Proxy (..))
 import Data.Semigroup
 import Data.String (IsString (..))
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8)
 import Data.Tuple.Only (Only (..))
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.Compat (toByteString)
+import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
+import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import HPgsql.Encoding (ToPgField (..), (:.) (..))
 import qualified HPgsql.Encoding as HPgsql
 import HPgsql.Types (PGArray (..))
@@ -151,9 +155,15 @@ instance Monoid Query where
 newtype In a = In a
   deriving (Eq, Ord, Read, Show, Typeable, Functor)
 
+instance (ToField a) => ToField (In [a]) where
+  toField (In []) = Plain "(NULL)"
+  toField (In xs) = Many $ Plain "(" : List.intersperse (Plain ",") (map toField xs) ++ [Plain ")"]
+
 -- | Wrap binary data for use as a @bytea@ value.
 newtype Binary a = Binary {fromBinary :: a}
   deriving (Eq, Ord, Read, Show, Typeable, Functor)
+
+instance ToField (Binary ByteString)
 
 instance HPgsql.FromPgField (Binary ByteString) where
   fieldParser = Binary <$> HPgsql.fieldParser
@@ -166,6 +176,9 @@ instance ToPgField (Binary ByteString) where
 newtype Identifier = Identifier {fromIdentifier :: Text}
   deriving (Eq, Ord, Read, Show, Typeable, IsString)
 
+instance ToField Identifier where
+  toField (Identifier ident) = EscapeIdentifier $ encodeUtf8 ident
+
 instance Hashable Identifier where
   hashWithSalt i (Identifier t) = hashWithSalt i t
 
@@ -173,6 +186,11 @@ instance Hashable Identifier where
 -- with schema, or column with table.
 data QualifiedIdentifier = QualifiedIdentifier (Maybe Text) Text
   deriving (Eq, Ord, Read, Show, Typeable)
+
+instance ToField QualifiedIdentifier where
+  toField (QualifiedIdentifier m n) = case m of
+    Nothing -> toField $ Identifier n
+    Just m' -> Many [toField (Identifier m'), Plain ".", toField (Identifier n)]
 
 instance Hashable QualifiedIdentifier where
   hashWithSalt i (QualifiedIdentifier q t) = hashWithSalt i (q, t)
@@ -248,3 +266,73 @@ newtype Savepoint = Savepoint Query
 --   more information.
 data Values a = Values [QualifiedIdentifier] [a]
   deriving (Eq, Ord, Show, Read, Typeable)
+
+interleaveFoldr :: (a -> [b] -> [b]) -> b -> [b] -> [a] -> [b]
+interleaveFoldr f b bs' as = foldr (\a bs -> b : f a bs) bs' as
+{-# INLINE interleaveFoldr #-}
+
+instance (ToRow a) => ToField (Values a) where
+  toField (Values types rows) =
+    case rows of
+      [] -> case types of
+        [] -> error norows
+        (_ : _) ->
+          values $
+            typedRow
+              (repeat (lit "null"))
+              types
+              [lit " LIMIT 0)"]
+      (_ : _) -> case types of
+        [] -> values $ untypedRows rows [lit ")"]
+        (_ : _) -> values $ typedRows rows types [lit ")"]
+    where
+      funcname = "Database.PostgreSQL.Simple.toField :: Values a -> Action"
+      norows = funcname ++ "  either values or types must be non-empty"
+      emptyrow = funcname ++ "  each row must contain at least one column"
+      lit = Plain
+      values x = Many (lit "(VALUES " : x)
+
+      typedField :: (Action, QualifiedIdentifier) -> [Action] -> [Action]
+      typedField (val, typ) rest = val : lit "::" : toField typ : rest
+
+      typedRow :: [Action] -> [QualifiedIdentifier] -> [Action] -> [Action]
+      typedRow (val : vals) (typ : typs) rest =
+        lit "("
+          : typedField
+            (val, typ)
+            ( interleaveFoldr
+                typedField
+                (lit ",")
+                (lit ")" : rest)
+                (zip vals typs)
+            )
+      typedRow _ _ _ = error emptyrow
+
+      untypedRow :: [Action] -> [Action] -> [Action]
+      untypedRow (val : vals) rest =
+        lit "("
+          : val
+          : interleaveFoldr
+            (:)
+            (lit ",")
+            (lit ")" : rest)
+            vals
+      untypedRow _ _ = error emptyrow
+
+      typedRows :: (ToRow a) => [a] -> [QualifiedIdentifier] -> [Action] -> [Action]
+      typedRows [] _ _ = error funcname
+      typedRows (val : vals) typs rest =
+        typedRow (toRow val) typs (multiRows vals rest)
+
+      untypedRows :: (ToRow a) => [a] -> [Action] -> [Action]
+      untypedRows [] _ = error funcname
+      untypedRows (val : vals) rest =
+        untypedRow (toRow val) (multiRows vals rest)
+
+      multiRows :: (ToRow a) => [a] -> [Action] -> [Action]
+      multiRows vals rest =
+        interleaveFoldr
+          (untypedRow . toRow)
+          (lit ",")
+          rest
+          vals

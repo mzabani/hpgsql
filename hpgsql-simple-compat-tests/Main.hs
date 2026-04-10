@@ -32,7 +32,7 @@ import Database.PostgreSQL.Simple.Copy
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes
 import qualified Database.PostgreSQL.Simple.Transaction as ST
-import Database.PostgreSQL.Simple.Types (Identifier (..), PGArray (..), Query (..))
+import Database.PostgreSQL.Simple.Types (Identifier (..), PGArray (..), Query (..), Values (..))
 import Exception (testExceptions)
 import Notify
 import Serializable
@@ -72,7 +72,7 @@ tests env =
         testCase "Question mark escape" . testQM,
         testCase "Savepoint" . testSavepoint,
         testCase "Unicode" . testUnicode,
-        -- testCase "Values" . testValues,
+        testCase "Values" . testValues,
         -- testCase "Copy"                 . testCopy,
         testCopyFailures,
         testCase "Double" . testDouble,
@@ -457,22 +457,22 @@ testUnicode TestEnv {..} = do
   messages' <- query_ conn "SELECT сообщение FROM ру́сский"
   sort messages @?= sort messages'
 
--- testValues :: TestEnv -> Assertion
--- testValues TestEnv {..} = do
---   execute_ conn "CREATE TEMPORARY TABLE values_test (x int, y text)"
---   test (Values ["int4", "text"] [])
---   test (Values ["int4", "text"] [(1, "hello")])
---   test (Values ["int4", "text"] [(1, "hello"), (2, "world")])
---   test (Values ["int4", "text"] [(1, "hello"), (2, "world"), (3, "goodbye")])
---   test (Values [] [(1, "hello")])
---   test (Values [] [(1, "hello"), (2, "world")])
---   test (Values [] [(1, "hello"), (2, "world"), (3, "goodbye")])
---   where
---     test :: Values (Int, Text) -> Assertion
---     test table@(Values _ vals) = do
---       execute conn "INSERT INTO values_test ?" (Only table)
---       vals' <- query_ conn "DELETE FROM values_test RETURNING *"
---       sort vals @?= sort vals'
+testValues :: TestEnv -> Assertion
+testValues TestEnv {..} = do
+  execute_ conn "CREATE TEMPORARY TABLE values_test (x int, y text)"
+  test (Values ["int4", "text"] [])
+  test (Values ["int4", "text"] [(1, "hello")])
+  test (Values ["int4", "text"] [(1, "hello"), (2, "world")])
+  test (Values ["int4", "text"] [(1, "hello"), (2, "world"), (3, "goodbye")])
+  test (Values [] [(1, "hello")])
+  test (Values [] [(1, "hello"), (2, "world")])
+  test (Values [] [(1, "hello"), (2, "world"), (3, "goodbye")])
+  where
+    test :: Values (Int, Text) -> Assertion
+    test table@(Values _ vals) = do
+      execute conn "INSERT INTO values_test ?" (Only table)
+      vals' <- query_ conn "DELETE FROM values_test RETURNING *"
+      sort vals @?= sort vals'
 
 -- testCopy :: TestEnv -> Assertion
 -- testCopy TestEnv {..} = do

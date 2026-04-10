@@ -35,16 +35,13 @@ import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LB
 import Data.Int (Int16, Int32, Int64)
-import qualified Data.List as List
 import Data.Scientific (Scientific)
 import Data.Text (Text)
-import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
-import Database.PostgreSQL.Simple.Types (Binary (..), Identifier (..), In (..))
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid)
@@ -81,9 +78,6 @@ class ToField a where
 
 instance ToField Action where
   toField v = v
-
-instance ToField Identifier where
-  toField (Identifier ident) = EscapeIdentifier $ encodeUtf8 ident
 
 instance ToField Int
 
@@ -129,10 +123,6 @@ instance ToField String
 
 instance ToField Aeson.Value
 
-instance (ToField a) => ToField (In [a]) where
-  toField (In []) = Plain "(NULL)"
-  toField (In xs) = Many $ Plain "(" : List.intersperse (Plain ",") (map toField xs) ++ [Plain ")"]
-
 instance ToField (Unbounded Day)
 
 instance ToField (Unbounded UTCTime)
@@ -152,18 +142,8 @@ instance forall a. (ToField a, HasFieldType a) => ToField (Maybe a) where
       QueryArgument enc -> QueryArgument enc
       _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"
 
--- instance {-# OVERLAPPING #-} (ToPgField a) => ToField (Maybe a)
-
--- toField = \case
---   Nothing -> QueryArgument $ \_ -> (Nothing, Nothing) -- Postgres can't always infer types in this case, and then throws an error. This is why we have overlapping instances for `ToField (Maybe a)`
---   Just v -> case toField v of
---     QueryArgument enc -> QueryArgument enc
---     _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"
-
 instance (ToPgField a) => ToField (Vector a)
 
 instance (ToPgField a) => ToField (PGArray a)
-
-instance ToField (Binary ByteString)
 
 instance (Aeson.ToJSON a) => ToField (Aeson a)

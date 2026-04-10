@@ -190,7 +190,6 @@ mkQueryInternal queryTemplate allParams =
                 let thisParamNum = maxArgSoFar + 1
                  in case Map.lookup thisParamNum paramsByIdx of
                       Nothing -> error $ "Could not find query argument of number " <> show thisParamNum <> " for query with " <> show (length allParams) <> " arguments supplied. Did you supply an insufficient amount of query arguments? Query is " ++ show (mconcat $ map sqlStatementText $ NE.toList statements)
-                      Just [] -> error "ToPgField instance produced an empty list of Actions"
                       Just args ->
                         let (newMaxRealArg, frags) =
                               List.mapAccumL
