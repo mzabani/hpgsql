@@ -16,10 +16,12 @@ module HPgsql.Encoding
     LowerCasedPgEnum (..),
     (:.) (..),
     ProductTypeDecoder (..),
+    ProductTypeEncoder (..),
     anyTypeDecoder,
     singleColRowParser,
     arrayField,
     genericFromPgRow,
+    genericToPgRow,
     nullableField,
     -- TODO: Methods below should be internal
     parsePgType,
@@ -441,6 +443,8 @@ instance (ToPgField a) => ToPgField (Vector a) where
 
 class ToPgRow a where
   toPgParams :: a -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
+  default toPgParams :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
+  toPgParams = genericToPgRow
 
 instance ToPgRow () where
   toPgParams () = []
@@ -957,11 +961,30 @@ instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
 instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
   genRowDecoder = fmap K1 $ singleColRowParser $ fieldParser @a
 
+genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
+genericToPgRow = genRowEncoder . from
+
+class ProductTypeEncoder f where
+  genRowEncoder :: f a -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
+
+instance (ProductTypeEncoder a, ProductTypeEncoder b) => ProductTypeEncoder (a :*: b) where
+  genRowEncoder (a :*: b) = genRowEncoder a ++ genRowEncoder b
+
+instance (ProductTypeEncoder f) => ProductTypeEncoder (M1 i c f) where
+  genRowEncoder (M1 x) = genRowEncoder x
+
+instance (ToPgField a) => ProductTypeEncoder (K1 r a) where
+  genRowEncoder (K1 a) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a)]
+
 newtype LowerCasedPgEnum a = LowerCasedPgEnum a
 
 -- | TODO: Why does this instance require UndecidableInstances?
 instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) where
   fieldParser = LowerCasedPgEnum <$> genericEnumFieldParser LT.toLower
+
+instance (Generic a, EnumEncoder (Rep a)) => ToPgField (LowerCasedPgEnum a) where
+  toTypeOid _ _ = Nothing
+  toPgField _encCtx (LowerCasedPgEnum v) = Just $ genericEnumToPgField LT.toLower v
 
 genericEnumFieldParser ::
   forall a.
@@ -988,3 +1011,27 @@ instance (EnumDecoder f) => EnumDecoder (M1 D c f) where
 -- U1 is "Unit"-type, that is: no value in the constructor, AKA "pure enum".
 instance (KnownSymbol ctorName) => EnumDecoder (M1 C ('MetaCons ctorName ctorFixity 'False) U1) where
   genEnumDecoder = Map.singleton (LT.pack $ symbolVal (Proxy @ctorName)) (M1 U1)
+
+genericEnumToPgField ::
+  forall a.
+  (Generic a, EnumEncoder (Rep a)) =>
+  -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
+  (LT.Text -> LT.Text) ->
+  a ->
+  LBS.ByteString
+genericEnumToPgField nameTransform = LT.encodeUtf8 . nameTransform . genEnumEncoder . from
+
+class EnumEncoder f where
+  -- | Returns the textual representation of an enum value's constructor.
+  genEnumEncoder :: f a -> LT.Text
+
+instance (EnumEncoder a, EnumEncoder b) => EnumEncoder (a :+: b) where
+  genEnumEncoder (L1 x) = genEnumEncoder x
+  genEnumEncoder (R1 x) = genEnumEncoder x
+
+instance (EnumEncoder f) => EnumEncoder (M1 D c f) where
+  genEnumEncoder (M1 x) = genEnumEncoder x
+
+-- U1 is "Unit"-type, that is: no value in the constructor, AKA "pure enum".
+instance (KnownSymbol ctorName) => EnumEncoder (M1 C ('MetaCons ctorName ctorFixity 'False) U1) where
+  genEnumEncoder _ = LT.pack $ symbolVal (Proxy @ctorName)

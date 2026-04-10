@@ -34,6 +34,7 @@ import Database.PostgreSQL.Simple.Newtypes
 import qualified Database.PostgreSQL.Simple.Transaction as ST
 import Database.PostgreSQL.Simple.Types (Identifier (..), PGArray (..), Query (..), Values (..))
 import Exception (testExceptions)
+import GHC.Generics (Generic)
 import Notify
 import Serializable
 import System.Environment (getEnvironment)
@@ -76,9 +77,9 @@ tests env =
         -- testCase "Copy"                 . testCopy,
         testCopyFailures,
         testCase "Double" . testDouble,
-        -- testCase "1-ary generic" . testGeneric1,
-        -- , testCase "2-ary generic"        . testGeneric2
-        -- , testCase "3-ary generic"        . testGeneric3
+        testCase "1-ary generic" . testGeneric1,
+        testCase "2-ary generic" . testGeneric2,
+        testCase "3-ary generic" . testGeneric3,
         testCase "Timeout" . testTimeout,
         testCase "Exceptions" . testExceptions
       ]
@@ -592,50 +593,50 @@ testDouble TestEnv {..} = do
   [Only (x :: Double)] <- query_ conn "SELECT '-Infinity'::float8"
   x @?= (-1 / 0)
 
--- testGeneric1 :: TestEnv -> Assertion
--- testGeneric1 TestEnv {..} = do
---   roundTrip conn (Gen1 123)
---   where
---     roundTrip conn x0 = do
---       r <- query conn "SELECT ?::int" (x0 :: Gen1)
---       r @?= [x0]
+testGeneric1 :: TestEnv -> Assertion
+testGeneric1 TestEnv {..} = do
+  roundTrip conn (Gen1 123)
+  where
+    roundTrip conn x0 = do
+      r <- query conn "SELECT ?::int" (x0 :: Gen1)
+      r @?= [x0]
 
--- testGeneric2 :: TestEnv -> Assertion
--- testGeneric2 TestEnv {..} = do
---   roundTrip conn (Gen2 123 "asdf")
---   where
---     roundTrip conn x0 = do
---       r <- query conn "SELECT ?::int, ?::text" x0
---       r @?= [x0]
+testGeneric2 :: TestEnv -> Assertion
+testGeneric2 TestEnv {..} = do
+  roundTrip conn (Gen2 123 "asdf")
+  where
+    roundTrip conn x0 = do
+      r <- query conn "SELECT ?::int, ?::text" x0
+      r @?= [x0]
 
--- testGeneric3 :: TestEnv -> Assertion
--- testGeneric3 TestEnv {..} = do
---   roundTrip conn (Gen3 123 "asdf" True)
---   where
---     roundTrip conn x0 = do
---       r <- query conn "SELECT ?::int, ?::text, ?::bool" x0
---       r @?= [x0]
+testGeneric3 :: TestEnv -> Assertion
+testGeneric3 TestEnv {..} = do
+  roundTrip conn (Gen3 123 "asdf" True)
+  where
+    roundTrip conn x0 = do
+      r <- query conn "SELECT ?::int, ?::text, ?::bool" x0
+      r @?= [x0]
 
--- data Gen1 = Gen1 Int
---   deriving (Show, Eq, Generic)
+data Gen1 = Gen1 Int
+  deriving (Show, Eq, Generic)
 
--- instance FromRow Gen1
+instance FromRow Gen1
 
--- instance ToRow Gen1
+instance ToRow Gen1
 
--- data Gen2 = Gen2 Int Text
---   deriving (Show, Eq, Generic)
+data Gen2 = Gen2 Int Text
+  deriving (Show, Eq, Generic)
 
--- instance FromRow Gen2
+instance FromRow Gen2
 
--- instance ToRow Gen2
+instance ToRow Gen2
 
--- data Gen3 = Gen3 Int Text Bool
---   deriving (Show, Eq, Generic)
+data Gen3 = Gen3 Int Text Bool
+  deriving (Show, Eq, Generic)
 
--- instance FromRow Gen3
+instance FromRow Gen3
 
--- instance ToRow Gen3
+instance ToRow Gen3
 
 data TestException
   = TestException

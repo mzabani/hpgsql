@@ -28,7 +28,8 @@ module Database.PostgreSQL.Simple.ToRow
 where
 
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
-import HPgsql.Encoding (Only (..), ToPgRow (..), (:.) (..))
+import GHC.Generics (Generic (..))
+import HPgsql.Encoding (Only (..), ProductTypeEncoder, ToPgRow (..), genericToPgRow, (:.) (..))
 
 -- | A collection type that can be turned into a list of rendering
 -- 'Action's.
@@ -53,11 +54,12 @@ import HPgsql.Encoding (Only (..), ToPgRow (..), (:.) (..))
 -- support sum types or recursive types.
 class ToRow a where
   toRow :: a -> [Action]
-  default toRow :: (ToPgRow a) => a -> [Action]
-  toRow = map QueryArgument . toPgParams
+  default toRow :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [Action]
+  toRow = map QueryArgument . genericToPgRow
   -- ^ ToField a collection of values.
 
-instance ToRow ()
+instance ToRow () where
+  toRow () = []
 
 instance (ToField a) => ToRow (Only a) where
   toRow (Only v) = [toField v]
