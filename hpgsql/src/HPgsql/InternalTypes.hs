@@ -9,6 +9,7 @@ module HPgsql.InternalTypes
     PoolCleanup (..),
     TransactionStatus (..),
     EncodingContext (..), -- re-exported from HPgsql.TypeInfo
+    throwIrrecoverableError,
 
     -- * Msgs types (moved to avoid cycles)
     ParseComplete (..),
@@ -34,14 +35,16 @@ module HPgsql.InternalTypes
 
     -- * Connection and Pipeline types
     HPgConnection (..),
+    Mutex (..),
     Pipeline (..),
+    mkMutex,
   )
 where
 
 import Control.Concurrent (ThreadId)
 import Control.Concurrent.MVar (MVar)
 import Control.Concurrent.STM (STM, TQueue, TVar)
-import Control.Exception.Safe (Exception (..), SomeException)
+import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, throw)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Int (Int32, Int64)
@@ -54,6 +57,7 @@ import Data.Word (Word16, Word64)
 import Data.Word (Word16)
 
 #endif
+import qualified Control.Concurrent.STM as STM
 import HPgsql.Query (SingleQuery (..))
 import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
@@ -145,6 +149,9 @@ data IrrecoverableHpgsqlError = IrrecoverableHpgsqlError {hpgsqlDetails :: Strin
   deriving stock (Show)
 
 instance Exception IrrecoverableHpgsqlError
+
+throwIrrecoverableError :: (MonadThrow m) => String -> m a
+throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, innerException = Nothing, relatedStatement = Nothing}
 
 -- ------------------------------------------------------------------
 -- Msgs types (moved from HPgsql.Msgs to avoid cycles)
@@ -241,10 +248,6 @@ data QueryState = QueryState
 
 data InternalConnectionState = InternalConnectionState
   { totalQueriesSent :: !Integer,
-    -- | We store the ThreadId holding the lock and an Int representing how many
-    -- nested lock grabs it took so we can nest `withControlMsgsLock` in the same
-    -- thread without running into deadlocks.
-    blockedForSendingOrReceivingMsgsAtomically :: !(Maybe (WeakThreadId, Int)),
     -- | We support only one pipeline sent to the backend at a time.
     currentPipeline :: ![QueryState],
     notificationsReceived :: !(TQueue NotificationResponse)
@@ -259,6 +262,7 @@ data HPgConnection = HPgConnection
     socketClosed :: !(MVar Bool),
     recvBuffer :: !(MVar LBS.ByteString),
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
+    socketMutex :: !Mutex,
     originalConnStr :: !ConnString,
     connectedTo :: !AddrInfo,
     encodingContext :: !(MVar EncodingContext),
@@ -271,6 +275,13 @@ data HPgConnection = HPgConnection
 
 instance Eq HPgConnection where
   conn1 == conn2 = socket conn1 == socket conn2
+
+-- | A reentrant mutex, i.e. one that can be re-acquired by the same
+-- thread without deadlocking.
+newtype Mutex = Mutex (TVar (Maybe (WeakThreadId, Int)))
+
+mkMutex :: IO Mutex
+mkMutex = Mutex <$> STM.newTVarIO Nothing
 
 data Pipeline a = Pipeline [(SingleQuery, Maybe Int)] (HPgConnection -> [QueryId] -> a)
   deriving stock (Functor)

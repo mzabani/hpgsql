@@ -36,6 +36,7 @@ library
   other-modules:
       HPgsql.Base
       HPgsql.InternalTypes
+      HPgsql.Locking
       HPgsql.Msgs
       HPgsql.Networking
       Paths_hpgsql

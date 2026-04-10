@@ -51,7 +51,7 @@ module HPgsql
 where
 
 import Control.Applicative (Alternative (..))
-import Control.Concurrent (mkWeakThreadId, modifyMVar, modifyMVar_, myThreadId, readMVar)
+import Control.Concurrent (modifyMVar, modifyMVar_, readMVar)
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
@@ -74,15 +74,12 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
-#if MIN_VERSION_base(4,19,0)
-import GHC.Conc.Sync (ThreadStatus (..), fromThreadId, threadStatus)
-#else
-import GHC.Conc.Sync (ThreadStatus (..), showThreadId, threadStatus)
-#endif
+import GHC.Conc (ThreadStatus (..), threadStatus)
 import HPgsql.Base
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..))
-import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..))
+import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
+import HPgsql.Locking (getMyWeakThreadId, withMutex)
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
@@ -177,6 +174,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       socketIsClosed <- newMVar False
       recvBuffer <- newMVar mempty
       sendBuffer <- newMVar mempty
+      socketMutex <- mkMutex
       encodingContext <- newMVar (EncodingContext builtinPgTypesMap)
       connParams <- newMVar mempty
       notifQueue <- STM.newTQueueIO
@@ -184,11 +182,10 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
         STM.newTVarIO $
           InternalConnectionState
             { totalQueriesSent = 0,
-              blockedForSendingOrReceivingMsgsAtomically = Nothing,
               currentPipeline = [],
               notificationsReceived = notifQueue
             }
-      let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
+      let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer socketMutex originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
         CancelNotConnect cancelRequest _ -> do
           -- TODO: We need to store the IP address of the server and reuse that,
@@ -491,56 +488,33 @@ isLastInPipeline conn qryId = STM.atomically $ updateConnStateTxn conn $ \sttv -
 updateConnStateTxn :: HPgConnection -> (TVar InternalConnectionState -> STM a) -> STM a
 updateConnStateTxn conn f = f (internalConnectionState conn)
 
+-- | Run an acquire STM transaction, then the supplied function, then a release
+-- STM transaction (bracket style), while holding a connection-level lock.
+-- This is necessary for "control" messages, i.e. messages that affect the
+-- connection's internal state.
 withControlMsgsLock ::
   HPgConnection ->
-  -- | Applied in the same STM transaction that takes the lock
   (TVar InternalConnectionState -> STM a) ->
-  -- | Applied in the same STM transaction that releases the lock
   (TVar InternalConnectionState -> STM b) ->
   (a -> IO c) ->
   IO c
-withControlMsgsLock conn@HPgConnection {socket} acqStm relStm f = do
-  thisThreadId <- getMyWeakThreadId
-  bracket
-    ( STM.atomically $ do
-        let sttv = internalConnectionState conn
-        st <- STM.readTVar sttv
-        let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
-        newSt <- case blockedBy of
-          Nothing -> pure $ st {blockedForSendingOrReceivingMsgsAtomically {- traceShowWith ("Grabbing ",) $ -} = Just (thisThreadId, 1)}
-          Just (tid, nGrabs) ->
-            if tid == thisThreadId then pure $ st {blockedForSendingOrReceivingMsgsAtomically {- traceShowWith ("Grabbing ",) $ -} = Just (thisThreadId, nGrabs + 1)} else STM.retry
-        STM.writeTVar sttv newSt
-    )
-    -- Release lock on success or error
-    ( const $ void $ STM.atomically $ do
-        let sttv = internalConnectionState conn
-        st <- STM.readTVar sttv
-        let blockedBy = blockedForSendingOrReceivingMsgsAtomically st
-        newSt <- case blockedBy of
-          Nothing -> throwIrrecoverableError "Impossible: should have been blocked but was not!"
-          Just (tid, nGrabs) ->
-            let newLockState = {- traceShowWith ("Releasing ",) $ -} if nGrabs <= 1 then Nothing else Just (thisThreadId, nGrabs - 1)
-             in if tid == thisThreadId then pure st {blockedForSendingOrReceivingMsgsAtomically = newLockState} else throwIrrecoverableError "Impossible: Lock of a different thread!"
-        STM.writeTVar sttv newSt
-        -- debugPrint "Internal state: [Released control-msg-lock]."
-    )
-    $ \() -> do
-      -- The STM lock is acquired, now we run flushSendBuffer
-      -- so the caller will only see internal state after previous
-      -- messages were sent
-      flushSendBuffer
-      bracket
-        (STM.atomically $ updateConnStateTxn conn acqStm)
-        (const $ void $ STM.atomically $ updateConnStateTxn conn relStm)
-        ( \acq -> do
-            res <- f acq
-            -- Flush the send buffer that `f` may have populated and
-            -- apply all internal connection state changes before we
-            -- let the release STM transaction look at it.
-            flushSendBuffer
-            pure res
-        )
+withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = do
+  withMutex socketMutex $ do
+    -- The lock is acquired, so now we run flushSendBuffer
+    -- so the caller will only see internal state after previous
+    -- messages were sent
+    flushSendBuffer
+    bracket
+      (STM.atomically $ updateConnStateTxn conn acqStm)
+      (const $ void $ STM.atomically $ updateConnStateTxn conn relStm)
+      ( \acq -> do
+          res <- f acq
+          -- Flush the send buffer that `f` may have populated and
+          -- apply all internal connection state changes before we
+          -- let the release STM transaction look at it.
+          flushSendBuffer
+          pure res
+      )
   where
     flushSendBuffer :: IO ()
     flushSendBuffer =
@@ -767,9 +741,6 @@ mkPostgresError stmtText (ErrorResponse errDetailMap) = PostgresError {pgErrorDe
 throwPostgresError :: ByteString -> ErrorResponse -> IO a
 throwPostgresError stmtText errResp = throw $ mkPostgresError stmtText errResp
 
-throwIrrecoverableError :: (MonadThrow m) => String -> m a
-throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, innerException = Nothing, relatedStatement = Nothing}
-
 throwIrrecoverableErrorWithStatement :: (MonadThrow m) => ByteString -> String -> m a
 throwIrrecoverableErrorWithStatement stmtText errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, innerException = Nothing, relatedStatement = Just stmtText}
 
@@ -819,20 +790,6 @@ queryWithStreaming rparser conn qry = join $ runPipeline conn $ pipelineS rparse
 -- (up to the last row or a postgres error) before you are able to run other queries.
 queryStreaming :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryStreaming = queryWithStreaming rowParser
-
-getMyWeakThreadId :: IO WeakThreadId
-getMyWeakThreadId = do
-  -- We don't keep a reference to `ThreadId` as it can stop threads from getting
-  -- runtime exceptions and can prevent dead threads from being garbage-collected.
-  -- It's explained somewhere in hackage.
-  tid <- myThreadId
-  wtid <- mkWeakThreadId tid
-#if MIN_VERSION_base(4,19,0)
-  pure $ WeakThreadId wtid (fromThreadId tid)
-#else
-  let tidStr = showThreadId tid
-  pure $ WeakThreadId wtid tidStr
-#endif
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
 -- if it can't do that. Then runs the continuation.
