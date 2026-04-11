@@ -10,27 +10,12 @@
   - "--ignore-glob=hpgsql-simple-compat-tests/**"
   - "--ignore-glob=hpgsql/src/HPgsql/Networking.hs" # Mostly a copy from another library, best to keep similar to that
 
-# Pre-existing hints we're not addressing right now
 - ignore: {name: "Use camelCase", within: [ HPgsql.TypeInfo ]}
-# - ignore: {name: "Avoid lambda using `infix`"}
-# - ignore: {name: "Collapse lambdas"}
-# - ignore: {name: "Eta reduce"}
-# - ignore: {name: "Redundant $"}
-# - ignore: {name: "Redundant bracket"}
-# - ignore: {name: "Redundant irrefutable pattern"}
-# - ignore: {name: "Redundant pure"}
-# - ignore: {name: "Replace case with fromMaybe"}
+- ignore: {name: "Avoid lambda"} # Preferred arity can be an important optimization
 - ignore: {name: "Replace case with maybe"}
-# - ignore: {name: "Use =<<"}
-# - ignore: {name: "Use camelCase"}
 - ignore: {name: "Use const"} # Unclear what happens to functions' preferred arity when using const
-# - ignore: {name: "Use fmap"}
 - ignore: {name: "Use for_"}
-# - ignore: {name: "Use lambda-case"}
 - ignore: {name: "Use list comprehension"}
-# - ignore: {name: "Use maybe"}
-# - ignore: {name: "Use newtype instead of data"}
-# - ignore: {name: "Use replicateM"}
 
 - modules:
   - {name: Control.Exception, within: [], message: "Use Control.Exception.Safe instead"}
@@ -39,5 +24,3 @@
   - {name: Prelude.foldl', within: [], message: "foldl' is only in the Prelude since GHC 9.8. Import it from Data.List instead."}
   - {name: Data.List.NonEmpty.fromList, within: [], message: "fromList is partial. Use nonEmpty from Data.List.NonEmpty instead."}
   - {name: "Data.List.NonEmpty.!!", within: [], message: "(!!) is partial. Use safe indexing instead."}
-
-# - error: {name: "Avoid restricted function"}

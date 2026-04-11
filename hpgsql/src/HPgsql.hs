@@ -57,7 +57,6 @@ import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (MonadThrow, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
-import qualified Data.Attoparsec.ByteString as Parsec
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
@@ -84,6 +83,7 @@ import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequ
 import qualified HPgsql.Msgs as Msgs
 import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements)
+import qualified HPgsql.SimpleParser as Parser
 import HPgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
@@ -1067,15 +1067,15 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           let typecheckedColInfos = rtypecheck colInfos
           unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
           unless (all snd typecheckedColInfos) $ throwIrrecoverableErrorWithStatement qText "Query result column types do not match expected column types"
-          pure $ rparser colInfos <* Parsec.endOfInput
-        MonadicRowParser (RowParserMonadic rparser) -> pure $ fmap fst $ rparser ConversionState {colsLeftToParse = colInfos} <* Parsec.endOfInput
+          pure $ rparser colInfos <* Parser.endOfInput
+        MonadicRowParser (RowParserMonadic rparser) -> pure $ fmap fst $ rparser ConversionState {colsLeftToParse = colInfos} <* Parser.endOfInput
       pure $ do
         errOrCmdComplete <-
           S.mapM
             ( \(DataRow rowColumnData) ->
-                case Parsec.parseOnly rowparser rowColumnData of
-                  Right row -> pure row
-                  Left err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " ++ show err
+                case Parser.parseOnly rowparser rowColumnData of
+                  Parser.ParseOk row -> pure row
+                  Parser.ParseFail err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " ++ show err
             )
             rowsStream
         S.effect $ case errOrCmdComplete of

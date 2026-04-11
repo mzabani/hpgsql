@@ -39,6 +39,7 @@ library
       HPgsql.Locking
       HPgsql.Msgs
       HPgsql.Networking
+      HPgsql.SimpleParser
       Paths_hpgsql
   autogen-modules:
       Paths_hpgsql

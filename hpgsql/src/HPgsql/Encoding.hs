@@ -32,7 +32,6 @@ where
 
 import Control.Monad (replicateM, unless, when)
 import qualified Data.Aeson as Aeson
-import qualified Data.Attoparsec.ByteString as Parsec
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -63,6 +62,7 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
+import qualified HPgsql.SimpleParser as Parser
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
 
@@ -79,7 +79,7 @@ data FieldParser a = FieldParser
   deriving stock (Functor)
 
 data RowParser a = RowParser
-  { fullRowParser :: [ColumnInfo] -> Parsec.Parser a,
+  { fullRowParser :: [ColumnInfo] -> Parser.Parser a,
     -- | Returns the same colInfos with a boolean indicating if
     -- the expected types match for each colInfo.
     rowColumnsTypeCheck :: [ColumnInfo] -> [(ColumnInfo, Bool)],
@@ -93,7 +93,7 @@ newtype ConversionState = ConversionState
 
 newtype RowParserMonadic a = RowParserMonadic
   { -- | Returns the parsed row and the number of columns parsed
-    fullRowParser :: ConversionState -> Parsec.Parser (a, Int)
+    fullRowParser :: ConversionState -> Parser.Parser (a, Int)
   }
 
 instance Functor RowParserMonadic where
@@ -144,7 +144,7 @@ singleColRowParser (FieldParser {..}) =
                     then
                       if lenNextCol == 0
                         then pure $ Just ""
-                        else Just <$> Parsec.take lenNextCol
+                        else Just <$> Parser.take lenNextCol
                     else pure Nothing
                 case decode nextColBs of
                   Right v -> pure v
@@ -156,8 +156,8 @@ singleColRowParser (FieldParser {..}) =
       numExpectedColumns = 1
     }
 
-int32Parser :: Parsec.Parser Int32
-int32Parser = either fail pure . Cereal.decode @Int32 =<< Parsec.take 4
+int32Parser :: Parser.Parser Int32
+int32Parser = either fail pure . Cereal.decode @Int32 =<< Parser.take 4
 
 class FromPgField a where
   fieldParser :: FieldParser a
@@ -183,18 +183,22 @@ compositeTypeParser nullCheck (RowParser {..}) =
       FieldParser
         { fieldValueParser = \compositeTypeOid -> \case
             Nothing -> Left "Got NULL in composite type but it was not allowed"
-            Just bs -> Parsec.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parsec.endOfInput) bs,
+            Just bs -> case Parser.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parser.endOfInput) bs of
+              Parser.ParseOk v -> Right v
+              Parser.ParseFail err -> Left err,
           allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
         }
     AllowNull ->
       FieldParser
         { fieldValueParser = \compositeTypeColInfo -> \case
             Nothing -> Right Nothing
-            Just bs -> Just <$> Parsec.parseOnly (parserForRecord compositeTypeColInfo.encodingContext <* Parsec.endOfInput) bs,
+            Just bs -> case Parser.parseOnly (parserForRecord compositeTypeColInfo.encodingContext <* Parser.endOfInput) bs of
+              Parser.ParseOk v -> Right (Just v)
+              Parser.ParseFail err -> Left err,
           allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
         }
   where
-    parserForRecord :: EncodingContext -> Parsec.Parser a
+    parserForRecord :: EncodingContext -> Parser.Parser a
     parserForRecord encodingContext = do
       -- From https://github.com/postgres/postgres/blob/50ba65e73325cf55fedb3e1f14673d816726923b/src/backend/utils/adt/rowtypes.c#L687
       -- we can see a composite type's binary representation consists of: number of columns (Int32) + for_each_column { OID (Int32) + size_or_minus_1 (Int32) + Bytes }
@@ -203,14 +207,14 @@ compositeTypeParser nullCheck (RowParser {..}) =
       let mkColInfo oid = ColumnInfo oid encodingContext
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
-        (sizeBs, !size) <- Parsec.match $ fromIntegral <$> int32Parser
-        !bs <- Parsec.take (max 0 size)
+        (sizeBs, !size) <- Parser.match $ fromIntegral <$> int32Parser
+        !bs <- Parser.take (max 0 size)
         pure (oid, sizeBs <> bs)
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
       unless (all snd typecheckedCols) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
-      case Parsec.parseOnly (fullRowParser (map (mkColInfo . fst) cols) <* Parsec.endOfInput) (mconcat $ map snd cols) of
-        Right v -> pure v
-        Left err -> error $ "Error decoding composite type: " ++ show err
+      case Parser.parseOnly (fullRowParser (map (mkColInfo . fst) cols) <* Parser.endOfInput) (mconcat $ map snd cols) of
+        Parser.ParseOk v -> pure v
+        Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
 
 instance (FromPgField a) => FromPgRow (Only a) where
   rowParser = Only <$> singleColRowParser fieldParser
@@ -604,11 +608,11 @@ instance FromPgField Integer where
            in \case
                 Just bs
                   | oid /= numericOid -> fromIntegral <$> decodeInt bs
-                  | otherwise -> case Parsec.parseOnly (scientificDecoder True <* Parsec.endOfInput) bs of
-                      Right sci -> case floatingOrInteger @Double @Integer sci of
+                  | otherwise -> case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) bs of
+                      Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
                         Right i -> Right i
                         Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
-                      Left err -> Left err
+                      Parser.ParseFail err -> Left err
                 Nothing -> Left "Cannot decode SQL null as the Haskell Integer type. Use a `Maybe Integer`",
         allowedPgTypes = (`elem` [int8Oid, numericOid, int4Oid, int2Oid]) . typeOid
       }
@@ -656,7 +660,7 @@ anyTypeDecoder =
       allowedPgTypes = const True
     }
 
-scientificDecoder :: Bool -> Parsec.Parser Scientific
+scientificDecoder :: Bool -> Parser.Parser Scientific
 scientificDecoder mustBeInteger = do
   ndigits <- int16Parser
   weight <- int16Parser
@@ -667,7 +671,7 @@ scientificDecoder mustBeInteger = do
   valueAbs <- parseAndMult ndigits (fromIntegral weight * 4) 0
   pure $ (if sign == 0x0000 then 1 else (-1)) * valueAbs
   where
-    parseAndMult :: Int16 -> Int -> Scientific -> Parsec.Parser Scientific
+    parseAndMult :: Int16 -> Int -> Scientific -> Parser.Parser Scientific
     parseAndMult 0 _ !val = pure val
     parseAndMult !ndigitsLeft !currexpon !val = do
       !digit <- fromIntegral <$> int16Parser
@@ -684,7 +688,9 @@ instance FromPgField Scientific where
                   -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
                   -- float4Oid and float8Oid here?
                   if oid == numericOid
-                    then Parsec.parseOnly (scientificDecoder False <* Parsec.endOfInput) bs
+                    then case Parser.parseOnly (scientificDecoder False <* Parser.endOfInput) bs of
+                      Parser.ParseOk sci -> Right sci
+                      Parser.ParseFail err -> Left err
                     else flip scientific 0 . fromIntegral <$> decodeInt bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`",
         allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . typeOid
@@ -871,14 +877,16 @@ arrayField !elementParser =
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   FieldParser
     { fieldValueParser = \colInfo ->
-        let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parsec.endOfInput
+        let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parser.endOfInput
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
-              Just bs -> Parsec.parseOnly arrayFieldParser bs,
+              Just bs -> case Parser.parseOnly arrayFieldParser bs of
+                Parser.ParseOk v -> Right v
+                Parser.ParseFail err -> Left err,
       allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
     }
   where
-    arrayParser :: EncodingContext -> Parsec.Parser (Vector a)
+    arrayParser :: EncodingContext -> Parser.Parser (Vector a)
     arrayParser encodingContext = do
       !ndim <- int32Parser
       !_hasNull <- int32Parser
@@ -894,7 +902,7 @@ arrayField !elementParser =
           unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
           Vector.replicateM dim_i $ do
             size :: Int <- fromIntegral <$> int32Parser
-            elementBs <- if size == (-1) then pure Nothing else Just <$> Parsec.take size
+            elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
             case elementParser.fieldValueParser elementColInfo elementBs of
               Left err -> fail $ "Error parsing array element: " ++ show err
               Right el -> pure el
@@ -907,15 +915,17 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
   fieldParser =
     FieldParser
       { fieldValueParser = \colInfo ->
-          let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parsec.endOfInput
+          let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parser.endOfInput
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector (Vector a))`"
-                Just bs -> Parsec.parseOnly arrayFieldParser bs,
+                Just bs -> case Parser.parseOnly arrayFieldParser bs of
+                  Parser.ParseOk v -> Right v
+                  Parser.ParseFail err -> Left err,
         allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
       }
     where
       !elementParser = fieldParser @a
-      arrayParser :: EncodingContext -> Parsec.Parser (Vector (Vector a))
+      arrayParser :: EncodingContext -> Parser.Parser (Vector (Vector a))
       arrayParser encodingContext = do
         !ndim <- int32Parser
         !_hasNull <- int32Parser
@@ -937,13 +947,13 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
           Vector.replicateM lengthEachRow $
             do
               size :: Int <- fromIntegral <$> int32Parser
-              elementBs <- if size == (-1) then pure Nothing else Just <$> Parsec.take size
+              elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
               case elementParser.fieldValueParser elementColInfo elementBs of
                 Left err -> fail $ "Error parsing array element: " ++ show err
                 Right el -> pure el
 
-int16Parser :: Parsec.Parser Int16
-int16Parser = either fail pure . Cereal.decode @Int16 =<< Parsec.take 2
+int16Parser :: Parser.Parser Int16
+int16Parser = either fail pure . Cereal.decode @Int16 =<< Parser.take 2
 
 -- {- Generic deriving -}
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
