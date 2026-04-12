@@ -31,6 +31,7 @@ import qualified Data.Vector as V
 import Database.PostgreSQL.Simple.Copy
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes
+import Database.PostgreSQL.Simple.ToField (ToField)
 import qualified Database.PostgreSQL.Simple.Transaction as ST
 import Database.PostgreSQL.Simple.Types (Identifier (..), PGArray (..), Query (..), Values (..))
 import Exception (testExceptions)
@@ -69,7 +70,7 @@ tests env =
         -- , testCase "citext"               . testCIText
         testCase "JSON" . testJSON,
         testCase "Aeson newtype" . testAeson,
-        -- , testCase "DerivingVia"          . testDerivingVia
+        testCase "DerivingVia" . testDerivingVia,
         testCase "Question mark escape" . testQM,
         testCase "Savepoint" . testSavepoint,
         testCase "Unicode" . testUnicode,
@@ -305,24 +306,19 @@ testAeson TestEnv {..} = do
       y <- query conn "SELECT ?::json" (Only (Aeson x))
       [Only (Aeson x)] @?= y
 
--- testDerivingVia :: TestEnv -> Assertion
--- testDerivingVia TestEnv {..} = do
--- #if __GLASGOW_HASKELL__ <806
---     return ()
--- #else
---     roundTrip $ DerivingVia1 42 "Meaning of Life"
---   where
---     roundTrip :: (Eq a, Show a, Typeable a, ToField a, FromField a)=> a -> Assertion
---     roundTrip x = do
---       y <- query conn "SELECT ?::json" (Only x)
---       [Only x] @?= y
+testDerivingVia :: TestEnv -> Assertion
+testDerivingVia TestEnv {..} = do
+  roundTrip $ DerivingVia1 42 "Meaning of Life"
+  where
+    roundTrip :: (Eq a, Show a, Typeable a, ToField a, FromField a) => a -> Assertion
+    roundTrip x = do
+      y <- query conn "SELECT ?::json" (Only x)
+      [Only x] @?= y
 
--- data DerivingVia1 = DerivingVia1 Int String
---   deriving stock (Eq, Show, Generic)
---   deriving anyclass (FromJSON, ToJSON)
---   deriving (ToField, FromField) via Aeson DerivingVia1
-
--- #endif
+data DerivingVia1 = DerivingVia1 Int String
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+  deriving (ToField, FromField) via Aeson DerivingVia1
 
 testQM :: TestEnv -> Assertion
 testQM TestEnv {..} = do
