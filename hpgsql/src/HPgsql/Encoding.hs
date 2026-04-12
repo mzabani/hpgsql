@@ -140,11 +140,9 @@ singleColRowParser (FieldParser {..}) =
            in do
                 lenNextCol <- fromIntegral <$> int32Parser
                 nextColBs <-
-                  if lenNextCol /= (-1)
+                  if lenNextCol >= 0
                     then
-                      if lenNextCol == 0
-                        then pure $ Just ""
-                        else Just <$> Parser.take lenNextCol
+                      Just <$> Parser.take lenNextCol
                     else pure Nothing
                 case decode nextColBs of
                   Right v -> pure v
