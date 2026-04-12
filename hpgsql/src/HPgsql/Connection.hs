@@ -175,7 +175,7 @@ keywordValueConnParser line = runIdentity $ runExceptT $ do
     <*> getVal "user" Nothing txtToString kvs
     <*> getVal "password" (Just "") txtToString kvs
     <*> getVal "dbname" Nothing txtToString kvs
-    <*> pure ""
+    <*> getVal "options" (Just "") txtToString kvs
   where
     getVal key def parser pairs =
       case (map snd $ filter ((== key) . fst) pairs, def) of
