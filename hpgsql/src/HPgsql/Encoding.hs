@@ -540,7 +540,7 @@ binaryFloat8Decoder :: ByteString -> Double
 binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decode @Word64
 
 parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldParser a
-parsePgType requiredTypeOids fieldValueParser =
+parsePgType !requiredTypeOids !fieldValueParser =
   FieldParser
     { fieldValueParser = \_oid -> fieldValueParser,
       allowedPgTypes = (`elem` requiredTypeOids) . typeOid
