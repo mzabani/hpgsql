@@ -73,7 +73,6 @@ proxyOf _ = Proxy
 class ToField a where
   toField :: a -> Action
   default toField :: (ToPgField a) => a -> Action
-  -- TODO: Nothing as the typeOid so postgres has to infer it?
   toField v = QueryArgument $ \encCtx -> (toTypeOid (proxyOf v) encCtx, toPgField encCtx v)
 
 instance ToField Action where

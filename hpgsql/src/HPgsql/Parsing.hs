@@ -44,10 +44,10 @@ newtype SqlStatement = SqlStatement {statementBlocks :: [BlockOrNotBlock]}
 -- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which
 -- semicolons are not to be considered statement boundaries. These include strings, comments,
 -- parenthesised expressions and dollar-quoted strings.
-data BlockOrNotBlock = Block !Text | NotBlock !Text | DollarNumberedArg !Int | QuestionMarkArg
+data BlockOrNotBlock = Block !Text | NotBlock !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !Text
   deriving stock (Eq, Show)
 
-data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs
+data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs | AcceptQuasiQuoterExpressions
   deriving stock (Show)
 
 -- | Parses one or more SQL statements (separated by semi-colons).
@@ -66,7 +66,7 @@ sqlStatementParser :: ParsingOpts -> Parser [BlockOrNotBlock]
 sqlStatementParser popts = do
   t1 <-
     takeWhile
-      (\c -> not (isPossibleBlockStartingChar c) && c /= ';')
+      (\c -> not (isPossibleBlockStartingChar popts c) && c /= ';')
   mc <- peekChar
   case mc of
     Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [NotBlock t1]
@@ -101,6 +101,7 @@ blockText = \case
   NotBlock t -> t
   QuestionMarkArg -> "?"
   DollarNumberedArg n -> "$" <> Text.pack (show n)
+  QuasiQuoterExpression t -> t
 
 -- TODO: Doesn't attoparsec have something that returns all of the parsed text when applying
 -- a Parser? We should probably use that instead of this.
@@ -115,7 +116,12 @@ blockParser popts =
   -- backslashes will be treated like a regular character - which works for us -, and if other characters are chosen as the escape character,
   -- our parsers will treat those also as regular characters, which should be fine.
   -- This seems fragile, but our tests will error out if changes make this unsupported.
-  (: []) <$> parseStdConformingString
+  (: [])
+      <$> ( case popts of
+              AcceptQuasiQuoterExpressions -> quasiQuoterExpressionParser
+              _ -> fail "No quasiquoter expressions"
+          )
+    <|> (: []) <$> parseStdConformingString
     <|> parenthesisedExpression popts
     <|> (: []) <$> cStyleComment
     <|> (: [])
@@ -135,8 +141,8 @@ blockParser popts =
 
 -- | A character that may be the first of a block. This needs to match parsers in `blockParser`, and is only useful
 -- to optimize our parsers by avoiding backtracking through usage of `takeWhile` and similar.
-isPossibleBlockStartingChar :: Char -> Bool
-isPossibleBlockStartingChar c =
+isPossibleBlockStartingChar :: ParsingOpts -> Char -> Bool
+isPossibleBlockStartingChar popts c =
   c
     == '('
     || c
@@ -153,6 +159,17 @@ isPossibleBlockStartingChar c =
       == 'E'
     || c
       == '?'
+    || ( case popts of
+          AcceptQuasiQuoterExpressions -> c == '#' || c == '^'
+          _ -> False
+       )
+
+quasiQuoterExpressionParser :: Parser BlockOrNotBlock
+quasiQuoterExpressionParser = do
+  prefix <- string "#{" <|> string "^{"
+  content <- takeWhile1 (/= '}')
+  void $ char '}'
+  pure $ QuasiQuoterExpression $ prefix <> content <> "}"
 
 dollarNumberedQueryArgParser :: Parser BlockOrNotBlock
 dollarNumberedQueryArgParser = do
@@ -231,7 +248,7 @@ parenthesisedExpression popts = do
     insideParenParser = do
       more <-
         takeWhile
-          (\c -> not (isPossibleBlockStartingChar c) && c /= ')')
+          (\c -> not (isPossibleBlockStartingChar popts c) && c /= ')')
       nextChar <- peekChar
       case nextChar of
         Nothing -> pure [NotBlock more] -- Be gentle with EOF

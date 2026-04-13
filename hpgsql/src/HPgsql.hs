@@ -47,6 +47,7 @@ module HPgsql
     refreshTypeInfoCache,
     resetTypeInfoCache,
     queryWithM,
+    queryWithStreamingM,
   )
 where
 
@@ -783,6 +784,13 @@ executeMany_ conn qry = void $ executeMany conn qry
 -- (up to the last row or a postgres error) before you are able to run other queries.
 queryWithStreaming :: RowParser a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryWithStreaming rparser conn qry = join $ runPipeline conn $ pipelineS rparser qry
+
+-- | Streams results directly from the connection's socket, i.e. without using cursors.
+-- It is important to note the same thread that runs this must be the thread that
+-- consumes the returned Stream, and the returned Stream must be consumed completely
+-- (up to the last row or a postgres error) before you are able to run other queries.
+queryWithStreamingM :: RowParserMonadic a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
+queryWithStreamingM rparser conn qry = join $ runPipeline conn $ pipelineSM rparser qry
 
 -- | Streams results directly from the connection's socket, i.e. without using cursors.
 -- It is important to note the same thread that runs this must be the thread that

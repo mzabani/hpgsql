@@ -3,6 +3,7 @@
 module Database.PostgreSQL.Simple.HpgsqlUtils where
 
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Database.PostgreSQL.Simple.ToField (Action (..))
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
@@ -25,5 +26,4 @@ toHpgsqlRowParams = concatMap actionToPgParams . toRow
       Many actions -> [mconcat $ concatMap actionToPgParams actions]
 
 escapeIdentifier :: ByteString -> ByteString
--- TODO THIS IS NOT SAFE! Implement this properly!
-escapeIdentifier v = "\"" <> v <> "\""
+escapeIdentifier v = "\"" <> BS.intercalate "\"\"" (BS.split 0x22 {- '"' -} v) <> "\""

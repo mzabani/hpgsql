@@ -336,6 +336,27 @@ spec = do
         let stmts = parseSql AcceptOnlyDollarNumberedArgs unSyntRandomSql
         mconcat (map sqlStatementText (NE.toList stmts)) `shouldBe` Text.strip unSyntRandomSql
 
+    it "parseSql AcceptQuasiQuoterExpressions preserves quasiquoter expressions with parentheses" $ do
+      let input = "SELECT ^{escapeIdentifier (fromQuery name)}, #{someFunc (arg1) arg2}"
+          result = parseSql AcceptQuasiQuoterExpressions input
+          blocks = concatMap statementBlocks $ NE.toList result
+          qqExprs = [t | QuasiQuoterExpression t <- blocks]
+      qqExprs `shouldBe` ["^{escapeIdentifier (fromQuery name)}", "#{someFunc (arg1) arg2}"]
+
+    it "parseSql AcceptQuasiQuoterExpressions handles nested parentheses in expressions" $ do
+      let input = "SELECT #{f (g (x))}"
+          result = parseSql AcceptQuasiQuoterExpressions input
+          blocks = concatMap statementBlocks $ NE.toList result
+          qqExprs = [t | QuasiQuoterExpression t <- blocks]
+      qqExprs `shouldBe` ["#{f (g (x))}"]
+
+    it "parseSql AcceptQuasiQuoterExpressions inside parenthesised SQL expressions" $ do
+      let input = "SELECT (#{someFunc (arg)})"
+          result = parseSql AcceptQuasiQuoterExpressions input
+          blocks = concatMap statementBlocks $ NE.toList result
+          qqExprs = [t | QuasiQuoterExpression t <- blocks]
+      qqExprs `shouldBe` ["#{someFunc (arg)}"]
+
     it "Sql Migration Parser never fails, even for random text" $ hedgehog $ do
       RandomSql {unRandomSql} <- forAll genRandomSql
       liftIO $ do

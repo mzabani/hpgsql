@@ -5,6 +5,7 @@ module SqlQuasiquoterSpec where
 
 import Control.Monad (forM_)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NE
@@ -12,9 +13,10 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql (Only (..))
+import HPgsql.Encoding (ToPgRow (..))
 import HPgsql.Parsing (ParsingOpts (..), parseSql, sqlStatementText)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
-import HPgsql.TypeInfo (EncodingContext (..), builtinPgTypesMap)
+import HPgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
@@ -36,19 +38,25 @@ spec = do
     it
       "Concatenating mixed mkQuery, #{}, and ^{} queries"
       mixedConcatenation
+    it "Parenthesized Haskell expressions in ^{} work" $ do
+      let x = 42 :: Int
+          inner = mkQuery "$1" (Only x)
+          query = getUniqueNE [sql|SELECT ^{(inner)};|]
+      query.queryString `shouldBe` encodeUtf8 "SELECT $1;"
+      length query.queryParams `shouldBe` 1
 
 -- | Shared property: concatenating arbitrary queries produces valid results.
-checkQueryConcatenation :: Gen Query -> PropertyT IO ()
+checkQueryConcatenation :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)]) -> PropertyT IO ()
 checkQueryConcatenation gen = hedgehog $ do
   queries <- forAll $ Gen.list (Range.linear 1 50) gen
-  let concatenated = foldr1 (<>) queries
+  let concatenated = foldr1 (<>) $ map fst queries
       singleQueries = NE.toList $ breakQueryIntoStatements concatenated
 
   -- Total number of SingleQueries matches the number of generated queries
   length singleQueries === length queries
 
   -- Each SingleQuery must be independently valid
-  forM_ (zip queries singleQueries) $ \(Query {queryParams = expectedParams}, SingleQuery qStr qParams) -> do
+  forM_ (zip queries singleQueries) $ \((_, expectedParams), SingleQuery qStr qParams) -> do
     let qText = decodeUtf8 qStr
     annotateShow qText
 
@@ -58,7 +66,7 @@ checkQueryConcatenation gen = hedgehog $ do
     sqlStatementText (NE.head reparsed) === qText
 
     -- Query arguments must have been distributed correctly
-    map ($ EncodingContext builtinPgTypesMap) expectedParams === map ($ EncodingContext builtinPgTypesMap) qParams
+    expectedParams === map ($ EncodingContext builtinPgTypesMap) qParams
 
     -- \$N placeholders start from 1 and are contiguous, matching param count
     let placeholders = extractPlaceholders qText
@@ -85,103 +93,117 @@ mixedConcatenation = checkQueryConcatenation genMixedQuery
 genInt :: Gen Int
 genInt = Gen.int (Range.linearFrom 0 minBound maxBound)
 
+genChar :: Gen Char
+genChar = Gen.enum 'a' 'z'
+
+genString :: Gen String
+genString = Gen.string (Range.linearFrom 0 (-10) 10) genChar
+
+toComparableParams :: (ToPgRow a) => a -> [(Maybe Oid, Maybe LBS.ByteString)]
+toComparableParams = map ($ EncodingContext builtinPgTypesMap) . toPgParams
+
 -- | Queries built with mkQuery, including reused $N placeholders.
-genMkQuery :: Gen Query
+genMkQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
 genMkQuery =
   Gen.choice
     [ do
         tmpl <- Gen.element noParamTemplates
-        pure $ mkQuery tmpl (),
+        pure (mkQuery tmpl (), []),
       do
         tmpl <- Gen.element oneParamTemplates
         a <- genInt
-        pure $ mkQuery tmpl (Only a),
+        let params = Only a
+        pure (mkQuery tmpl params, toComparableParams params),
       do
         tmpl <- Gen.element twoParamTemplates
         a <- genInt
         b <- genInt
-        pure $ mkQuery tmpl (a, b),
+        let params = (a, b)
+        pure (mkQuery tmpl params, toComparableParams params),
       do
         tmpl <- Gen.element threeParamTemplates
         a <- genInt
         b <- genInt
         c <- genInt
-        pure $ mkQuery tmpl (a, b, c),
+        let params = (a, b, c)
+        pure (mkQuery tmpl params, toComparableParams params),
       do
         a <- genInt
         b <- genInt
         c <- genInt
         d <- genInt
-        pure $ mkQuery "SELECT $1, $2, $3, $4;" (a, b, c, d),
+        let params = (a, b, c, d)
+        pure (mkQuery "SELECT $1, $2, $3, $4;" params, toComparableParams params),
       do
         a <- genInt
         b <- genInt
         c <- genInt
         d <- genInt
         e <- genInt
-        pure $ mkQuery "SELECT $1, $2, $3, $4, $5;" (a, b, c, d, e)
+        let params = (a, b, c, d, e)
+        pure (mkQuery "SELECT $1, $2, $3, $4, $5;" params, toComparableParams params)
     ]
 
 -- | Queries built with the sql quasiquoter and #{} interpolation.
-genInterpolatedQuery :: Gen Query
+genInterpolatedQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
 genInterpolatedQuery =
   Gen.choice
-    [ pure [sql|SELECT 1;|],
+    [ pure ([sql|SELECT 1, '#{x}', '^{y}';|], []),
       do
         x <- genInt
-        pure [sql|SELECT #{x};|],
+        pure ([sql|SELECT #{x};|], toComparableParams (Only x)),
       do
         x <- genInt
         y <- genInt
-        pure [sql|SELECT #{x}, #{y};|],
+        pure ([sql|SELECT #{x}, #{y};|], toComparableParams (x, y)),
       do
         x <- genInt
         y <- genInt
         z <- genInt
-        pure [sql|SELECT #{x} FROM t WHERE #{y} BETWEEN 0 AND #{z};|]
+        pure ([sql|SELECT #{x} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, y, z))
     ]
 
 -- | Queries built with ^{} embedded queries, including reused placeholders.
-genEmbeddedQuery :: Gen Query
+genEmbeddedQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
 genEmbeddedQuery =
   Gen.choice
     [ do
         x <- genInt
         let inner = mkQuery "$1" (Only x)
-        pure [sql|SELECT ^{inner};|],
+        pure ([sql|SELECT ^{inner};|], toComparableParams (Only x)),
       do
         x <- genInt
         let inner = mkQuery "$1 + $1" (Only x)
-        pure [sql|SELECT ^{inner};|],
+        pure ([sql|SELECT ^{inner};|], toComparableParams (Only x)),
       do
         x <- genInt
         y <- genInt
         let inner = mkQuery "$1, $2" (x, y)
-        pure [sql|SELECT ^{inner};|],
+        pure ([sql|SELECT ^{inner};|], toComparableParams (x, y)),
       do
         x <- genInt
         y <- genInt
         let inner1 = mkQuery "$1" (Only x)
             inner2 = mkQuery "$1" (Only y)
-        pure [sql|SELECT ^{inner1}, ^{inner2};|],
+        pure ([sql|SELECT ^{inner1}, ^{inner2};|], toComparableParams (x, y)),
       do
         x <- genInt
         y <- genInt
         z <- genInt
         let inner1 = mkQuery "$1, $2" (x, y)
             inner2 = mkQuery "$1" (Only z)
-        pure [sql|SELECT ^{inner1}, ^{inner2};|],
+        pure ([sql|SELECT ^{inner1}, ^{inner2};|], toComparableParams (x, y, z)),
       do
         x <- genInt
         y <- genInt
         z <- genInt
         let inner1 = mkQuery "$1" (Only x)
             inner2 = mkQuery "$1 + $1, $2" (y, z)
-        pure [sql|SELECT ^{inner1}, ^{inner2};|]
+        pure ([sql|SELECT ^{inner1}, ^{inner2};|], toComparableParams (x, y, z))
     ]
 
 -- | Mix of mkQuery, #{} interpolation, and ^{} embedding.
-genMixedQuery :: Gen Query
+genMixedQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
 genMixedQuery =
   Gen.choice
     [ genMkQuery,
@@ -191,26 +213,26 @@ genMixedQuery =
         x <- genInt
         y <- genInt
         let inner = mkQuery "$1" (Only y)
-        pure [sql|SELECT #{x}, ^{inner};|],
+        pure ([sql|SELECT #{x}, ^{inner};|], toComparableParams (x, y)),
       do
         x <- genInt
         y <- genInt
         let inner = mkQuery "$1 + $1" (Only y)
-        pure [sql|SELECT #{x}, ^{inner};|],
+        pure ([sql|SELECT #{x + (x + 1)}, ^{inner};|], toComparableParams (x + (x + 1), y)),
       do
         x <- genInt
         y <- genInt
         z <- genInt
-        w <- genInt
+        w <- genString
         let inner = mkQuery "$1, $2" (y, z)
-        pure [sql|SELECT #{x}, '#{x}', ^{inner}, (#{w});|],
+        pure ([sql|SELECT #{x}, '#{x}', ^{inner}, (#{"abc" ++ w});|], toComparableParams (x, y, z, "abc" ++ w)),
       do
         x <- genInt
         y <- genInt
         z <- genInt
         let inner1 = mkQuery "$1" (Only y)
             inner2 = mkQuery "$1" (Only z)
-        pure [sql|SELECT '#{x}', '^{inner1}', (#{x}), (^{inner1}), ^{inner2};|]
+        pure ([sql|SELECT '#{x}', '^{inner1}', (#{x}), (^{inner1}), ^{inner2};|], toComparableParams (x, y, z))
     ]
 
 -- Templates --
@@ -248,6 +270,9 @@ threeParamTemplates =
     "SELECT $1 + $2 + $3, $3 - $2 - $1;",
     "SELECT $1 WHERE $2 = $3 AND $1 = $2;"
   ]
+
+getUniqueNE :: (HasCallStack) => Query -> SingleQuery
+getUniqueNE = NE.head . breakQueryIntoStatements
 
 -- | Extract all $N placeholder numbers from SQL text, returning them sorted and deduplicated.
 -- This is a different implementation from the application, and it is so on purpose.

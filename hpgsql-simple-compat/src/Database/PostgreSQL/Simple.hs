@@ -138,6 +138,8 @@ import Data.Int (Int64)
 import Data.List (intersperse)
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat (toByteString)
+import Control.Exception (bracket)
+import Database.PostgreSQL.Simple.Cursor (closeCursor, declareCursor, foldForwardWithParser)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery, toHpgsqlRowParams)
@@ -492,8 +494,7 @@ foldWithOptionsAndParser ::
   (a -> row -> IO a) ->
   IO a
 foldWithOptionsAndParser opts parser conn template qs a f = do
-  let qry = toHpgsqlQuery template qs
-  doFold opts parser conn qry a f
+  doFold opts parser conn template a f
 
 -- | A version of 'fold' that does not perform query substitution.
 fold_ ::
@@ -529,7 +530,7 @@ foldWithOptions_ ::
   -- | Result consumer.
   (a -> r -> IO a) ->
   IO a
-foldWithOptions_ opts conn query' a f = doFold opts fromRow conn (toHpgsqlQuery query' ()) a f
+foldWithOptions_ opts conn query' a f = doFold opts fromRow conn query' a f
 
 -- | A version of 'foldWithOptions_' taking a parser as an argument
 foldWithOptionsAndParser_ ::
@@ -543,17 +544,54 @@ foldWithOptionsAndParser_ ::
   -- | Result consumer.
   (a -> r -> IO a) ->
   IO a
-foldWithOptionsAndParser_ opts parser conn query' a f = doFold opts parser conn (toHpgsqlQuery query' ()) a f
+foldWithOptionsAndParser_ opts parser conn query' a f = doFold opts parser conn query' a f
 
 doFold ::
   FoldOptions ->
   RowParserMonadic row ->
   Connection ->
-  HPgsql.Query ->
+  Query ->
   a ->
   (a -> row -> IO a) ->
   IO a
-doFold FoldOptions {} _parser _conn _qry _a0 _f = mapHpgsqlErrors $ error "TODO Hpgsql"
+doFold FoldOptions {..} parser conn simpleQ a0 f = mapHpgsqlErrors $ do
+  stat <- withConnection conn PQ.transactionStatus
+  case stat of
+    PQ.TransIdle -> withTransactionMode transactionMode conn go
+    PQ.TransInTrans -> go
+    PQ.TransActive -> fail "foldWithOpts FIXME:  PQ.TransActive"
+    -- This _shouldn't_ occur in the current incarnation of
+    -- the library,  as we aren't using libpq asynchronously.
+    -- However,  it could occur in future incarnations of
+    -- this library or if client code uses the Internal module
+    -- to use raw libpq commands on postgresql-simple connections.
+    PQ.TransInError -> fail "foldWithOpts FIXME:  PQ.TransInError"
+  where
+    -- This should be turned into a better error message.
+    -- It is probably a bad idea to automatically roll
+    -- back the transaction and start another.
+
+    declare =
+      declareCursor conn simpleQ
+    fetch cursor a =
+      foldForwardWithParser cursor parser chunkSize f a
+
+    go = bracket declare closeCursor $ \cursor ->
+      let loop a =
+            fetch cursor a
+              >>= \r -> case r of
+                Left x -> return x
+                Right x -> loop x
+       in loop a0
+    -- FIXME: choose the Automatic chunkSize more intelligently
+    --   One possibility is to use the type of the results,  although this
+    --   still isn't a perfect solution, given that common types (e.g. text)
+    --   are of highly variable size.
+    --   A refinement of this technique is to pick this number adaptively
+    --   as results are read in from the database.
+    chunkSize = case fetchQuantity of
+      Automatic -> 256
+      Fixed n -> n
 
 -- | A version of 'fold' that does not transform a state value.
 forEach ::

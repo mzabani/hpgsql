@@ -59,7 +59,7 @@ tests env =
         testCase "Query generation with identifiers" . testQueryGenWithIdents,
         testBytea,
         testCase "ExecuteMany" . testExecuteMany,
-        -- testCase "Fold"                 . testFold
+        testCase "Fold" . testFold,
         testCase "Notify" . testNotify,
         testCase "Serializable" . testSerializable,
         testCase "Time" . testTime,
