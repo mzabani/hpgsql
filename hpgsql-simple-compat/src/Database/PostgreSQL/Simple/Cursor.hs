@@ -26,36 +26,31 @@ module Database.PostgreSQL.Simple.Cursor
 where
 
 import Control.Exception as E
-import Control.Monad (unless, void)
-import Data.Monoid (mconcat)
+import Control.Monad (foldM, unless, void)
 import Data.String (fromString)
-import qualified Database.PostgreSQL.LibPQ as PQ
-import Database.PostgreSQL.Simple.Compat (toByteString, (<>))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Internal as Base hiding (result, row)
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types (Query (..))
-import HPgsql (queryWithStreamingM)
+import HPgsql (Query, execute_, queryWithM)
 import HPgsql.Encoding (RowParserMonadic)
 import HPgsql.Query (escapeIdentifier, sql)
-import qualified Streaming
-import qualified Streaming.Prelude as Streaming
 
 -- | Cursor within a transaction.
-data Cursor = Cursor !Query !Connection
+data Cursor = Cursor !Database.PostgreSQL.Simple.Types.Query !Connection
 
 -- | Declare a temporary cursor. The cursor is given a
 -- unique name for the given connection.
-declareCursor :: Connection -> Query -> IO Cursor
-declareCursor conn q = do
+declareCursor :: Connection -> HPgsql.Query -> IO Cursor
+declareCursor conn q = mapHpgsqlErrors $ do
   name <- newTempName conn
-  void $ execute_ conn $ mconcat ["DECLARE ", name, " NO SCROLL CURSOR FOR ", q]
+  void $ HPgsql.execute_ (hpgConn conn) [sql|DECLARE ^{escapeIdentifier (fromQuery name)} NO SCROLL CURSOR FOR ^{q}|]
   return $ Cursor name conn
 
 -- | Close the given cursor.
 closeCursor :: Cursor -> IO ()
 closeCursor (Cursor name conn) =
-  (void $ execute_ conn ("CLOSE " <> name)) `E.catch` \ex ->
+  (void $ mapHpgsqlErrors $ HPgsql.execute_ (hpgConn conn) [sql|CLOSE ^{escapeIdentifier $ fromQuery name}|]) `E.catch` \ex ->
     -- Don't throw exception if CLOSE failed because the transaction is
     -- aborted.  Otherwise, it will throw away the original error.
     unless (isFailedTransactionError ex) $ throwIO ex
@@ -65,15 +60,13 @@ closeCursor (Cursor name conn) =
 -- the cursor is exhausted, a 'Left' value is returned, otherwise a
 -- 'Right' value is returned.
 foldForwardWithParser :: Cursor -> RowParserMonadic r -> Int -> (a -> r -> IO a) -> a -> IO (Either a a)
-foldForwardWithParser (Cursor name conn) parser chunkSize f a0 = do
+foldForwardWithParser (Cursor name conn) parser chunkSize f a0 = mapHpgsqlErrors $ do
   let q =
-        [sql|FETCH FORWARD #{chunkSize} FROM ^{escapeIdentifier (fromQuery name)}|]
-  result <- queryWithStreamingM parser (hpgConn conn) q
-  eFirstRow <- Streaming.inspect result
-  case eFirstRow of
-    Left () -> pure $ Left a0
-    Right restOfStream ->
-      Right <$> Streaming.foldM_ f (pure a0) pure (Streaming.yields restOfStream)
+        [sql|FETCH FORWARD ^{fromString (show chunkSize)} FROM ^{escapeIdentifier (fromQuery name)}|]
+  rows <- queryWithM parser (hpgConn conn) q
+  case rows of
+    [] -> pure $ Left a0
+    _ -> Right <$> foldM f a0 rows
 
 -- | Fold over a chunk of rows, calling the supplied fold-like function
 -- on each row as it is received. In case the cursor is exhausted,

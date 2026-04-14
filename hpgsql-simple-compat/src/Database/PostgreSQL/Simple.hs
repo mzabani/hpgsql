@@ -130,6 +130,7 @@ module Database.PostgreSQL.Simple
   )
 where
 
+import Control.Exception (bracket)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.ByteString.Builder (char8)
@@ -138,7 +139,6 @@ import Data.Int (Int64)
 import Data.List (intersperse)
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat (toByteString)
-import Control.Exception (bracket)
 import Database.PostgreSQL.Simple.Cursor (closeCursor, declareCursor, foldForwardWithParser)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
@@ -494,7 +494,7 @@ foldWithOptionsAndParser ::
   (a -> row -> IO a) ->
   IO a
 foldWithOptionsAndParser opts parser conn template qs a f = do
-  doFold opts parser conn template a f
+  doFold opts parser conn template qs a f
 
 -- | A version of 'fold' that does not perform query substitution.
 fold_ ::
@@ -530,7 +530,7 @@ foldWithOptions_ ::
   -- | Result consumer.
   (a -> r -> IO a) ->
   IO a
-foldWithOptions_ opts conn query' a f = doFold opts fromRow conn query' a f
+foldWithOptions_ opts conn query' a f = doFold opts fromRow conn query' () a f
 
 -- | A version of 'foldWithOptions_' taking a parser as an argument
 foldWithOptionsAndParser_ ::
@@ -544,17 +544,19 @@ foldWithOptionsAndParser_ ::
   -- | Result consumer.
   (a -> r -> IO a) ->
   IO a
-foldWithOptionsAndParser_ opts parser conn query' a f = doFold opts parser conn query' a f
+foldWithOptionsAndParser_ opts parser conn query' a f = doFold opts parser conn query' () a f
 
 doFold ::
+  (ToRow q) =>
   FoldOptions ->
   RowParserMonadic row ->
   Connection ->
   Query ->
+  q ->
   a ->
   (a -> row -> IO a) ->
   IO a
-doFold FoldOptions {..} parser conn simpleQ a0 f = mapHpgsqlErrors $ do
+doFold FoldOptions {..} parser conn q params a0 f = mapHpgsqlErrors $ do
   stat <- withConnection conn PQ.transactionStatus
   case stat of
     PQ.TransIdle -> withTransactionMode transactionMode conn go
@@ -572,7 +574,7 @@ doFold FoldOptions {..} parser conn simpleQ a0 f = mapHpgsqlErrors $ do
     -- back the transaction and start another.
 
     declare =
-      declareCursor conn simpleQ
+      declareCursor conn $ toHpgsqlQuery q params
     fetch cursor a =
       foldForwardWithParser cursor parser chunkSize f a
 
