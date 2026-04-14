@@ -44,7 +44,7 @@ recvNonBlocking s nbytes = withFdSocket s $ \fd -> createAndTrim (fromIntegral n
       err <- getErrno
       if err == eAGAIN || err == eWOULDBLOCK
         then do
-          putStrLn $ "Asked for " ++ show nbytes ++ ", but got eAGAIN"
+          -- putStrLn $ "Asked for " ++ show nbytes ++ ", but got eAGAIN"
           pure 0
         else
           throw $ userError "Internal error in hpgsql's recvNonBlocking"

@@ -21,4 +21,4 @@ fname :: Result -> Column -> IO (Maybe ByteString)
 fname _ _ = pure Nothing
 
 transactionStatus :: Connection -> IO TransactionStatus
-transactionStatus conn = HPgsql.connectionTransactionStatus $ hpgConn conn
+transactionStatus conn = HPgsql.transactionStatus $ hpgConn conn

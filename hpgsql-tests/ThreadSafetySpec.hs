@@ -14,6 +14,7 @@ import DbUtils
     irrecoverableErrorWithMsg,
     pgErrorMustContain,
     testConnInfo,
+    withRollback,
   )
 import HPgsql
 import HPgsql.Query (sql)
@@ -25,7 +26,7 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  describe "Thread safety and trickier error semantics" $ do
+  describe "Thread safety, interruption safety and trickier error semantics" $ do
     parallel $ do
       it
         "Query cancellation in the future"
@@ -34,6 +35,10 @@ spec = do
         it
           "Exercise interruption safety"
           exerciseInterruptionSafety
+
+        it
+          "Query interruption is semantics-preserving inside explicit transaction"
+          interruptingQueryInsideTransactionPreservesSemantics
         it
           "Send queries concurrently"
           sendQueriesConcurrently
@@ -207,7 +212,6 @@ queryCancellationInTheFuture = do
 -- is a blocking and risky process.
 exerciseInterruptionSafety :: HPgConnection -> IO ()
 exerciseInterruptionSafety conn = do
-  -- modifyMVar_ _globalDebugLock $ const (pure True)
   let veryLongTxtString :: String = take 10000 $ repeat 'x'
   forM_ [0_001 :: Int .. 2_000] $ \i -> do
     withAsync (execute conn [sql|select #{veryLongTxtString}, pg_sleep(0.1) FROM generate_series(1, 100000)|]) $ \queryAsync -> do
@@ -216,7 +220,22 @@ exerciseInterruptionSafety conn = do
       cancel queryAsync
     execute conn "SELECT 1" `shouldReturn` 1
 
--- modifyMVar_ _globalDebugLock $ const (pure False)
+-- | Inside an explicit transaction, cancelling an interrupted query would
+-- make the entire transaction fail because of the error. We want interruption
+-- not to change connection state (beyond what running or not running user queries
+-- might already, of course), so the explicit transaction needs to be healthy after
+-- query interruption.
+interruptingQueryInsideTransactionPreservesSemantics :: HPgConnection -> IO ()
+interruptingQueryInsideTransactionPreservesSemantics conn = withRollback conn $ do
+  forM_ [1 .. 2] $ const $ do
+    withAsync (execute conn [sql|select pg_sleep(0.5)|]) $ \queryAsync -> do
+      threadDelay 250_000
+      cancel queryAsync
+    -- The timeouts above pretty much ensure the query started and was cancelled
+    -- during its execution. If the transaction is unhealthy, the next query would
+    -- throw an error with "current transaction is aborted, commands ignored .."
+    transactionStatus conn `shouldReturn` TransActive
+    execute conn "SELECT 1" `shouldReturn` 1
 
 queryThatErrorsDueToBadFromPgFieldImplementation1 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = do

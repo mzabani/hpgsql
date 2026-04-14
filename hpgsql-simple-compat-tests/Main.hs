@@ -569,16 +569,14 @@ testTimeout TestEnv {..} =
   withConn $ \c -> do
     start_t <- getCurrentTime
     res <- timeout 200000 $ do
-      withTransaction c $ do
-        query_ c "SELECT pg_sleep(1)" :: IO [Only ()]
+      -- Comment out withTransaction because hpgsql-simple-compat will
+      -- drain+wait for the pg_sleep query before issuing a ROLLBACK
+      -- withTransaction c $ do
+      query_ c "SELECT pg_sleep(1)" :: IO [Only ()]
     end_t <- getCurrentTime
     assertBool "Timeout did not occur" (res == Nothing)
-#if !defined(mingw32_HOST_OS)
--- At the moment, you cannot timely abandon queries with async exceptions on
--- Windows.
     let d = end_t `diffUTCTime` start_t
     assertBool "Timeout didn't work in a timely fashion" (0.1 < d && d < 0.6)
-#endif
 
 testDouble :: TestEnv -> Assertion
 testDouble TestEnv {..} = do

@@ -250,7 +250,8 @@ data InternalConnectionState = InternalConnectionState
   { totalQueriesSent :: !Integer,
     -- | We support only one pipeline sent to the backend at a time.
     currentPipeline :: ![QueryState],
-    notificationsReceived :: !(TQueue NotificationResponse)
+    notificationsReceived :: !(TQueue NotificationResponse),
+    transactionStatusBeforeCurrentPipeline :: !TransactionStatus
   }
 
 -- ------------------------------------------------------------------

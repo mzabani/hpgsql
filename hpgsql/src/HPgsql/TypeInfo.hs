@@ -99,8 +99,14 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 
--- | This replicates the postgresql-libpq constructor, because why not?
-data TransactionStatus = TransActive | TransIdle | TransInTrans | TransInError
+data TransactionStatus
+  = -- | A command is in progress
+    TransActive
+  | -- | Not inside a transaction
+    TransIdle
+  | -- | Inside a transaction, but no command running
+    TransInTrans
+  | TransInError
   deriving stock (Eq, Show)
 
 newtype Oid = Oid Int32

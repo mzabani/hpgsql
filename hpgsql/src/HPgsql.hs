@@ -36,7 +36,7 @@ module HPgsql
     execute_,
     executeMany_,
     executeMany,
-    connectionTransactionStatus,
+    transactionStatus,
     runPipeline,
     pipelineCmd,
     pipelineL,
@@ -121,10 +121,14 @@ connectionReadyForNewPipeline (currentPipeline -> pipeline) =
       Nothing -> Left (q1 :| qs)
       Just st -> Right st
 
-connectionTransactionStatus :: HPgConnection -> IO TransactionStatus
-connectionTransactionStatus conn = STM.atomically $ updateConnStateTxn conn $ \sttv -> do
+-- | Returns the transaction's status _before_ the current pipeline was sent
+-- and the current transaction status.
+-- The former can be used to determine if the pipeline was initiated inside
+-- an explicit or implicit transaction.
+fullTransactionStatus :: TVar InternalConnectionState -> STM (TransactionStatus, TransactionStatus)
+fullTransactionStatus sttv = do
   st <- STM.readTVar sttv
-  case connectionReadyForNewPipeline st of
+  (st.transactionStatusBeforeCurrentPipeline,) <$> case connectionReadyForNewPipeline st of
     Right s -> pure s
     Left pipeline ->
       pure $
@@ -139,6 +143,9 @@ connectionTransactionStatus conn = STM.atomically $ updateConnStateTxn conn $ \s
           then
             TransInError
           else TransActive
+
+transactionStatus :: HPgConnection -> IO TransactionStatus
+transactionStatus conn = snd <$> STM.atomically (fullTransactionStatus conn.internalConnectionState)
 
 connect :: ConnString -> DiffTime -> IO HPgConnection
 connect =
@@ -184,7 +191,8 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
           InternalConnectionState
             { totalQueriesSent = 0,
               currentPipeline = [],
-              notificationsReceived = notifQueue
+              notificationsReceived = notifQueue,
+              transactionStatusBeforeCurrentPipeline = TransIdle
             }
       let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer socketMutex originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
@@ -293,12 +301,12 @@ beforeReturningToPool conn@HPgConnection {internalConnectionState} mCleanOpts = 
     st <- STM.readTVar internalConnectionState
     when (isLeft $ connectionReadyForNewPipeline st) $ throwIrrecoverableError "There are still active queries in progress. Make sure to close this connection with `closeForcefully` or consume all existing queries' results"
   when (checkTransactionState cleanOpts) $ do
-    txnStatus <- connectionTransactionStatus conn
+    txnStatus <- transactionStatus conn
     unless (txnStatus == TransIdle) $ throwIrrecoverableError $ "The connection's transaction was left in an invalid state: " ++ show txnStatus ++ ". Make sure to close this connection with `closeForcefully`"
   -- What if there are notifications in the socket buffer? It seems reasonable to assume that when
   -- running "UNLISTEN *" those would be received, so this might be fine as long as we
   -- clear the internal queue _after_ "UNLISTEN *".
-  executeMany_ conn $ (if resetAll cleanOpts then ["RESET ALL", "RESET ROLE"] else []) ++ (if unlistenAll cleanOpts then ["UNLISTEN *"] else [])
+  executeMany_ conn $ (if unlistenAll cleanOpts then ["UNLISTEN *"] else []) ++ (if resetAll cleanOpts then ["RESET ALL", "RESET ROLE"] else [])
   when (unlistenAll cleanOpts) clearInternalNotificationQueue
   where
     cleanOpts = fromMaybe PoolCleanup {resetAll = True, unlistenAll = True, checkTransactionState = True} mCleanOpts
@@ -801,8 +809,8 @@ queryStreaming = queryWithStreaming rowParser
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
 -- if it can't do that. Then runs the continuation.
-atomicallyInitiatePipelineOrPanicAndThenConsumeResults :: HPgConnection -> NonEmpty (ByteString, QueryProtocol) -> [SomeMessage] -> (NonEmpty QueryId -> IO a) -> IO a
-atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent allMsgs continuation = do
+sendPipeline :: HPgConnection -> NonEmpty (ByteString, QueryProtocol) -> [SomeMessage] -> (NonEmpty QueryId -> IO a) -> IO a
+sendPipeline conn queriesBeingSent allMsgs continuation = do
   thisWeakThreadId <- getMyWeakThreadId
   qryIds <- waitUntilPipelineIsReadyForNewQuery conn (getUniqueQueryStatesForNewPipeline queriesBeingSent) $ \(nextId, lastId) -> do
     -- If this thread is interrupted now, it is ok: only `totalQueriesSent` was bumped, but `currentPipeline`
@@ -817,7 +825,8 @@ atomicallyInitiatePipelineOrPanicAndThenConsumeResults conn queriesBeingSent all
           ( allMsgs,
             do
               st <- STM.readTVar (internalConnectionState conn)
-              STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = NE.toList newPipeline}
+              (_, txnStatusRightBeforeSendingPipeline) <- fullTransactionStatus (internalConnectionState conn)
+              STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = NE.toList newPipeline, transactionStatusBeforeCurrentPipeline = txnStatusRightBeforeSendingPipeline}
           )
         debugPrint $ "+++ Sent QueryIds " ++ show [nextId .. lastId]
         pure $ fmap queryIdentifier newPipeline
@@ -902,7 +911,8 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
   -- soon after draining the last query a different thread runs a new query.
   -- We want the supplied `f` function to run on a clean state/pipeline.
   unless (null queriesToDrain) $ do
-    debugPrint $ "Going to take control-msg lock to drain " ++ show queriesToDrain
+    (txnStatusBeforePipeline, _) <- STM.atomically $ fullTransactionStatus conn.internalConnectionState
+    debugPrint $ "Going to take control-msg lock to drain " ++ show queriesToDrain ++ ". txnStatusBeforePipeline is " ++ show txnStatusBeforePipeline
     withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ const $ do
       -- It is possible not just in theory for the cancellation request to
       -- arrive/be processed by postgres _before_ the previous statement was
@@ -917,7 +927,10 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
       -- What we do here is fire a cancellation request every 0.5 seconds to cover
       -- for that.
       debugPrint "Cancelling active statement to drain"
-      sendCancellationRequest conn
+      -- We don't want to send cancellation requests if we're in an explicit transaction
+      -- because that would put the transaction in TransInError, which is not semantics-preserving.
+      let isInExplicitTransaction = txnStatusBeforePipeline == TransInTrans
+      unless isInExplicitTransaction $ sendCancellationRequest conn
       -- putStrLn $ "Draining " ++ show queriesToDrain
       -- debugPrint $ "Draining " ++ show queriesToDrain
       let drainUntilError [] = pure ()
@@ -936,8 +949,7 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
               Just () -> pure ()
               Nothing -> do
                 debugPrint $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
-                -- putStrLn $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
-                sendCancellationRequest conn
+                unless isInExplicitTransaction $ sendCancellationRequest conn
                 leftToDrain <- acquireOwnershipOfOrphanedQueries
                 alternateDrainingWithCancelReqs leftToDrain
       alternateDrainingWithCancelReqs queriesToDrain
@@ -1042,7 +1054,7 @@ runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
                   SomeMessage Describe,
                   SomeMessage Execute
                 ]
-      atomicallyInitiatePipelineOrPanicAndThenConsumeResults
+      sendPipeline
         conn
         (fmap (\(SingleQuery {queryString}, _) -> (queryString, ExtendedQuery)) queries)
         (concatMap toMessages queries ++ [SomeMessage Sync])
@@ -1105,7 +1117,7 @@ withCopy conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Single
   thisThreadId <- getMyWeakThreadId
   encodingContext <- readMVar conn.encodingContext
   let paramOidsAndValues = map ($ encodingContext) queryParams
-  atomicallyInitiatePipelineOrPanicAndThenConsumeResults
+  sendPipeline
     conn
     ((queryString, CopyQuery StillCopying) :| [])
     [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),
@@ -1129,7 +1141,7 @@ copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Singl
   thisThreadId <- getMyWeakThreadId
   encodingContext <- readMVar conn.encodingContext
   let paramOidsAndValues = map ($ encodingContext) queryParams
-  atomicallyInitiatePipelineOrPanicAndThenConsumeResults
+  sendPipeline
     conn
     ((queryString, CopyQuery StillCopying) :| [])
     [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),

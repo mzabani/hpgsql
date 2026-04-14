@@ -180,19 +180,19 @@ checkCommandCounts conn = withRollback conn $ do
 queryTransactionStatusInAllTransactionStates :: HPgConnection -> IO ()
 queryTransactionStatusInAllTransactionStates conn = do
   -- First a nice case
-  connectionTransactionStatus conn `shouldReturn` TransIdle
+  transactionStatus conn `shouldReturn` TransIdle
   execute_ conn "BEGIN"
-  connectionTransactionStatus conn `shouldReturn` TransInTrans
+  transactionStatus conn `shouldReturn` TransInTrans
   execute_ conn "COMMIT"
-  connectionTransactionStatus conn `shouldReturn` TransIdle
+  transactionStatus conn `shouldReturn` TransIdle
 
   -- Now a failure
   execute_ conn "BEGIN"
-  connectionTransactionStatus conn `shouldReturn` TransInTrans
+  transactionStatus conn `shouldReturn` TransInTrans
   execute_ conn "SELECT 1/0" `shouldThrow` pgErrorMustContain "SELECT 1/0" []
-  connectionTransactionStatus conn `shouldReturn` TransInError
+  transactionStatus conn `shouldReturn` TransInError
   execute_ conn "ROLLBACK"
-  connectionTransactionStatus conn `shouldReturn` TransIdle
+  transactionStatus conn `shouldReturn` TransIdle
 
 raiseNoticeThenRunQuery :: HPgConnection -> IO ()
 raiseNoticeThenRunQuery conn = do
