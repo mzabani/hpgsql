@@ -48,6 +48,9 @@ module HPgsql
     resetTypeInfoCache,
     queryWithM,
     queryWithStreamingM,
+    copyFromL,
+    copyFromS,
+    withCopy_,
   )
 where
 
@@ -56,7 +59,7 @@ import Control.Concurrent (modifyMVar, modifyMVar_, readMVar)
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (MonadThrow, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
+import Control.Exception.Safe (MonadThrow, SomeException, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Builder as Builder
@@ -77,7 +80,7 @@ import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import HPgsql.Base
 import HPgsql.Connection (ConnString (..))
-import HPgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..))
+import HPgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
 import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
 import HPgsql.Locking (getMyWeakThreadId, withMutex)
 import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
@@ -361,7 +364,7 @@ receiveNextMsgWithMaskedContinuation :: (Show a) => HPgConnection -> PgMsgParser
 receiveNextMsgWithMaskedContinuation conn parser f =
   receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser $ \case
     Right p -> f p
-    Left msgIdentChar -> throwIrrecoverableError $ "Could not parse postgres message with ident char " ++ show msgIdentChar ++ ". This is an internal error in HPGsql. Please report it."
+    Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " ++ show msgIdentChar ++ ". This is an internal error in HPgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
 -- the internal buffer and the supplied function runs to completion.
@@ -370,7 +373,7 @@ receiveNextMsgWithMaskedContinuation conn parser f =
 -- lest it will be left in a very broken place.
 -- CAREFUL: avoid doing networking or too much work in your supplied function. It must
 -- be really cheap!
-receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either Char a -> IO b) -> IO b
+receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> IO b) -> IO b
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = rethrowAsIrrecoverable $ do
   -- \^ We rethrow as irrecoverable because an error here is likely a socket receiving error.
   --
@@ -431,7 +434,11 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               removeFirstBytesFromBufferOrThrow fullMessageLen
               modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
               pure Nothing
-            Nothing -> Just <$> f (Left msgIdentChar)
+            Nothing ->
+              -- Just in case this is a postgres error, it might include useful information,
+              -- so we spit that out
+              let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
+               in Just <$> f (Left (msgIdentChar, mPgError))
 
     removeFirstBytesFromBufferOrThrow :: Int64 -> IO ()
     removeFirstBytesFromBufferOrThrow nbytes = modifyMVar_ recvBuffer $ \lbs -> do
@@ -1111,9 +1118,21 @@ queryWith rparser conn qry = join $ runPipeline conn $ pipelineL rparser qry
 queryWithM :: RowParserMonadic a -> HPgConnection -> Query -> IO [a]
 queryWithM rparser conn qry = join $ runPipeline conn $ pipelineLM rparser qry
 
-withCopy :: HPgConnection -> Query -> IO () -> IO Int64
-withCopy conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) copyFn = do
-  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmdInternal fqne
+withCopy_ :: HPgConnection -> Query -> IO a -> IO Int64
+withCopy_ conn copyQ copyFn = fst <$> withCopy conn copyQ copyFn
+
+withCopy :: HPgConnection -> Query -> IO a -> IO (Int64, a)
+withCopy conn copyQ copyFn = withCopyInternal conn copyQ $ \qryId -> do
+  ret <- copyFn
+  count <- copyEndInternal conn qryId
+  pure (count, ret)
+
+withCopyInternal :: HPgConnection -> Query -> (QueryId -> IO (Int64, a)) -> IO (Int64, a)
+withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) copyFn = do
+  -- We error here if the Query is more than just "COPY .." because if we
+  -- ran the other statements in a separate pipeline, they would
+  -- run in a different implicit transaction, which could be unexpected.
+  whenNonEmpty firstQueries $ const $ throwIrrecoverableError "Query for COPY must not have other SQL statements"
   thisThreadId <- getMyWeakThreadId
   encodingContext <- readMVar conn.encodingContext
   let paramOidsAndValues = map ($ encodingContext) queryParams
@@ -1130,8 +1149,42 @@ withCopy conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Single
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      copyFn
-      copyEndInternal conn qryId
+      copyFn qryId
+
+-- | Copies rows into a table.
+-- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
+-- Returns the Stream's result and the count of inserted rows.
+copyFromS :: (ToPgRow r) => HPgConnection -> Query -> Stream (Of r) IO b -> IO (Int64, b)
+copyFromS conn copyQ rows =
+  withCopyInternal conn copyQ $ \qryId -> do
+    -- Fancy:
+    -- Batch rows up until
+    -- Take the controlMsgsLock to flush all buffers
+    withControlMsgsLock conn (const $ pure ()) (const $ pure ()) (const $ pure ())
+    encCtx <- readMVar conn.encodingContext
+    putCopyData conn $ LBS.toStrict $ Builder.toLazyByteString $ Builder.byteString "PGCOPY\n\xff\r\n\0" <> Builder.int32BE 0 <> Builder.int32BE 0
+    ret <- S.mapM_ (sendRow . map (snd . ($ encCtx)) . toPgParams) rows
+    putCopyData conn $ LBS.toStrict $ Builder.toLazyByteString $ Builder.int16BE (-1)
+    count <- copyEndInternal conn qryId
+    pure (count, ret)
+  where
+    sendRow fields = do
+      let numFieldsBs = Builder.int16BE $ fromIntegral $ length fields
+          fieldsBs =
+            mconcat $
+              map
+                ( \case
+                    Nothing -> Builder.int32BE (-1)
+                    Just val -> Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val
+                )
+                fields
+      putCopyData conn $ LBS.toStrict $ Builder.toLazyByteString $ numFieldsBs <> fieldsBs
+
+-- | Copies rows into a table.
+-- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
+-- Returns the count of inserted rows.
+copyFromL :: (ToPgRow r) => HPgConnection -> Query -> [r] -> IO Int64
+copyFromL conn copyQ rows = fst <$> copyFromS conn copyQ (S.each rows)
 
 copyStart :: HPgConnection -> Query -> IO ()
 copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) = do
@@ -1268,7 +1321,7 @@ nonAtomicSendMsg HPgConnection {socket} msg = do
 rethrowAsIrrecoverable :: IO a -> IO a
 rethrowAsIrrecoverable = handle (throw . asIrrec)
   where
-    asIrrec ex = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", innerException = Just ex, relatedStatement = Nothing}
+    asIrrec (ex :: SomeException) = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", innerException = Just ex, relatedStatement = Nothing}
 
 {-# NOINLINE _globalDebugLock #-}
 _globalDebugLock :: MVar Bool
