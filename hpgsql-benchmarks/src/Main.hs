@@ -21,15 +21,18 @@ import Criterion.Measurement.Types
 import Data.Aeson
   ( FromJSON,
   )
+import qualified Data.ByteString.Char8 as BS8
 import Data.Int (Int32, Int64)
 import Data.Maybe
   ( fromMaybe,
   )
+import Data.String (IsString)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Time (Day, UTCTime)
 import qualified Data.Vector.Unboxed as V
 import qualified Database.PostgreSQL.Simple as PGSimple
+import qualified Database.PostgreSQL.Simple.Copy as PGSimple
 import qualified Database.PostgreSQL.Simple.Streaming as StreamingPostgresSimple
 import GHC.Generics (Generic)
 import qualified HPgsql
@@ -219,188 +222,209 @@ main = do
   initializeTime
 
   hspec $ do
-    describe
-      "Elapsed wall time must be linear with input size and max memory usage constant when streaming parse"
-      $ do
-        -- 1. Linear CPU time on input size means we're not accumulating anything
-        --    unreasonably when parsing in streaming fashion.
-        -- 2. Max memory usage constant is a must in a streaming parser as we should
-        --    be able to parse arbitrarily large result sets.
-        --    Since peak MB allocated is an integer, however, it could be that it rounds to different numbers
-        --    on different runs despite the actual total max allocates bytes being very similar. This could
-        --    mess up our horizontal line check.
-        describe "Parsing 13-column rows into a List" $ do
-          (conn, pgSimpleConn, hasqlConn) <- runIO $ do
-            hpgsqlConnInfo <- testConnInfo
-            conn <-
-              HPgsql.connect hpgsqlConnInfo 10
-            pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
-            hasqlConn <-
-              either (\e -> error $ "hasql connection failed: " ++ show e) id
-                <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
-            pure (conn, pgSimpleConn, hasqlConn)
-          let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
-              pgSimpleSql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g"
-              hasqlListStmt =
-                HasqlStmt.Statement
-                  sql
-                  (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
-                  ( HasqlDec.rowList
-                      ( (,,,,,,,,,,,,)
-                          <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
-                      )
+    describe "Parsing 13-column rows into a List" $ do
+      (conn, pgSimpleConn, hasqlConn) <- runIO $ do
+        hpgsqlConnInfo <- testConnInfo
+        conn <-
+          HPgsql.connect hpgsqlConnInfo 10
+        pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
+        hasqlConn <-
+          either (\e -> error $ "hasql connection failed: " ++ show e) id
+            <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
+        pure (conn, pgSimpleConn, hasqlConn)
+      let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
+          pgSimpleSql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g"
+          hasqlListStmt =
+            HasqlStmt.Statement
+              sql
+              (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+              ( HasqlDec.rowList
+                  ( (,,,,,,,,,,,,)
+                      <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
                   )
-                  True
-              hasqlRecordListStmt =
-                HasqlStmt.Statement
-                  sql
-                  (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
-                  ( HasqlDec.rowList
-                      ( HasqlBenchRow
-                          <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
-                      )
+              )
+              True
+          hasqlRecordListStmt =
+            HasqlStmt.Statement
+              sql
+              (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+              ( HasqlDec.rowList
+                  ( HasqlBenchRow
+                      <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
                   )
-                  True
-          forM_ [10_000 :: Int, 100_000] $ \n -> do
-            it ("hpgsql Tuple List (" ++ show n ++ " rows)") $
-              void $
-                bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
-                  HPgsql.queryWith (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
-            it ("hasql Tuple List (" ++ show n ++ " rows)") $
-              void $
-                bench ("hasql Tuple List (" ++ show n ++ " rows)") $ do
-                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
-                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
-            it ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
-              void $
-                bench ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
-                  PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day) pgSimpleConn pgSimpleSql (PGSimple.Only n)
-            it ("hpgsql Record List (" ++ show n ++ " rows)") $
-              void $
-                bench ("hpgsql Record List (" ++ show n ++ " rows)") $
-                  HPgsql.queryWith (HPgsql.rowParser @BenchRow) conn (HPgsql.mkQuery sql (HPgsql.Only n))
-            it ("hasql Record List (" ++ show n ++ " rows)") $
-              void $
-                bench ("hasql Record List (" ++ show n ++ " rows)") $ do
-                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlRecordListStmt) hasqlConn
-                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
-            it ("postgresql-simple Record List (" ++ show n ++ " rows)") $
-              void $
-                bench ("postgresql-simple Record List (" ++ show n ++ " rows)") $
-                  PGSimple.query @_ @BenchRow pgSimpleConn pgSimpleSql (PGSimple.Only n)
-        describe "Parsing 13-column rows in streaming fashion" $ do
-          (conn, pgSimpleConn, hasqlConn) <- runIO $ do
-            hpgsqlConnInfo <- testConnInfo
-            conn <-
-              HPgsql.connect hpgsqlConnInfo 10
-            pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
-            hasqlConn <-
-              either (\e -> error $ "hasql connection failed: " ++ show e) id
-                <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
-            pure (conn, pgSimpleConn, hasqlConn)
-          let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
-              hasqlFoldStmt =
-                HasqlStmt.Statement
-                  sql
-                  (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
-                  ( HasqlDec.foldlRows
-                      (\() !_ -> ())
-                      ()
-                      ( (,,,,,,,,,,,,)
-                          <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
-                      )
+              )
+              True
+      forM_ [10_000 :: Int, 100_000] $ \n -> do
+        it ("hpgsql Tuple List (" ++ show n ++ " rows)") $
+          void $
+            bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
+              HPgsql.queryWith (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+        it ("hasql Tuple List (" ++ show n ++ " rows)") $
+          void $
+            bench ("hasql Tuple List (" ++ show n ++ " rows)") $ do
+              result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
+              either (\e -> error $ "hasql query failed: " ++ show e) pure result
+        it ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
+          void $
+            bench ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
+              PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day) pgSimpleConn pgSimpleSql (PGSimple.Only n)
+        it ("hpgsql Record List (" ++ show n ++ " rows)") $
+          void $
+            bench ("hpgsql Record List (" ++ show n ++ " rows)") $
+              HPgsql.queryWith (HPgsql.rowParser @BenchRow) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+        it ("hasql Record List (" ++ show n ++ " rows)") $
+          void $
+            bench ("hasql Record List (" ++ show n ++ " rows)") $ do
+              result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlRecordListStmt) hasqlConn
+              either (\e -> error $ "hasql query failed: " ++ show e) pure result
+        it ("postgresql-simple Record List (" ++ show n ++ " rows)") $
+          void $
+            bench ("postgresql-simple Record List (" ++ show n ++ " rows)") $
+              PGSimple.query @_ @BenchRow pgSimpleConn pgSimpleSql (PGSimple.Only n)
+    describe "Parsing 13-column rows in streaming fashion" $ do
+      (conn, pgSimpleConn, hasqlConn) <- runIO $ do
+        hpgsqlConnInfo <- testConnInfo
+        conn <-
+          HPgsql.connect hpgsqlConnInfo 10
+        pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
+        hasqlConn <-
+          either (\e -> error $ "hasql connection failed: " ++ show e) id
+            <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
+        pure (conn, pgSimpleConn, hasqlConn)
+      let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
+          hasqlFoldStmt =
+            HasqlStmt.Statement
+              sql
+              (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+              ( HasqlDec.foldlRows
+                  (\() !_ -> ())
+                  ()
+                  ( (,,,,,,,,,,,,)
+                      <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
                   )
-                  True
-              hasqlRecordFoldStmt =
-                HasqlStmt.Statement
-                  sql
-                  (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
-                  ( HasqlDec.foldlRows
-                      (\() !_ -> ())
-                      ()
-                      ( HasqlBenchRow
-                          <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
-                          <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
-                      )
+              )
+              True
+          hasqlRecordFoldStmt =
+            HasqlStmt.Statement
+              sql
+              (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
+              ( HasqlDec.foldlRows
+                  (\() !_ -> ())
+                  ()
+                  ( HasqlBenchRow
+                      <$> HasqlDec.column (HasqlDec.nonNullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.timestamptz)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.int4)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
+                      <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
                   )
-                  True
-          forM_ [10_000 :: Int, 100_000] $ \n -> do
-            it ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
+              )
+              True
+      forM_ [10_000 :: Int, 100_000] $ \n -> do
+        it ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
+          void $
+            bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $ do
+              res <- HPgsql.queryWithStreaming (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+              S.effects res
+        it ("hasql Tuple Stream (" ++ show n ++ " rows)") $
+          void $
+            bench ("hasql Tuple Stream (" ++ show n ++ " rows)") $ do
+              result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlFoldStmt) hasqlConn
+              either (\e -> error $ "hasql query failed: " ++ show e) pure result
+        it ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
+          void $
+            bench ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $ do
+              runResourceT @IO $ do
+                let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n)
+                S.effects res
+        it ("hpgsql Record Stream (" ++ show n ++ " rows)") $
+          void $
+            bench ("hpgsql Record Stream (" ++ show n ++ " rows)") $ do
+              res <- HPgsql.queryWithStreaming (HPgsql.rowParser @BenchRow) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+              S.effects res
+        it ("hasql Record Stream (" ++ show n ++ " rows)") $
+          void $
+            bench ("hasql Record Stream (" ++ show n ++ " rows)") $ do
+              result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlRecordFoldStmt) hasqlConn
+              either (\e -> error $ "hasql query failed: " ++ show e) pure result
+        it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
+          void $
+            bench ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $ do
+              runResourceT @IO $ do
+                let res :: Stream (Of BenchRow) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n)
+                S.effects res
+    describe "COPY FROM STDIN" $ do
+      (conn, pgSimpleConn) <- runIO $ do
+        hpgsqlConnInfo <- testConnInfo
+        conn <- HPgsql.connect hpgsqlConnInfo 10
+        pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
+        pure (conn, pgSimpleConn)
+      let createCopyBenchTable :: (IsString s) => s
+          createCopyBenchTable = "CREATE UNLOGGED TABLE copy_bench (id INT4 NOT NULL, name TEXT NOT NULL, item TEXT NOT NULL, value FLOAT8 NOT NULL)"
+      forM_ [100_000 :: Int] $ \n -> do
+        it ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $
+          void $
+            bench ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $ do
+              HPgsql.execute_ conn "BEGIN"
+              HPgsql.execute_ conn createCopyBenchTable
               void $
-                bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $ do
-                  res <- HPgsql.queryWithStreaming (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
-                  S.effects res
-            it ("hasql Tuple Stream (" ++ show n ++ " rows)") $
-              void $
-                bench ("hasql Tuple Stream (" ++ show n ++ " rows)") $ do
-                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlFoldStmt) hasqlConn
-                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
-            it ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
-              void $
-                bench ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $ do
-                  runResourceT @IO $ do
-                    let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n)
-                    S.effects res
-            it ("hpgsql Record Stream (" ++ show n ++ " rows)") $
-              void $
-                bench ("hpgsql Record Stream (" ++ show n ++ " rows)") $ do
-                  res <- HPgsql.queryWithStreaming (HPgsql.rowParser @BenchRow) conn (HPgsql.mkQuery sql (HPgsql.Only n))
-                  S.effects res
-            it ("hasql Record Stream (" ++ show n ++ " rows)") $
-              void $
-                bench ("hasql Record Stream (" ++ show n ++ " rows)") $ do
-                  result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlRecordFoldStmt) hasqlConn
-                  either (\e -> error $ "hasql query failed: " ++ show e) pure result
-            it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
-              void $
-                bench ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $ do
-                  runResourceT @IO $ do
-                    let res :: Stream (Of BenchRow) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n)
-                    S.effects res
+                HPgsql.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
+                  S.map
+                    (\g -> (g :: Int32, "some-text" :: Text, "some-other-text" :: Text, fromIntegral g * 1.5 :: Double))
+                    (S.each [1 .. fromIntegral n])
+              HPgsql.execute_ conn "ROLLBACK"
+        it ("postgresql-simple text COPY (" ++ show n ++ " rows)") $
+          void $
+            bench ("postgresql-simple text COPY (" ++ show n ++ " rows)") $ do
+              void $ PGSimple.execute_ pgSimpleConn "BEGIN"
+              void $ PGSimple.execute_ pgSimpleConn createCopyBenchTable
+              PGSimple.copy_ pgSimpleConn "COPY copy_bench FROM STDIN WITH (FORMAT CSV)"
+              forM_ [1 :: Int .. n] $ \g ->
+                PGSimple.putCopyData pgSimpleConn $
+                  BS8.pack (show g) <> "," <> "some-text" <> "," <> "some-other-text" <> "," <> BS8.pack (show (fromIntegral g * 1.5 :: Double)) <> "\n"
+              void $ PGSimple.putCopyEnd pgSimpleConn
+              void $ PGSimple.execute_ pgSimpleConn "ROLLBACK"
