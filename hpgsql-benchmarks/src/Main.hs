@@ -28,7 +28,7 @@ import Data.Maybe
   )
 import Data.String (IsString)
 import Data.Text (Text)
-import Data.Text.Encoding (decodeUtf8)
+import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time (Day, UTCTime)
 import qualified Data.Vector.Unboxed as V
 import qualified Database.PostgreSQL.Simple as PGSimple
@@ -405,6 +405,7 @@ main = do
         pure (conn, pgSimpleConn)
       let createCopyBenchTable :: (IsString s) => s
           createCopyBenchTable = "CREATE UNLOGGED TABLE copy_bench (id INT4 NOT NULL, name TEXT NOT NULL, item TEXT NOT NULL, value FLOAT8 NOT NULL)"
+          mkRow g = (g :: Int32, "some-text" :: Text, "some-other-text" :: Text, fromIntegral g * 1.5 :: Double)
       forM_ [100_000 :: Int] $ \n -> do
         it ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $
           void $
@@ -414,7 +415,7 @@ main = do
               void $
                 HPgsql.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
                   S.map
-                    (\g -> (g :: Int32, "some-text" :: Text, "some-other-text" :: Text, fromIntegral g * 1.5 :: Double))
+                    mkRow
                     (S.each [1 .. fromIntegral n])
               HPgsql.execute_ conn "ROLLBACK"
         it ("postgresql-simple text COPY (" ++ show n ++ " rows)") $
@@ -423,8 +424,8 @@ main = do
               void $ PGSimple.execute_ pgSimpleConn "BEGIN"
               void $ PGSimple.execute_ pgSimpleConn createCopyBenchTable
               PGSimple.copy_ pgSimpleConn "COPY copy_bench FROM STDIN WITH (FORMAT CSV)"
-              forM_ [1 :: Int .. n] $ \g ->
+              forM_ (map mkRow [1 .. fromIntegral n]) $ \(g, t1, t2, g2) ->
                 PGSimple.putCopyData pgSimpleConn $
-                  BS8.pack (show g) <> "," <> "some-text" <> "," <> "some-other-text" <> "," <> BS8.pack (show (fromIntegral g * 1.5 :: Double)) <> "\n"
+                  BS8.pack (show g) <> "," <> encodeUtf8 t1 <> "," <> encodeUtf8 t2 <> "," <> BS8.pack (show g2) <> "\n"
               void $ PGSimple.putCopyEnd pgSimpleConn
               void $ PGSimple.execute_ pgSimpleConn "ROLLBACK"

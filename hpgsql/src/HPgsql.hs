@@ -62,6 +62,7 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (MonadThrow, SomeException, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
@@ -72,6 +73,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Monoid (Sum (..))
 import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
@@ -91,6 +93,7 @@ import qualified HPgsql.SimpleParser as Parser
 import HPgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
+import qualified Network.Socket.ByteString as SocketBS
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
 import Streaming (Of (..), Stream)
 import qualified Streaming as S
@@ -1154,31 +1157,42 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
 -- | Copies rows into a table.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
 -- Returns the Stream's result and the count of inserted rows.
-copyFromS :: (ToPgRow r) => HPgConnection -> Query -> Stream (Of r) IO b -> IO (Int64, b)
-copyFromS conn copyQ rows =
+copyFromS :: forall r b. (ToPgRow r) => HPgConnection -> Query -> Stream (Of r) IO b -> IO (Int64, b)
+copyFromS conn copyQ allRows =
   withCopyInternal conn copyQ $ \qryId -> do
-    -- Fancy:
-    -- Batch rows up until
     -- Take the controlMsgsLock to flush all buffers
     withControlMsgsLock conn (const $ pure ()) (const $ pure ()) (const $ pure ())
     encCtx <- readMVar conn.encodingContext
-    putCopyData conn $ LBS.toStrict $ Builder.toLazyByteString $ Builder.byteString "PGCOPY\n\xff\r\n\0" <> Builder.int32BE 0 <> Builder.int32BE 0
-    ret <- S.mapM_ (sendRow . map (snd . ($ encCtx)) . toPgParams) rows
-    putCopyData conn $ LBS.toStrict $ Builder.toLazyByteString $ Builder.int16BE (-1)
+    rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData 19 $ Builder.byteString "PGCOPY\n\xff\r\n\0" <> Builder.int32BE 0 <> Builder.int32BE 0
+    eHasRows <- S.inspect allRows
+    ret <- case eHasRows of
+      Left ret -> pure ret
+      Right (firstRow :> otherRows) -> do
+        let numFieldsBs = (Sum 2, Builder.int16BE $ fromIntegral $ length $ toFields encCtx firstRow)
+            byteStream :: Stream (Of (Sum Int, Builder.Builder)) IO b
+            byteStream = S.map (rowToBs numFieldsBs . toFields encCtx) (S.cons firstRow otherRows)
+            chunkedByteStream :: Stream (Of (Sum Int, Builder.Builder)) IO b
+            chunkedByteStream =
+              S.mapped (S.foldMap id) (S.chunksOf 50 byteStream)
+        -- Using strict bytestrings reduces allocations a tiny little bit.. not sure why, but maybe
+        -- fusion rules?
+        S.mapM_ (rethrowAsIrrecoverable . SocketBS.sendAll conn.socket . LBS.toStrict . Builder.toLazyByteString . toPgMessage . (\(Sum len, bs) -> CopyData len bs)) chunkedByteStream
+    rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData 2 $ Builder.int16BE (-1)
     count <- copyEndInternal conn qryId
     pure (count, ret)
   where
-    sendRow fields = do
-      let numFieldsBs = Builder.int16BE $ fromIntegral $ length fields
-          fieldsBs =
-            mconcat $
-              map
-                ( \case
-                    Nothing -> Builder.int32BE (-1)
-                    Just val -> Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val
-                )
-                fields
-      putCopyData conn $ LBS.toStrict $ Builder.toLazyByteString $ numFieldsBs <> fieldsBs
+    toFields encCtx = map (snd . ($ encCtx)) . toPgParams
+    rowToBs numFieldsBs fields = do
+      let fieldsBs =
+            -- mconcat seems to allocate too many chunks, so we use foldl'
+            List.foldl'
+              ( \(!acc) el -> case el of
+                  Nothing -> acc <> (Sum 4, Builder.int32BE (-1))
+                  Just val -> acc <> (Sum $ 4 + fromIntegral (LBS.length val), Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val)
+              )
+              mempty
+              fields
+       in numFieldsBs <> fieldsBs
 
 -- | Copies rows into a table.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
@@ -1213,7 +1227,7 @@ copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Singl
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
-putCopyData conn t = nonAtomicSendMsg conn (CopyData t)
+putCopyData conn t = nonAtomicSendMsg conn $ CopyData (BS.length t) (Builder.byteString t)
 
 copyEnd :: HPgConnection -> IO Int64
 copyEnd conn = do

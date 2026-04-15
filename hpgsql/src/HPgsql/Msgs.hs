@@ -84,7 +84,8 @@ data Bind = Bind {paramsValuesInOrder :: ![Maybe LBS.ByteString], resultColumnFm
 data CancelRequest = CancelRequest Int32 Int32
   deriving stock (Show)
 
-newtype CopyData = CopyData ByteString
+-- | Length of contents and contents themselves as a `Builder`.
+data CopyData = CopyData !Int !Builder
 
 instance Show CopyData where
   show _ = "CopyData"
@@ -169,10 +170,9 @@ instance ToPgMessage CancelRequest where
     Builder.int32BE (4 + 4 + 4 + 4) <> Builder.int32BE 80877102 <> Builder.int32BE pid <> Builder.int32BE secret
 
 instance ToPgMessage CopyData where
-  toPgMessage (CopyData bs) =
-    -- TODO: Do we check if bytestring's length is too long or just continue ignoring the possibility?
+  toPgMessage (CopyData len bs) =
     -- TODO: Use a length-aware builder for performance if there is one
-    Builder.char7 'd' <> Builder.int32BE (4 + fromIntegral (BS.length bs)) <> Builder.byteString bs
+    Builder.char7 'd' <> Builder.int32BE (4 + fromIntegral len) <> bs
 
 instance ToPgMessage CopyFail where
   toPgMessage (CopyFail bs) =
