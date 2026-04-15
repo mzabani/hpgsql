@@ -6,6 +6,14 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (mapMaybe)
 
+data StrictTuple a b = StrictTuple !a !b
+
+instance (Semigroup a, Semigroup b) => Semigroup (StrictTuple a b) where
+  StrictTuple a1 b1 <> StrictTuple a2 b2 = StrictTuple (a1 <> a2) (b1 <> b2)
+
+instance (Monoid a, Monoid b) => Monoid (StrictTuple a b) where
+  mempty = StrictTuple mempty mempty
+
 headMaybe :: [a] -> Maybe a
 headMaybe [] = Nothing
 headMaybe (x : _) = Just x

@@ -35,6 +35,7 @@ import qualified Data.Aeson as Aeson
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
 import Data.Fixed (divMod')
@@ -44,6 +45,7 @@ import qualified Data.List as List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import Data.Monoid (Sum (..))
 import Data.Proxy (Proxy (..))
 import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
 import qualified Data.Serialize as Cereal
@@ -62,6 +64,7 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
+import HPgsql.Base
 import qualified HPgsql.SimpleParser as Parser
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
@@ -268,7 +271,7 @@ instance ToPgField Int16 where
 
 instance ToPgField Int32 where
   toTypeOid _ _ = Just int4Oid
-  toPgField _ n = Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
+  toPgField _ = \n -> Just $ Cereal.encodeLazy @Int32 . fromIntegral $ n
 
 instance ToPgField Int64 where
   toTypeOid _ _ = Just int8Oid
@@ -312,7 +315,7 @@ instance ToPgField Float where
 
 instance ToPgField Double where
   toTypeOid _ _ = Just float8Oid
-  toPgField _ n = Just $ Cereal.encodeLazy @Word64 $ castDoubleToWord64 n
+  toPgField _ = \n -> Just $ Cereal.encodeLazy @Word64 $ castDoubleToWord64 n
 
 instance ToPgField Bool where
   -- TODO: Cereal.encodeLazy seems to work, but reference the documentation that shows how bools are encoded
@@ -398,7 +401,7 @@ instance ToPgField Text where
 
   -- TODO: What about client_encoding?
   -- TODO: Some unsafe Text->LazyByteString conversion function that is faster?
-  toPgField _ t = Just $ LBS.fromStrict $ encodeUtf8 t
+  toPgField _ = \t -> Just $ LBS.fromStrict $ encodeUtf8 t
 
 instance ToPgField LT.Text where
   toTypeOid _ _ = Just textOid
@@ -447,6 +450,20 @@ class ToPgRow a where
   toPgParams :: a -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
   default toPgParams :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, Maybe LBS.ByteString)]
   toPgParams = genericToPgRow
+  toPgParamsEffic :: EncodingContext -> a -> StrictTuple (Sum Int) Builder.Builder
+  toPgParamsEffic encCtx = \row ->
+    let fields = map (snd . ($ encCtx)) $ toPgParams row
+        numFieldsBs = StrictTuple (Sum 2) (Builder.int16BE $ fromIntegral $ length fields)
+        fieldsBs =
+          -- mconcat seems to allocate too many chunks, so we use foldl'
+          List.foldl'
+            ( \(!acc) el -> case el of
+                Nothing -> acc <> StrictTuple (Sum 4) (Builder.int32BE (-1))
+                Just val -> acc <> StrictTuple (Sum $ 4 + fromIntegral (LBS.length val)) (Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val)
+            )
+            mempty
+            fields
+     in numFieldsBs <> fieldsBs
 
 instance ToPgRow () where
   toPgParams () = []
@@ -461,7 +478,14 @@ instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
   toPgParams (a, b, c) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c)]
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
-  toPgParams (a, b, c, d) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d)]
+  toPgParams (a, b, c, d) = [\encCtx -> (toTypeOid (Proxy @a) encCtx, toPgField encCtx a), \encCtx -> (toTypeOid (Proxy @b) encCtx, toPgField encCtx b), \encCtx -> (toTypeOid (Proxy @c) encCtx, toPgField encCtx c), \encCtx -> (toTypeOid (Proxy @d) encCtx, toPgField encCtx d)]
+  toPgParamsEffic encCtx = \(a, b, c, d) -> case toPgFieldWithSize a <> toPgFieldWithSize b <> toPgFieldWithSize c <> toPgFieldWithSize d of
+    StrictTuple (Sum len) bs -> StrictTuple (Sum $ len + 2) (Builder.int16BE 4 <> bs)
+    where
+      toPgFieldWithSize :: (ToPgField x) => x -> StrictTuple (Sum Int) Builder.Builder
+      toPgFieldWithSize v = case toPgField encCtx v of
+        Nothing -> StrictTuple (Sum 4) $ Builder.int32BE (-1)
+        Just v' -> let len = LBS.length v' in StrictTuple (Sum $ 4 + fromIntegral len) (Builder.int32BE (fromIntegral len) <> Builder.lazyByteString v')
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
   toPgParams (a, b, c, d, e) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e)]

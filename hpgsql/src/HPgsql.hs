@@ -1155,14 +1155,6 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       copyFn qryId
 
-data StrictTuple a b = StrictTuple !a !b
-
-instance (Semigroup a, Semigroup b) => Semigroup (StrictTuple a b) where
-  StrictTuple a1 b1 <> StrictTuple a2 b2 = StrictTuple (a1 <> a2) (b1 <> b2)
-
-instance (Monoid a, Monoid b) => Monoid (StrictTuple a b) where
-  mempty = StrictTuple mempty mempty
-
 -- | Copies rows into a table.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
 -- Returns the Stream's result and the count of inserted rows.
@@ -1177,9 +1169,8 @@ copyFromS conn copyQ allRows =
     ret <- case eHasRows of
       Left ret -> pure ret
       Right (firstRow :> otherRows) -> do
-        let numFieldsBs = StrictTuple (Sum 2) (Builder.int16BE $ fromIntegral $ length $ toFields encCtx firstRow)
-            byteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
-            byteStream = S.map (rowToBs numFieldsBs encCtx) (S.cons firstRow otherRows)
+        let byteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
+            byteStream = S.map (toPgParamsEffic encCtx) (S.cons firstRow otherRows)
             chunkedByteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
             chunkedByteStream =
               S.mapped (S.foldMap id) (S.chunksOf 50 byteStream)
@@ -1196,19 +1187,6 @@ copyFromS conn copyQ allRows =
     rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData 2 $ Builder.int16BE (-1)
     count <- copyEndInternal conn qryId
     pure (count, ret)
-  where
-    toFields encCtx = map (snd . ($ encCtx)) . toPgParams
-    rowToBs numFieldsBs encCtx = \row -> do
-      let fieldsBs =
-            -- mconcat seems to allocate too many chunks, so we use foldl'
-            List.foldl'
-              ( \(!acc) el -> case el of
-                  Nothing -> acc <> StrictTuple (Sum 4) (Builder.int32BE (-1))
-                  Just val -> acc <> StrictTuple (Sum $ 4 + fromIntegral (LBS.length val)) (Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val)
-              )
-              mempty
-              (toFields encCtx row)
-       in numFieldsBs <> fieldsBs
 
 -- | Copies rows into a table.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
