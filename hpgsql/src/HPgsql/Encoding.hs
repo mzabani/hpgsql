@@ -35,10 +35,10 @@ import qualified Data.Aeson as Aeson
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
 import Data.Fixed (divMod')
+import Data.Foldable (foldMap')
 import Data.Int (Int16, Int32, Int64)
 import Data.Kind (Type)
 import qualified Data.List as List
@@ -64,7 +64,9 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
-import HPgsql.Base
+import HPgsql.Base (StrictTuple (..))
+import HPgsql.Builder (BinaryField (..))
+import qualified HPgsql.Builder as Builder
 import qualified HPgsql.SimpleParser as Parser
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
@@ -259,35 +261,35 @@ instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgFiel
 class ToPgField a where
   toTypeOid :: Proxy a -> EncodingContext -> Maybe Oid
   toTypeOid _ _ = Nothing -- Default definition so users don't have to write this
-  toPgField :: EncodingContext -> a -> Maybe BS.ByteString
+  toPgField :: EncodingContext -> a -> BinaryField
 
 instance ToPgField Int where
   toTypeOid _ _ = Just haskellIntOid
-  toPgField _ n = Just $ binaryIntEncoder n
+  toPgField _ = binaryIntEncoder
 
 instance ToPgField Int16 where
   toTypeOid _ _ = Just int2Oid
-  toPgField _ n = Just $ Cereal.encode n
+  toPgField _ = \n -> NotNull $ Cereal.encode n
 
 instance ToPgField Int32 where
   toTypeOid _ _ = Just int4Oid
-  toPgField _ = \n -> Just $ Cereal.encode n
+  toPgField _ = \n -> NotNull $ Cereal.encode n
 
 instance ToPgField Int64 where
   toTypeOid _ _ = Just int8Oid
-  toPgField _ n = Just $ Cereal.encode n
+  toPgField _ = \n -> NotNull $ Cereal.encode n
 
 instance ToPgField Integer where
   toTypeOid _ _ = Just numericOid
-  toPgField encCtx n = toPgField @Scientific encCtx (fromIntegral n)
+  toPgField encCtx = \n -> toPgField @Scientific encCtx (fromIntegral n)
 
 instance ToPgField Oid where
   toTypeOid _ _ = Just oidOid
-  toPgField _ n = Just $ Cereal.encode @Int32 $ fromIntegral n
+  toPgField _ = \n -> NotNull $ Cereal.encode @Int32 $ fromIntegral n
 
 instance ToPgField Scientific where
   toTypeOid _ _ = Just numericOid
-  toPgField _ n =
+  toPgField _ = \n ->
     let sign = Cereal.encode @Int16 $ if n >= 0 then 0 else 0x4000
         -- The number is coeff * 10^exp, but we want it in base-10000 so we convert it to
         -- new_coeff * 10^new_exp with new_exp a multiple of 4
@@ -297,7 +299,7 @@ instance ToPgField Scientific where
         digits :: ByteString
         (ndigits, weight, digits) = calculateDigits 0 0 (abs base10000Coeff) ""
         dscale = Cereal.encode @Int16 (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
-     in Just $ Cereal.encode ndigits <> Cereal.encode (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
+     in NotNull $ Cereal.encode ndigits <> Cereal.encode (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
     where
       calculateDigits :: Int16 -> Int16 -> Integer -> BS.ByteString -> (Int16, Int16, BS.ByteString)
       calculateDigits !ndigitsSoFar !weightSoFar 0 !encodedDigits = (ndigitsSoFar, weightSoFar, encodedDigits)
@@ -311,22 +313,22 @@ instance ToPgField Scientific where
 
 instance ToPgField Float where
   toTypeOid _ _ = Just float4Oid
-  toPgField _ n = Just $ Cereal.encode @Word32 $ castFloatToWord32 n
+  toPgField _ = \n -> NotNull $ Cereal.encode @Word32 $ castFloatToWord32 n
 
 instance ToPgField Double where
   toTypeOid _ _ = Just float8Oid
-  toPgField _ = \n -> Just $ Cereal.encode @Word64 $ castDoubleToWord64 n
+  toPgField _ = \n -> NotNull $ Cereal.encode @Word64 $ castDoubleToWord64 n
 
 instance ToPgField Bool where
   -- TODO: Cereal.encode seems to work, but reference the documentation that shows how bools are encoded
   toTypeOid _ _ = Just boolOid
-  toPgField _ n = Just $ Cereal.encode @Bool $ n
+  toPgField _ n = NotNull $ Cereal.encode @Bool $ n
 
 instance ToPgField Day where
   -- PG Dates are Int32 number of days relative to 2000-01-01
   -- https://github.com/postgres/postgres/blob/master/src/include/datatype/timestamp.h#L235
   toTypeOid _ _ = Just dateOid
-  toPgField _ d = Just $ Cereal.encode @Int32 $ daysSince2000
+  toPgField _ d = NotNull $ Cereal.encode @Int32 $ daysSince2000
     where
       -- TODO: Catch integer overflow and do what?
       daysSince2000 = fromIntegral $ diffDays d (fromGregorian 2000 1 1)
@@ -334,24 +336,24 @@ instance ToPgField Day where
 instance ToPgField (Unbounded Day) where
   toTypeOid _ = toTypeOid (Proxy @Day)
   toPgField encCtx = \case
-    NegInfinity -> Just $ Cereal.encode @Int32 minBound
+    NegInfinity -> NotNull $ Cereal.encode @Int32 minBound
     Finite v -> toPgField encCtx v
-    PosInfinity -> Just $ Cereal.encode @Int32 maxBound
+    PosInfinity -> NotNull $ Cereal.encode @Int32 maxBound
 
 instance ToPgField CalendarDiffTime where
   toTypeOid _ _ = Just intervalOid
   toPgField _ CalendarDiffTime {..} =
     let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400
-     in Just $ Cereal.encode @(Int64, Int32, Int32) (round $ timeUnderOneDay * 1_000_000, days, fromIntegral ctMonths)
+     in NotNull $ Cereal.encode @(Int64, Int32, Int32) (round $ timeUnderOneDay * 1_000_000, days, fromIntegral ctMonths)
 
 instance ToPgField NominalDiffTime where
   toTypeOid _ _ = Just intervalOid
   toPgField _ ndt =
-    Just $ Cereal.encode @(Int64, Int32, Int32) (round $ ndt * 1_000_000, 0, 0)
+    NotNull $ Cereal.encode @(Int64, Int32, Int32) (round $ ndt * 1_000_000, 0, 0)
 
 instance ToPgField UTCTime where
   toTypeOid _ _ = Just timestamptzOid
-  toPgField _ (UTCTime parsedDate timeinday) = Just $ Cereal.encode @Int64 totalusecs
+  toPgField _ (UTCTime parsedDate timeinday) = NotNull $ Cereal.encode @Int64 totalusecs
     where
       -- TODO: Catch integer overflow and do what?
       -- This is FromPgField UTCTime:
@@ -369,9 +371,9 @@ instance ToPgField UTCTime where
 instance ToPgField (Unbounded UTCTime) where
   toTypeOid _ = toTypeOid (Proxy @UTCTime)
   toPgField encCtx = \case
-    NegInfinity -> Just $ Cereal.encode @Int64 minBound
+    NegInfinity -> NotNull $ Cereal.encode @Int64 minBound
     Finite v -> toPgField encCtx v
-    PosInfinity -> Just $ Cereal.encode @Int64 maxBound
+    PosInfinity -> NotNull $ Cereal.encode @Int64 maxBound
 
 instance ToPgField ZonedTime where
   toTypeOid _ _ = Just timestamptzOid
@@ -380,9 +382,9 @@ instance ToPgField ZonedTime where
 instance ToPgField (Unbounded ZonedTime) where
   toTypeOid _ = toTypeOid (Proxy @ZonedTime)
   toPgField encCtx = \case
-    NegInfinity -> Just $ Cereal.encode @Int64 minBound
+    NegInfinity -> NotNull $ Cereal.encode @Int64 minBound
     Finite v -> toPgField encCtx v
-    PosInfinity -> Just $ Cereal.encode @Int64 maxBound
+    PosInfinity -> NotNull $ Cereal.encode @Int64 maxBound
 
 instance ToPgField Char where
   toTypeOid _ _ = Just textOid
@@ -390,23 +392,27 @@ instance ToPgField Char where
 
 instance ToPgField ByteString where
   toTypeOid _ _ = Just byteaOid
-  toPgField _ = Just
+  toPgField _ = \bs -> NotNull bs
 
 instance ToPgField LBS.ByteString where
   toTypeOid _ _ = Just byteaOid
-  toPgField _ = Just . LBS.toStrict
+  toPgField encCtx = toPgField encCtx . LBS.toStrict
 
 instance ToPgField Text where
   toTypeOid _ _ = Just textOid
 
   -- TODO: What about client_encoding?
-  toPgField _ = \t -> Just $ encodeUtf8 t
+  toPgField _ = \t ->
+    let bs = encodeUtf8 t
+     in NotNull bs
 
 instance ToPgField LT.Text where
   toTypeOid _ _ = Just textOid
 
   -- TODO: What about client_encoding?
-  toPgField _ t = Just $ LBS.toStrict $ LT.encodeUtf8 t
+  toPgField _ = \t ->
+    let bs = LBS.toStrict $ LT.encodeUtf8 t
+     in NotNull bs
 
 instance ToPgField String where
   toTypeOid _ _ = Just textOid
@@ -416,12 +422,15 @@ instance ToPgField String where
 
 instance ToPgField Aeson.Value where
   toTypeOid _ _ = Just jsonbOid
-  toPgField _ v = Just $ BS.cons 1 (LBS.toStrict $ Aeson.encode v)
+  toPgField _ = \v ->
+    let bs = BS.cons 1 (LBS.toStrict $ Aeson.encode v)
+     in NotNull bs
 
 instance (ToPgField a) => ToPgField (Maybe a) where
   toTypeOid _ = toTypeOid (Proxy @a)
-  toPgField _ Nothing = Nothing
-  toPgField encCtx (Just n) = toPgField encCtx n
+  toPgField encCtx = \case
+    Nothing -> SqlNull
+    (Just n) -> toPgField encCtx n
 
 instance (ToPgField a) => ToPgField (Vector a) where
   toTypeOid _ encodingContext = do
@@ -431,37 +440,34 @@ instance (ToPgField a) => ToPgField (Vector a) where
     arrayTypInfo.oidOfArrayType
   toPgField encodingContext vec =
     let Oid elemOid = fromMaybe (Oid 0) (toTypeOid (Proxy @a) encodingContext)
-        ndim = Cereal.encode @Int32 1
+        ndim = Builder.byteString $ Cereal.encode @Int32 1
         -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
-        hasNull = Cereal.encode @Int32 0
-        -- hasNull = Cereal.encode @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
-        elemOidBs = Cereal.encode @Int32 elemOid
-        dim1 = Cereal.encode @Int32 (fromIntegral $ Vector.length vec)
-        lb1 = Cereal.encode @Int32 1
+        hasNull = Builder.byteString $ Cereal.encode @Int32 0
+        -- hasNull = Builder.byteString $ Cereal.encode @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
+        elemOidBs = Builder.byteString $ Cereal.encode @Int32 elemOid
+        dim1 = Builder.byteString $ Cereal.encode @Int32 (fromIntegral $ Vector.length vec)
+        lb1 = Builder.byteString $ Cereal.encode @Int32 1
+        encodeElement el = Builder.binaryField $ toPgField encodingContext el
         encodedElements = Vector.foldl' (\acc el -> acc <> encodeElement el) mempty vec
-        encodeElement el = case toPgField encodingContext el of
-          Nothing -> Cereal.encode @Int32 (-1)
-          Just bs -> Cereal.encode @Int32 (fromIntegral $ BS.length bs) <> bs
-     in Just $ ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
+        fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
+     in NotNull (Builder.toStrictByteString fullBs)
 
 class ToPgRow a where
-  toPgParams :: a -> [EncodingContext -> (Maybe Oid, Maybe ByteString)]
-  default toPgParams :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, Maybe ByteString)]
+  toPgParams :: a -> [EncodingContext -> (Maybe Oid, BinaryField)]
+  default toPgParams :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, BinaryField)]
   toPgParams = genericToPgRow
-  toPgParamsEffic :: EncodingContext -> a -> StrictTuple (Sum Int) Builder.Builder
-  toPgParamsEffic encCtx = \row ->
+
+  -- | This additional method has a default implementation and therefore does not need to be overridden,
+  -- but can be overridden for better (10-20% faster in some cases) Binary COPY FROM STDIN performance.
+  -- It's unclear whether this should remain in future versions of the hpgsql.
+  toBinaryCopyBytes :: EncodingContext -> a -> Builder.Builder
+  toBinaryCopyBytes encCtx = \row ->
     let fields = map (snd . ($ encCtx)) $ toPgParams row
-        numFieldsBs = StrictTuple (Sum 2) (Builder.int16BE $ fromIntegral $ length fields)
-        fieldsBs =
-          -- mconcat seems to allocate too many chunks, so we use foldl'
-          List.foldl'
-            ( \(!acc) el -> case el of
-                Nothing -> acc <> StrictTuple (Sum 4) (Builder.int32BE (-1))
-                Just val -> acc <> StrictTuple (Sum $ 4 + fromIntegral (BS.length val)) (Builder.int32BE (fromIntegral $ BS.length val) <> Builder.byteString val)
-            )
-            mempty
+        StrictTuple (Sum numFields) fieldsBs =
+          foldMap'
+            (\el -> StrictTuple (Sum 1) (Builder.binaryField el))
             fields
-     in numFieldsBs <> fieldsBs
+     in Builder.int16BE numFields <> fieldsBs
 
 instance ToPgRow () where
   toPgParams () = []
@@ -477,13 +483,15 @@ instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
   toPgParams (a, b, c, d) = [\encCtx -> (toTypeOid (Proxy @a) encCtx, toPgField encCtx a), \encCtx -> (toTypeOid (Proxy @b) encCtx, toPgField encCtx b), \encCtx -> (toTypeOid (Proxy @c) encCtx, toPgField encCtx c), \encCtx -> (toTypeOid (Proxy @d) encCtx, toPgField encCtx d)]
-  toPgParamsEffic encCtx = \(a, b, c, d) -> case toPgFieldWithSize a <> toPgFieldWithSize b <> toPgFieldWithSize c <> toPgFieldWithSize d of
-    StrictTuple (Sum len) bs -> StrictTuple (Sum $ len + 2) (Builder.int16BE 4 <> bs)
+
+  -- This instance implements toBinaryCopyBytes as well because we did this
+  -- to test if this method can help improve performance of COPY in our
+  -- benchmarks. We found that it can, but we didn't bother yet implementing
+  -- this for other types.
+  toBinaryCopyBytes encCtx = \(a, b, c, d) -> Builder.int16BE 4 <> toPgFieldWithSize a <> toPgFieldWithSize b <> toPgFieldWithSize c <> toPgFieldWithSize d
     where
-      toPgFieldWithSize :: (ToPgField x) => x -> StrictTuple (Sum Int) Builder.Builder
-      toPgFieldWithSize v = case toPgField encCtx v of
-        Nothing -> StrictTuple (Sum 4) $ Builder.int32BE (-1)
-        Just v' -> let len = BS.length v' in StrictTuple (Sum $ 4 + fromIntegral len) (Builder.int32BE (fromIntegral len) <> Builder.byteString v')
+      toPgFieldWithSize :: (ToPgField x) => x -> Builder.Builder
+      toPgFieldWithSize v = Builder.binaryField $ toPgField encCtx v
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
   toPgParams (a, b, c, d, e) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e)]
@@ -531,11 +539,11 @@ haskellIntOids :: [Oid]
   | otherwise = (int2Oid, [int2Oid])
 
 -- | Big-Endian binary encoder for Haskell's `Data.Int`, which is machine-dependent.
-binaryIntEncoder :: Int -> BS.ByteString
+binaryIntEncoder :: Int -> BinaryField
 binaryIntEncoder
-  | haskellIntOid == int8Oid = Cereal.encode @Int64 . fromIntegral
-  | haskellIntOid == int4Oid = Cereal.encode @Int32 . fromIntegral
-  | otherwise = Cereal.encode @Int16 . fromIntegral
+  | haskellIntOid == int8Oid = NotNull . Cereal.encode @Int64 . fromIntegral
+  | haskellIntOid == int4Oid = NotNull . Cereal.encode @Int32 . fromIntegral
+  | otherwise = NotNull . Cereal.encode @Int16 . fromIntegral
 
 -- | Big-Endian binary decoder for Haskell's various IntXX types.
 binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> ByteString -> Either String a
@@ -991,11 +999,11 @@ instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
 instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
   genRowDecoder = fmap K1 $ singleColRowParser $ fieldParser @a
 
-genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, Maybe ByteString)]
+genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, BinaryField)]
 genericToPgRow = genRowEncoder . from
 
 class ProductTypeEncoder f where
-  genRowEncoder :: f a -> [EncodingContext -> (Maybe Oid, Maybe ByteString)]
+  genRowEncoder :: f a -> [EncodingContext -> (Maybe Oid, BinaryField)]
 
 instance (ProductTypeEncoder a, ProductTypeEncoder b) => ProductTypeEncoder (a :*: b) where
   genRowEncoder (a :*: b) = genRowEncoder a ++ genRowEncoder b
@@ -1014,7 +1022,7 @@ instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) wh
 
 instance (Generic a, EnumEncoder (Rep a)) => ToPgField (LowerCasedPgEnum a) where
   toTypeOid _ _ = Nothing
-  toPgField _encCtx (LowerCasedPgEnum v) = Just $ genericEnumToPgField Text.toLower v
+  toPgField _encCtx = \(LowerCasedPgEnum v) -> NotNull $ genericEnumToPgField Text.toLower v
 
 genericEnumFieldParser ::
   forall a.

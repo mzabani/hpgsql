@@ -30,6 +30,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql.Base (maximumOnOrDef, minimumOnOrDef)
+import HPgsql.Builder (BinaryField)
 import HPgsql.Encoding (ToPgField (..), ToPgRow (..))
 import HPgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), SqlStatement (..), parseSql, sqlStatementText)
 import HPgsql.TypeInfo (EncodingContext, Oid)
@@ -61,11 +62,11 @@ data SingleQueryFragment
 -- | Zero, one, or more SQL statements. The query parameters and query fragments continue to go up in number across different
 -- statements, e.g. "SELECT $1; SELECT $2; SELECT $3; ...".
 -- Use `breakIntoQueryStatements` to get individual SQL statements that are good to send to Postgres.
-data Query = Query {queryString :: ![SingleQueryFragment], queryParams :: ![EncodingContext -> (Maybe Oid, Maybe ByteString)]}
+data Query = Query {queryString :: ![SingleQueryFragment], queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)]}
 
 -- | A single statement, not multiple, with dollar-numbered query arguments
 -- starting from $1.
-data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, Maybe ByteString)]}
+data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)]}
 
 instance Show SingleQuery where
   -- Careful not exposing query arguments
@@ -86,7 +87,7 @@ instance Show Query where
 mkQuery :: (ToPgRow a) => ByteString -> a -> Query
 mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarNumberedArgs $ decodeUtf8 qryText) (toPgParams p)
   where
-    mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [EncodingContext -> (Maybe Oid, Maybe ByteString)] -> Query
+    mkQueryInternalFromSqlStatements :: NonEmpty SqlStatement -> [EncodingContext -> (Maybe Oid, BinaryField)] -> Query
     mkQueryInternalFromSqlStatements statements allParams =
       let paramsLen = length allParams
           qryTextForError = show $ mconcat $ map sqlStatementText $ NE.toList statements
@@ -114,7 +115,7 @@ mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarN
 
 -- | Meant for internal usage, helps build "VALUES (..), (..)"-like statements.
 -- Users of hpgsql should just use the `Values` type instead of this.
-commaSeparatedRowTuples :: [[EncodingContext -> (Maybe Oid, Maybe ByteString)]] -> Query
+commaSeparatedRowTuples :: [[EncodingContext -> (Maybe Oid, BinaryField)]] -> Query
 commaSeparatedRowTuples rowTuples =
   let (_, queryFrags) =
         List.mapAccumR
@@ -154,7 +155,7 @@ breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams =
     fragToBytestring = \case
       QueryArgumentPlaceHolder n -> "$" <> intToBs n
       FragmentOfStaticSql t -> t
-    go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, Maybe ByteString)] -> [SingleQuery]
+    go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, BinaryField)] -> [SingleQuery]
     go [] [] = []
     go [] _ = error $ "HPgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
     go frags params =
@@ -182,7 +183,7 @@ instance IsString Query where
 -- Example:
 -- - "SELECT * FROM table WHERE col1=? AND col2=?"
 -- You should really use `mkQuery` instead of this. This is here only for hpgsql-simple-compat.
-mkQueryInternal :: ByteString -> [[Either ByteString (EncodingContext -> (Maybe Oid, Maybe ByteString))]] -> Query
+mkQueryInternal :: ByteString -> [[Either ByteString (EncodingContext -> (Maybe Oid, BinaryField))]] -> Query
 mkQueryInternal queryTemplate allParams =
   let statements = parseSql AcceptQuestionMarksAsQueryArgs (decodeUtf8 queryTemplate)
       paramsByIdx = Map.fromList $ zip [(1 :: Int) ..] allParams
@@ -287,7 +288,7 @@ buildQueryFragsAndVars (EmbeddedQueryExpr _ : _) _ =
 -- | Parts used to build a SingleQuery at runtime when ^{} embedded queries are present.
 data QueryBuildPartQQ
   = StaticSqlPart !ByteString
-  | ParamPart !(EncodingContext -> (Maybe Oid, Maybe ByteString))
+  | ParamPart !(EncodingContext -> (Maybe Oid, BinaryField))
   | EmbeddedQueryPart !Query
 
 buildQueryQQ :: [QueryBuildPartQQ] -> Query

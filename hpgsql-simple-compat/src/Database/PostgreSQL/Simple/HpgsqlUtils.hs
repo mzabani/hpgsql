@@ -9,16 +9,17 @@ import Database.PostgreSQL.Simple.ToField (Action (..))
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import qualified HPgsql
+import HPgsql.Builder (BinaryField)
 import qualified HPgsql.Query as HPgsql
 import HPgsql.TypeInfo (EncodingContext, Oid)
 
 toHpgsqlQuery :: (ToRow q) => Query -> q -> HPgsql.Query
 toHpgsqlQuery (Query qry) row = HPgsql.mkQueryInternal qry (toHpgsqlRowParams row)
 
-toHpgsqlRowParams :: (ToRow q) => q -> [[Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))]]
+toHpgsqlRowParams :: (ToRow q) => q -> [[Either ByteString (EncodingContext -> (Maybe Oid, BinaryField))]]
 toHpgsqlRowParams = concatMap actionToPgParams . toRow
   where
-    actionToPgParams :: Action -> [[Either ByteString (EncodingContext -> (Maybe Oid, Maybe LBS.ByteString))]]
+    actionToPgParams :: Action -> [[Either ByteString (EncodingContext -> (Maybe Oid, BinaryField))]]
     actionToPgParams = \case
       Plain sql -> [[Left $ LBS.toStrict sql]] -- Static SQL fragments go to the query string directly
       QueryArgument qa -> [[Right qa]]

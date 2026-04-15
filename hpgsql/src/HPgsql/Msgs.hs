@@ -11,8 +11,6 @@ import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
 import qualified Data.Attoparsec.Text as TextParsec
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import Data.ByteString.Builder (Builder)
-import qualified Data.ByteString.Builder as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Functor (void)
@@ -24,6 +22,8 @@ import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
 import Data.Word (Word8)
+import HPgsql.Builder (BinaryField, Builder)
+import qualified HPgsql.Builder as Builder
 import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
 import HPgsql.TypeInfo (Oid (..))
 
@@ -77,15 +77,14 @@ data AuthenticationOk = AuthenticationOk
 data BackendKeyData = BackendKeyData {backendPid :: Int32, backendSecretKey :: Int32}
   deriving stock (Show)
 
-data Bind = Bind {paramsValuesInOrder :: ![Maybe ByteString], resultColumnFmts :: !Int}
+data Bind = Bind {paramsValuesInOrder :: ![BinaryField], resultColumnFmts :: !Int}
   deriving stock (Show)
 
 -- | PId first, secret key second
 data CancelRequest = CancelRequest Int32 Int32
   deriving stock (Show)
 
--- | Length of contents and contents themselves as a `Builder`.
-data CopyData = CopyData !Int !Builder
+newtype CopyData = CopyData Builder
 
 instance Show CopyData where
   show _ = "CopyData"
@@ -170,9 +169,9 @@ instance ToPgMessage CancelRequest where
     Builder.int32BE (4 + 4 + 4 + 4) <> Builder.int32BE 80877102 <> Builder.int32BE pid <> Builder.int32BE secret
 
 instance ToPgMessage CopyData where
-  toPgMessage (CopyData len bs) =
-    -- TODO: Use a length-aware builder for performance if there is one
-    Builder.char7 'd' <> Builder.int32BE (4 + fromIntegral len) <> bs
+  toPgMessage (CopyData bs) =
+    let len = Builder.builderLength bs
+     in Builder.char7 'd' <> Builder.int32BE (4 + len) <> bs
 
 instance ToPgMessage CopyFail where
   toPgMessage (CopyFail bs) =
@@ -251,13 +250,12 @@ instance ToPgMessage Bind where
         fmtCodesBinary :: Int16 = 1
         numQryParams :: Int16 = fromIntegral $ length paramsValuesInOrder
         paramsLenAndVals =
-          mconcat $
-            map
-              ( \case
-                  Nothing -> Builder.int32BE (-1)
-                  Just val -> Builder.int32BE (fromIntegral $ BS.length val) <> Builder.byteString val
-              )
-              paramsValuesInOrder
+          Builder.lazyByteString $
+            Builder.toLazyByteString $
+              mconcat $
+                map
+                  Builder.binaryField
+                  paramsValuesInOrder
         numResultColumnsFmtCodes :: Int16 = fromIntegral resultColumnFmts
         resultColumnsFmtCodes =
           mconcat $

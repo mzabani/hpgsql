@@ -17,6 +17,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
+import HPgsql.Builder (BinaryField (..))
 import HPgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
 import HPgsql.Query (Query (..), commaSeparatedRowTuples)
 import HPgsql.TypeInfo (jsonOid, jsonbOid)
@@ -95,4 +96,5 @@ instance (FromJSON a) => FromPgField (Aeson a) where
 
 instance (ToJSON a) => ToPgField (Aeson a) where
   toTypeOid _ _ = Just jsonbOid
-  toPgField _ (Aeson v) = Just $ BS.cons 1 (LBS.toStrict $ Aeson.encode v)
+  toPgField _ (Aeson v) =
+    NotNull $ BS.cons 1 (LBS.toStrict $ Aeson.encode v)

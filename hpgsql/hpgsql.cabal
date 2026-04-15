@@ -26,6 +26,7 @@ tested-with:
 library
   exposed-modules:
       HPgsql
+      HPgsql.Builder
       HPgsql.Connection
       HPgsql.Encoding
       HPgsql.Types

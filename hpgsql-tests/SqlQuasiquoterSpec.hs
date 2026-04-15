@@ -13,6 +13,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql (Only (..))
+import HPgsql.Builder (BinaryField (..))
 import HPgsql.Encoding (ToPgRow (..))
 import HPgsql.Parsing (ParsingOpts (..), parseSql, sqlStatementText)
 import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
@@ -46,7 +47,7 @@ spec = do
       length query.queryParams `shouldBe` 1
 
 -- | Shared property: concatenating arbitrary queries produces valid results.
-checkQueryConcatenation :: Gen (Query, [(Maybe Oid, Maybe ByteString)]) -> PropertyT IO ()
+checkQueryConcatenation :: Gen (Query, [(Maybe Oid, BinaryField)]) -> PropertyT IO ()
 checkQueryConcatenation gen = hedgehog $ do
   queries <- forAll $ Gen.list (Range.linear 1 50) gen
   let concatenated = foldr1 (<>) $ map fst queries
@@ -99,11 +100,11 @@ genChar = Gen.enum 'a' 'z'
 genString :: Gen String
 genString = Gen.string (Range.linearFrom 0 (-10) 10) genChar
 
-toComparableParams :: (ToPgRow a) => a -> [(Maybe Oid, Maybe ByteString)]
+toComparableParams :: (ToPgRow a) => a -> [(Maybe Oid, BinaryField)]
 toComparableParams = map ($ EncodingContext builtinPgTypesMap) . toPgParams
 
 -- | Queries built with mkQuery, including reused $N placeholders.
-genMkQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
+genMkQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
 genMkQuery =
   Gen.choice
     [ do
@@ -145,7 +146,7 @@ genMkQuery =
     ]
 
 -- | Queries built with the sql quasiquoter and #{} interpolation.
-genInterpolatedQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
+genInterpolatedQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
 genInterpolatedQuery =
   Gen.choice
     [ pure ([sql|SELECT 1, '#{x}', '^{y}';|], []),
@@ -164,7 +165,7 @@ genInterpolatedQuery =
     ]
 
 -- | Queries built with ^{} embedded queries, including reused placeholders.
-genEmbeddedQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
+genEmbeddedQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
 genEmbeddedQuery =
   Gen.choice
     [ do
@@ -203,7 +204,7 @@ genEmbeddedQuery =
     ]
 
 -- | Mix of mkQuery, #{} interpolation, and ^{} embedding.
-genMixedQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
+genMixedQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
 genMixedQuery =
   Gen.choice
     [ genMkQuery,

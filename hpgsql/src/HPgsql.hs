@@ -62,9 +62,6 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (MonadThrow, SomeException, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Builder as Builder
-import qualified Data.ByteString.Builder.Extra as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Either (isLeft, isRight)
@@ -74,7 +71,6 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Monoid (Sum (..))
 import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
@@ -82,6 +78,7 @@ import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import HPgsql.Base
+import qualified HPgsql.Builder as Builder
 import HPgsql.Connection (ConnString (..))
 import HPgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
 import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
@@ -94,6 +91,7 @@ import qualified HPgsql.SimpleParser as Parser
 import HPgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
+import qualified Network.Socket.ByteString as SocketBS
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
 import Streaming (Of (..), Stream)
 import qualified Streaming as S
@@ -1163,27 +1161,24 @@ copyFromS conn copyQ allRows =
     -- Take the controlMsgsLock to flush all buffers
     withControlMsgsLock conn (const $ pure ()) (const $ pure ()) (const $ pure ())
     encCtx <- readMVar conn.encodingContext
-    rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData 19 $ Builder.byteString "PGCOPY\n\xff\r\n\0" <> Builder.int32BE 0 <> Builder.int32BE 0
+    rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData $ Builder.byteString "PGCOPY\n\xff\r\n\0" <> Builder.int32BE 0 <> Builder.int32BE 0
     eHasRows <- S.inspect allRows
     ret <- case eHasRows of
       Left ret -> pure ret
       Right (firstRow :> otherRows) -> do
-        let byteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
-            byteStream = S.map (toPgParamsEffic encCtx) (S.cons firstRow otherRows)
-            chunkedByteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
+        let byteStream :: Stream (Of Builder.Builder) IO b
+            byteStream = S.map (toBinaryCopyBytes encCtx) (S.cons firstRow otherRows)
+            chunkedByteStream :: Stream (Of Builder.Builder) IO b
             chunkedByteStream =
               S.mapped (S.foldMap id) (S.chunksOf 100 byteStream)
         -- Using strict bytestrings reduces allocations a tiny little bit.. not sure why, but maybe
         -- fusion rules?
         S.mapM_
-          ( \(StrictTuple (Sum len) bs) -> do
-              -- We know the total length of CopyData messages, so we replicate that here. Not pretty
-              -- and saves _very little_ in memory usage, actually.
-              let totalLen = 4 + len
-              rethrowAsIrrecoverable $ SocketLBS.sendAll conn.socket $ Builder.toLazyByteStringWith (Builder.untrimmedStrategy totalLen 0) mempty $ toPgMessage $ CopyData len bs
+          ( \bs -> do
+              rethrowAsIrrecoverable $ SocketBS.sendAll conn.socket $ Builder.toStrictByteString $ toPgMessage $ CopyData bs
           )
           chunkedByteStream
-    rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData 2 $ Builder.int16BE (-1)
+    rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData $ Builder.int16BE (-1)
     count <- copyEndInternal conn qryId
     pure (count, ret)
 
@@ -1220,7 +1215,7 @@ copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, Singl
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
-putCopyData conn t = nonAtomicSendMsg conn $ CopyData (BS.length t) (Builder.byteString t)
+putCopyData conn t = nonAtomicSendMsg conn $ CopyData (Builder.byteString t)
 
 copyEnd :: HPgConnection -> IO Int64
 copyEnd conn = do

@@ -42,6 +42,7 @@ import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
+import HPgsql.Builder (BinaryField (..))
 import HPgsql.Encoding (EncodingContext, ToPgField (..))
 import HPgsql.Time (Unbounded (..))
 import HPgsql.TypeInfo (Oid)
@@ -49,7 +50,7 @@ import HPgsql.Types (Aeson, PGArray)
 
 -- | How to render an element when substituting it into a query.
 data Action
-  = QueryArgument (EncodingContext -> (Maybe Oid, Maybe LB.ByteString))
+  = QueryArgument (EncodingContext -> (Maybe Oid, BinaryField))
   | -- | Escape before substituting. Use for all sql identifiers like
     -- table, column names, etc. This is used by the 'Identifier' newtype
     -- wrapper.
@@ -136,7 +137,7 @@ instance (ToPgField a) => HasFieldType a where
 
 instance forall a. (ToField a, HasFieldType a) => ToField (Maybe a) where
   toField = \case
-    Nothing -> QueryArgument $ \encCtx -> (typeOid (Proxy @a) encCtx, Nothing)
+    Nothing -> QueryArgument $ \encCtx -> (typeOid (Proxy @a) encCtx, SqlNull)
     Just v -> case toField v of
       QueryArgument enc -> QueryArgument enc
       _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"
