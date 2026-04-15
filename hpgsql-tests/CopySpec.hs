@@ -3,8 +3,12 @@
 
 module CopySpec where
 
+import Control.Monad (forM_)
+import Control.Monad.IO.Class (liftIO)
 import Data.Int (Int32)
 import Data.Text (Text)
+import qualified Data.Text as Text
+import qualified Data.Text.Encoding as TE
 import DbUtils
   ( aroundConn,
     pgErrorMustContain,
@@ -12,11 +16,16 @@ import DbUtils
   )
 import HPgsql
 import HPgsql.Query (sql)
+import Hedgehog (PropertyT, (===))
+import qualified Hedgehog as Gen
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Gen
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 
 spec :: Spec
 spec = do
-  aroundConn $ describe "COPY" $ do
+  aroundConn $ describe "COPY" $ parallel $ do
     it
       "COPY text format succeeding"
       copyTextFmtStatementSucceeding
@@ -27,40 +36,42 @@ spec = do
       "COPY error"
       copyError
 
-copyTextFmtStatementSucceeding :: HPgConnection -> IO ()
-copyTextFmtStatementSucceeding conn = withRollback conn $ do
-  execute_ conn "CREATE TABLE employee (    employee_id SERIAL PRIMARY KEY    , employee_name TEXT NOT NULL);"
-  transactionStatus conn `shouldReturn` TransInTrans
-  withCopy_
-    conn
-    "COPY employee FROM STDIN WITH (FORMAT CSV);"
-    ( do
-        putCopyData conn "5,Dracula\n"
-        putCopyData conn "6,The Grinch\n"
-        transactionStatus conn `shouldReturn` TransActive
-    )
-    `shouldReturn` 2
-  transactionStatus conn `shouldReturn` TransInTrans
-  queryWith (rowParser @(Only Int)) conn "SELECT COUNT(*) FROM employee" `shouldReturn` [Only 2]
-  execute_ conn "DROP TABLE employee"
+genRows :: Gen.Gen [(Int32, Text)]
+genRows = do
+  numRows <- Gen.int (Gen.linear 0 1000)
+  names <- Gen.list (Gen.singleton numRows) $ Gen.text (Gen.linear 1 50) Gen.alphaNum
+  pure $ zip [1 ..] names
 
-copyBinaryFmtStatementSucceeding :: HPgConnection -> IO ()
-copyBinaryFmtStatementSucceeding conn = withRollback conn $ do
-  execute_ conn "CREATE TABLE employee (    employee_id SERIAL PRIMARY KEY    , employee_name TEXT NOT NULL);"
-  transactionStatus conn `shouldReturn` TransInTrans
-  copyFromL
-    conn
-    "COPY employee FROM STDIN WITH (FORMAT BINARY);"
-    [(5 :: Int32, "Dracula" :: String), (6, "The Grinch")]
-    `shouldReturn` 2
-  transactionStatus conn `shouldReturn` TransInTrans
-  queryWith (rowParser @(Only Int)) conn "SELECT COUNT(*) FROM employee" `shouldReturn` [Only 2]
-  execute_ conn "DROP TABLE employee"
+copyTextFmtStatementSucceeding :: HPgConnection -> PropertyT IO ()
+copyTextFmtStatementSucceeding conn = hedgehog $ do
+  rows <- Gen.forAll genRows
+  result <- liftIO $ withRollback conn $ do
+    execute_ conn "CREATE UNLOGGED TABLE copy_test0 (id INT NOT NULL, name TEXT NOT NULL)"
+    withCopy_
+      conn
+      "COPY copy_test0 FROM STDIN WITH (FORMAT CSV);"
+      ( forM_ rows $ \(eid, ename) ->
+          putCopyData conn $ TE.encodeUtf8 $ Text.pack (show eid) <> "," <> ename <> "\n"
+      )
+    query conn "SELECT id, name FROM copy_test0 ORDER BY id"
+  result === rows
+
+copyBinaryFmtStatementSucceeding :: HPgConnection -> PropertyT IO ()
+copyBinaryFmtStatementSucceeding conn = hedgehog $ do
+  rows <- Gen.forAll genRows
+  result <- liftIO $ withRollback conn $ do
+    execute_ conn "CREATE UNLOGGED TABLE copy_test1 (id INT NOT NULL, name TEXT NOT NULL)"
+    copyFromL
+      conn
+      "COPY copy_test1 FROM STDIN WITH (FORMAT BINARY);"
+      rows
+    query conn "SELECT id, name FROM copy_test1 ORDER BY id"
+  result === rows
 
 copyError :: HPgConnection -> IO ()
 copyError conn = do
   withRollback conn $ do
-    execute_ conn "CREATE TABLE employee (employee_id SERIAL PRIMARY KEY, employee_name TEXT NOT NULL);"
+    execute_ conn "CREATE UNLOGGED TABLE employee (employee_id SERIAL PRIMARY KEY, employee_name TEXT NOT NULL);"
     withCopy_
       conn
       "COPY employee FROM STDIN WITH (FORMAT CSV);"
