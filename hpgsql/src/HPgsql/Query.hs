@@ -32,7 +32,7 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import HPgsql.Base (maximumOnOrDef, minimumOnOrDef)
 import HPgsql.Builder (BinaryField)
 import HPgsql.Encoding (ToPgField (..), ToPgRow (..))
-import HPgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), SqlStatement (..), parseSql, sqlStatementText)
+import HPgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), SqlStatement (..), parseSql, sqlStatementText)
 import HPgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
@@ -107,7 +107,7 @@ mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarN
                           else QueryArgumentPlaceHolder n
                   QuestionMarkArg ->
                     error $ "Bug in Hpgsql: parseSql AcceptOnlyDollarNumberedArgs returned question mark place holders. Query: " ++ qryTextForError
-                  QuasiQuoterExpression _ ->
+                  QuasiQuoterExpression _ _ ->
                     error $ "Bug in Hpgsql: parseSql AcceptOnlyDollarNumberedArgs returned quasiquoter expression. Query: " ++ qryTextForError
               )
               (concatMap statementBlocks $ NE.toList statements)
@@ -194,7 +194,7 @@ mkQueryInternal queryTemplate allParams =
               NotBlock t -> ((maxArgSoFar, maxRealArgSoFar), [FragmentOfStaticSql $ encodeUtf8 t])
               DollarNumberedArg _ ->
                 error $ "Bug in HPgsql: parsed a DollarNumberedArg in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
-              QuasiQuoterExpression _ ->
+              QuasiQuoterExpression _ _ ->
                 error $ "Bug in HPgsql: parsed a QuasiQuoterExpression in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
               QuestionMarkArg ->
                 let thisParamNum = maxArgSoFar + 1
@@ -339,7 +339,8 @@ parseBlock (NotBlock text) = parseInterpolations text
 parseBlock (Block text) = [NonInterpolatedSqlFragment text]
 parseBlock (DollarNumberedArg n) = parseBlock $ Block $ "$" <> Text.pack (show n) -- If someone uses e.g. $2 in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
 parseBlock QuestionMarkArg = parseBlock $ Block "?" -- If someone uses a question mark in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
-parseBlock (QuasiQuoterExpression t) = parseInterpolations t
+parseBlock (QuasiQuoterExpression QQInterpolation expr) = [InterpolatedHaskellExpr expr]
+parseBlock (QuasiQuoterExpression QQEmbeddedQuery expr) = [EmbeddedQueryExpr expr]
 
 -- | Parse text to find #{haskellExpr} interpolation patterns and ^{expr} embedded
 -- query patterns and return those separated from the rest.

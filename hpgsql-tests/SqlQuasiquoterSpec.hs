@@ -226,7 +226,7 @@ genMixedQuery =
         z <- genInt
         w <- genString
         let inner = mkQuery "$1, $2" (y, z)
-        pure ([sql|SELECT #{x}, '#{x}', ^{inner}, (#{"abc" ++ w});|], toComparableParams (x, y, z, "abc" ++ w)),
+        pure ([sql|SELECT #{x}, '#{x}', ^{inner}, (#{"abc}}}" ++ w});|], toComparableParams (x, y, z, "abc}}}" ++ w)),
       do
         x <- genInt
         y <- genInt

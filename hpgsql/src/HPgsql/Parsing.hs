@@ -8,6 +8,7 @@ module HPgsql.Parsing
     SqlStatement (..),
     BlockOrNotBlock (..),
     ParsingOpts (..),
+    QQExprKind (..),
   )
 where
 
@@ -36,6 +37,7 @@ import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Language.Haskell.Meta.Parse (parseExp)
 import Prelude hiding (takeWhile)
 
 newtype SqlStatement = SqlStatement {statementBlocks :: [BlockOrNotBlock]}
@@ -44,7 +46,10 @@ newtype SqlStatement = SqlStatement {statementBlocks :: [BlockOrNotBlock]}
 -- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which
 -- semicolons are not to be considered statement boundaries. These include strings, comments,
 -- parenthesised expressions and dollar-quoted strings.
-data BlockOrNotBlock = Block !Text | NotBlock !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !Text
+data BlockOrNotBlock = Block !Text | NotBlock !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !QQExprKind !Text
+  deriving stock (Eq, Show)
+
+data QQExprKind = QQInterpolation | QQEmbeddedQuery
   deriving stock (Eq, Show)
 
 data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs | AcceptQuasiQuoterExpressions
@@ -101,7 +106,8 @@ blockText = \case
   NotBlock t -> t
   QuestionMarkArg -> "?"
   DollarNumberedArg n -> "$" <> Text.pack (show n)
-  QuasiQuoterExpression t -> t
+  QuasiQuoterExpression QQInterpolation t -> "#{" <> t <> "}"
+  QuasiQuoterExpression QQEmbeddedQuery t -> "^{" <> t <> "}"
 
 -- TODO: Doesn't attoparsec have something that returns all of the parsed text when applying
 -- a Parser? We should probably use that instead of this.
@@ -167,9 +173,19 @@ isPossibleBlockStartingChar popts c =
 quasiQuoterExpressionParser :: Parser BlockOrNotBlock
 quasiQuoterExpressionParser = do
   prefix <- string "#{" <|> string "^{"
-  content <- takeWhile1 (/= '}')
-  void $ char '}'
-  pure $ QuasiQuoterExpression $ prefix <> content <> "}"
+  let kind = if prefix == "#{" then QQInterpolation else QQEmbeddedQuery
+  expr <- findExpressionEnd ""
+  pure $ QuasiQuoterExpression kind expr
+  where
+    -- Scan for '}' left-to-right, trying parseExp at each one.
+    -- The first '}' where parseExp succeeds is the expression boundary.
+    findExpressionEnd acc = do
+      chunk <- takeWhile (/= '}')
+      void $ char '}'
+      let candidate = acc <> chunk
+      case parseExp (Text.unpack candidate) of
+        Right _ -> pure candidate
+        Left _ -> findExpressionEnd (candidate <> "}")
 
 dollarNumberedQueryArgParser :: Parser BlockOrNotBlock
 dollarNumberedQueryArgParser = do
