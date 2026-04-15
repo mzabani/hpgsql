@@ -1173,7 +1173,7 @@ copyFromS conn copyQ allRows =
             byteStream = S.map (toPgParamsEffic encCtx) (S.cons firstRow otherRows)
             chunkedByteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
             chunkedByteStream =
-              S.mapped (S.foldMap id) (S.chunksOf 50 byteStream)
+              S.mapped (S.foldMap id) (S.chunksOf 100 byteStream)
         -- Using strict bytestrings reduces allocations a tiny little bit.. not sure why, but maybe
         -- fusion rules?
         S.mapM_
