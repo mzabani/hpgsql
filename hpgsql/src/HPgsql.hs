@@ -64,6 +64,7 @@ import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
+import qualified Data.ByteString.Builder.Extra as Builder
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Either (isLeft, isRight)
@@ -1178,19 +1179,26 @@ copyFromS conn copyQ allRows =
       Right (firstRow :> otherRows) -> do
         let numFieldsBs = StrictTuple (Sum 2) (Builder.int16BE $ fromIntegral $ length $ toFields encCtx firstRow)
             byteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
-            byteStream = S.map (rowToBs numFieldsBs . toFields encCtx) (S.cons firstRow otherRows)
+            byteStream = S.map (rowToBs numFieldsBs encCtx) (S.cons firstRow otherRows)
             chunkedByteStream :: Stream (Of (StrictTuple (Sum Int) Builder.Builder)) IO b
             chunkedByteStream =
               S.mapped (S.foldMap id) (S.chunksOf 50 byteStream)
         -- Using strict bytestrings reduces allocations a tiny little bit.. not sure why, but maybe
         -- fusion rules?
-        S.mapM_ (rethrowAsIrrecoverable . SocketBS.sendAll conn.socket . LBS.toStrict . Builder.toLazyByteString . toPgMessage . (\(StrictTuple (Sum len) bs) -> CopyData len bs)) chunkedByteStream
+        S.mapM_
+          ( \(StrictTuple (Sum len) bs) -> do
+              -- We know the total length of CopyData messages, so we replicate that here. Not pretty
+              -- and saves _very little_ in memory usage, actually.
+              let totalLen = 4 + len
+              rethrowAsIrrecoverable $ SocketLBS.sendAll conn.socket $ Builder.toLazyByteStringWith (Builder.untrimmedStrategy totalLen 0) mempty $ toPgMessage $ CopyData len bs
+          )
+          chunkedByteStream
     rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData 2 $ Builder.int16BE (-1)
     count <- copyEndInternal conn qryId
     pure (count, ret)
   where
     toFields encCtx = map (snd . ($ encCtx)) . toPgParams
-    rowToBs numFieldsBs fields = do
+    rowToBs numFieldsBs encCtx = \row -> do
       let fieldsBs =
             -- mconcat seems to allocate too many chunks, so we use foldl'
             List.foldl'
@@ -1199,7 +1207,7 @@ copyFromS conn copyQ allRows =
                   Just val -> acc <> StrictTuple (Sum $ 4 + fromIntegral (LBS.length val)) (Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val)
               )
               mempty
-              fields
+              (toFields encCtx row)
        in numFieldsBs <> fieldsBs
 
 -- | Copies rows into a table.
