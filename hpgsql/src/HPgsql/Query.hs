@@ -13,10 +13,7 @@ module HPgsql.Query
   )
 where
 
-import Control.Applicative (some, (<|>))
 import Control.Monad (foldM)
-import Data.Attoparsec.Text (Parser)
-import qualified Data.Attoparsec.Text as Parsec
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Either (rights)
@@ -94,8 +91,7 @@ mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarN
           queryFrags =
             map
               ( \case
-                  Block t -> FragmentOfStaticSql $ encodeUtf8 t
-                  NotBlock t -> FragmentOfStaticSql $ encodeUtf8 t
+                  StaticSql t -> FragmentOfStaticSql $ encodeUtf8 t
                   DollarNumberedArg n ->
                     if n < 1
                       then
@@ -190,8 +186,7 @@ mkQueryInternal queryTemplate allParams =
       (_, queryFrags) =
         List.mapAccumL
           ( \(!maxArgSoFar, !maxRealArgSoFar) sqlPiece -> case sqlPiece of
-              Block t -> ((maxArgSoFar, maxRealArgSoFar), [FragmentOfStaticSql $ encodeUtf8 t])
-              NotBlock t -> ((maxArgSoFar, maxRealArgSoFar), [FragmentOfStaticSql $ encodeUtf8 t])
+              StaticSql t -> ((maxArgSoFar, maxRealArgSoFar), [FragmentOfStaticSql $ encodeUtf8 t])
               DollarNumberedArg _ ->
                 error $ "Bug in HPgsql: parsed a DollarNumberedArg in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
               QuasiQuoterExpression _ _ ->
@@ -236,7 +231,7 @@ liftQueries statements = do
 
 liftQuery :: SqlStatement -> Q Exp
 liftQuery stmt = do
-  let allFragments = extractFragments stmt
+  let allFragments = extractFragmentsQuasiQuoter stmt
       hasEmbedded = any isEmbedded allFragments
   if hasEmbedded
     then liftQueryDynamic allFragments
@@ -331,58 +326,15 @@ renumberParamsFrom frags renumberFrom =
         )
 
 -- | Extract SqlFragment objects from SqlStatement
-extractFragments :: SqlStatement -> [SqlFragment]
-extractFragments (SqlStatement blocks) = concatMap parseBlock blocks
+extractFragmentsQuasiQuoter :: SqlStatement -> [SqlFragment]
+extractFragmentsQuasiQuoter (SqlStatement blocks) = concatMap parseBlockQuasiQuoter blocks
 
-parseBlock :: BlockOrNotBlock -> [SqlFragment]
-parseBlock (NotBlock text) = parseInterpolations text
-parseBlock (Block text) = [NonInterpolatedSqlFragment text]
-parseBlock (DollarNumberedArg n) = parseBlock $ Block $ "$" <> Text.pack (show n) -- If someone uses e.g. $2 in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
-parseBlock QuestionMarkArg = parseBlock $ Block "?" -- If someone uses a question mark in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
-parseBlock (QuasiQuoterExpression QQInterpolation expr) = [InterpolatedHaskellExpr expr]
-parseBlock (QuasiQuoterExpression QQEmbeddedQuery expr) = [EmbeddedQueryExpr expr]
-
--- | Parse text to find #{haskellExpr} interpolation patterns and ^{expr} embedded
--- query patterns and return those separated from the rest.
-parseInterpolations :: Text -> [SqlFragment]
-parseInterpolations txt = case Parsec.parseOnly (Parsec.many' fragmentP <* Parsec.endOfInput) txt of
-  Right fragments -> fragments
-  Left err -> error $ "Hpgsql error parsing sql quasiquoter: " ++ err
-  where
-    fragmentP :: Parser SqlFragment
-    fragmentP = interpolationP <|> embeddedQueryP <|> literalP
-
-    interpolationP :: Parser SqlFragment
-    interpolationP = do
-      _ <- Parsec.string "#{"
-      -- We hope no Haskell expressions contain '}'
-      varName <- Parsec.takeWhile1 (/= '}') <|> fail "Found empty #{} or #{ without closing bracket"
-      _ <- Parsec.char '}' <|> fail "Found #{ with an expression but no closing bracket"
-      pure $ InterpolatedHaskellExpr varName
-
-    embeddedQueryP :: Parser SqlFragment
-    embeddedQueryP = do
-      _ <- Parsec.string "^{"
-      exprText <- Parsec.takeWhile1 (/= '}') <|> fail "Found empty ^{} or ^{ without closing bracket"
-      _ <- Parsec.char '}' <|> fail "Found ^{ with an expression but no closing bracket"
-      pure $ EmbeddedQueryExpr exprText
-
-    literalP :: Parser SqlFragment
-    literalP = NonInterpolatedSqlFragment . Text.concat <$> some literalChunk
-      where
-        literalChunk = Parsec.takeWhile1 (\c -> c /= '#' && c /= '^') <|> hashNotFollowedByBrace <|> caretNotFollowedByBrace
-        hashNotFollowedByBrace = do
-          _ <- Parsec.char '#'
-          mc <- Parsec.peekChar
-          case mc of
-            Just '{' -> fail "#{ found, leaving parsing to interpolationP"
-            _ -> pure "#"
-        caretNotFollowedByBrace = do
-          _ <- Parsec.char '^'
-          mc <- Parsec.peekChar
-          case mc of
-            Just '{' -> fail "^{ found, leaving parsing to embeddedQueryP"
-            _ -> pure "^"
+parseBlockQuasiQuoter :: BlockOrNotBlock -> [SqlFragment]
+parseBlockQuasiQuoter (StaticSql text) = [NonInterpolatedSqlFragment text]
+parseBlockQuasiQuoter (DollarNumberedArg n) = [NonInterpolatedSqlFragment $ "$" <> Text.pack (show n)] -- If someone uses e.g. $2 in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
+parseBlockQuasiQuoter QuestionMarkArg = [NonInterpolatedSqlFragment "?"] -- If someone uses a question mark in a quasiquoter, it should be an error, but let's assume they know what they're doing and treat it as text
+parseBlockQuasiQuoter (QuasiQuoterExpression QQInterpolation expr) = [InterpolatedHaskellExpr expr]
+parseBlockQuasiQuoter (QuasiQuoterExpression QQEmbeddedQuery expr) = [EmbeddedQueryExpr expr]
 
 proxyOf :: a -> Proxy a
 proxyOf _ = Proxy

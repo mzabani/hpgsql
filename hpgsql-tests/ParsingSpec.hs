@@ -62,15 +62,15 @@ genSingleSqlStatement = Gen.element validSqlStatements
 -- | Sql statements that can be interleaved in any form and should still form syntactically valid SQL.
 validSqlStatements :: [SqlStatement]
 validSqlStatements =
-  [ SqlStatement [NotBlock "SELECT ", Block "'so''m -- not a comment'", NotBlock " FROM ahahaha;"],
+  [ SqlStatement [StaticSql "SELECT ", StaticSql "'so''m -- not a comment'", StaticSql " FROM ahahaha;"],
     SqlStatement
-      [NotBlock "SELECT\n", Block "E'so\\'; \\; m -- c-style string, (( not a comment \\\\ \\abc'", NotBlock " FROM ahahaha;"],
+      [StaticSql "SELECT\n", StaticSql "E'so\\'; \\; m -- c-style string, (( not a comment \\\\ \\abc'", StaticSql " FROM ahahaha;"],
     SqlStatement
-      [NotBlock "SELECT \n\n  ", Block "E'Consecutive single quotes are also escaped here ''; see?'", NotBlock "   \n ;"],
-    SqlStatement [NotBlock "SELECT ", Block "E'''20s'", NotBlock " = ", Block "E'\\'20s'", NotBlock ";"],
+      [StaticSql "SELECT \n\n  ", StaticSql "E'Consecutive single quotes are also escaped here ''; see?'", StaticSql "   \n ;"],
+    SqlStatement [StaticSql "SELECT ", StaticSql "E'''20s'", StaticSql " = ", StaticSql "E'\\'20s'", StaticSql ";"],
     SqlStatement
-      [ NotBlock "DO\n",
-        Block $
+      [ StaticSql "DO\n",
+        StaticSql $
           "$do$"
             <> "\nBEGIN"
             <> "\n   IF NOT EXISTS ("
@@ -80,27 +80,27 @@ validSqlStatements =
             <> "\n   END IF;"
             <> "\nEND"
             <> "\n$do$",
-        NotBlock ";"
+        StaticSql ";"
       ],
-    SqlStatement [NotBlock "CREATE TABLE ", Block "\"escaped--table /* nasty */\"", NotBlock ";"],
-    SqlStatement [NotBlock "SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x);"],
-    SqlStatement [NotBlock "CREATE TABLE any_table();"],
+    SqlStatement [StaticSql "CREATE TABLE ", StaticSql "\"escaped--table /* nasty */\"", StaticSql ";"],
+    SqlStatement [StaticSql "SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x);"],
+    SqlStatement [StaticSql "CREATE TABLE any_table();"],
     SqlStatement
-      [ NotBlock $
+      [ StaticSql $
           "CREATE FUNCTION sales_tax(subtotal real) RETURNS real AS ",
-        Block
+        StaticSql
           ( "$$"
               <> "\nBEGIN"
               <> "\n    RETURN subtotal * 0.06;"
               <> "\nEND;"
               <> "\n$$"
           ),
-        NotBlock " LANGUAGE plpgsql;"
+        StaticSql " LANGUAGE plpgsql;"
       ],
     SqlStatement
-      [ NotBlock
+      [ StaticSql
           "CREATE FUNCTION instr(varchar, integer) RETURNS integer AS ",
-        Block $
+        StaticSql $
           "$$"
             <> "\nDECLARE"
             <> "\n    v_string ALIAS FOR $1;"
@@ -109,74 +109,74 @@ validSqlStatements =
             <> "\n    -- some computations using v_string and index here"
             <> "\nEND;"
             <> "\n$$",
-        NotBlock
+        StaticSql
           " LANGUAGE plpgsql;"
       ],
-    SqlStatement [NotBlock "select U&", Block "'d\\0061t\\+000061'", NotBlock ";"],
-    SqlStatement [NotBlock "select U&", Block "'\\0441\\043B\\043E\\043D'", NotBlock ";"],
-    SqlStatement [NotBlock "select U&", Block "'d!0061t!+000061'", NotBlock " UESCAPE ", Block "'!'", NotBlock ";"],
-    SqlStatement [NotBlock "select U&", Block "'d\\0061t\\+000061'", NotBlock " UESCAPE ", Block "'\\'", NotBlock ";"],
-    SqlStatement [NotBlock "select U&", Block "\"d\\0061t\\+000061\"", NotBlock ";"],
-    SqlStatement [NotBlock "select U&", Block "\"\\0441\\043B\\043E\\043D\"", NotBlock ";"],
-    SqlStatement [NotBlock "select U&", Block "\"d!0061t!+000061\"", NotBlock " UESCAPE ", Block "'!'", NotBlock ";"],
-    SqlStatement [NotBlock "select U&", Block "\"d\\0061t\\+000061\"", NotBlock " UESCAPE ", Block "'\\'", NotBlock ";"],
-    SqlStatement [NotBlock "select X", Block "'1FF'", NotBlock ";"],
-    SqlStatement [NotBlock "select B", Block "'1001'", NotBlock ";"],
-    SqlStatement [NotBlock "SELECT ", Block "'some''quoted ''string'", NotBlock ";"],
-    SqlStatement [NotBlock "SELECT ", Block "\"some\"\"quoted identifier\"", NotBlock ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "'d\\0061t\\+000061'", StaticSql ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "'\\0441\\043B\\043E\\043D'", StaticSql ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "'d!0061t!+000061'", StaticSql " UESCAPE ", StaticSql "'!'", StaticSql ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "'d\\0061t\\+000061'", StaticSql " UESCAPE ", StaticSql "'\\'", StaticSql ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "\"d\\0061t\\+000061\"", StaticSql ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "\"\\0441\\043B\\043E\\043D\"", StaticSql ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "\"d!0061t!+000061\"", StaticSql " UESCAPE ", StaticSql "'!'", StaticSql ";"],
+    SqlStatement [StaticSql "select U&", StaticSql "\"d\\0061t\\+000061\"", StaticSql " UESCAPE ", StaticSql "'\\'", StaticSql ";"],
+    SqlStatement [StaticSql "select X", StaticSql "'1FF'", StaticSql ";"],
+    SqlStatement [StaticSql "select B", StaticSql "'1001'", StaticSql ";"],
+    SqlStatement [StaticSql "SELECT ", StaticSql "'some''quoted ''string'", StaticSql ";"],
+    SqlStatement [StaticSql "SELECT ", StaticSql "\"some\"\"quoted identifier\"", StaticSql ";"],
     SqlStatement
-      [NotBlock "SELECT \n\n ", Block "'double quotes \" inside single quotes \" - 2'", NotBlock ";"],
+      [StaticSql "SELECT \n\n ", StaticSql "'double quotes \" inside single quotes \" - 2'", StaticSql ";"],
     SqlStatement
-      [NotBlock "SELECT ", Block "\"single quotes ' inside double quotes ' - 2\"", NotBlock ";"],
+      [StaticSql "SELECT ", StaticSql "\"single quotes ' inside double quotes ' - 2\"", StaticSql ";"],
     SqlStatement
-      [ Block $
+      [ StaticSql $
           "$function$"
             <> "\nBEGIN"
             <> "\n    RETURN ($1 ~ $q$[\t\r\n\v\\]$q$); /* Some would-be non terminated comment, but it's fine inside dollar quotes"
             <> "\nEND;"
             <> "\n$function$",
-        NotBlock ";"
+        StaticSql ";"
       ],
-    SqlStatement [NotBlock "SELECT COALESCE(4, 1 - 2) - 3 + 4 - 5;"],
-    SqlStatement [NotBlock "SELECT (1 - 4) / 5 * 3 / 9.1;"],
+    SqlStatement [StaticSql "SELECT COALESCE(4, 1 - 2) - 3 + 4 - 5;"],
+    SqlStatement [StaticSql "SELECT (1 - 4) / 5 * 3 / 9.1;"],
     -- Semi-colons inside parenthesised blocks are not statement boundaries
     SqlStatement
-      [NotBlock "create rule \n name as on \n some_event to \n\n some_table do (command1; command2; command3;);"],
+      [StaticSql "create rule \n name as on \n some_event to \n\n some_table do (command1; command2; command3;);"],
     -- String blocks can be opened inside parentheses, just like comments, dollar-quoted strings and others
     SqlStatement
-      [NotBlock "create rule name as on some_event to some_table do (", Block "'abcdef);'", NotBlock "; other;)\n\n;"],
+      [StaticSql "create rule name as on some_event to some_table do (", StaticSql "'abcdef);'", StaticSql "; other;)\n\n;"],
     SqlStatement
-      [NotBlock "some statement with spaces (((U&", Block "'d\\0061t\\+000061'", NotBlock ", ", Block "'abc''def'", NotBlock " ; ; ; ", Block "/* comment /* nested */ ((( */", NotBlock " ", Block "$hey$dollar string$hey$", NotBlock ")) ", Block "'more''of'", NotBlock "; this; ());"],
+      [StaticSql "some statement with spaces (((U&", StaticSql "'d\\0061t\\+000061'", StaticSql ", ", StaticSql "'abc''def'", StaticSql " ; ; ; ", StaticSql "/* comment /* nested */ ((( */", StaticSql " ", StaticSql "$hey$dollar string$hey$", StaticSql ")) ", StaticSql "'more''of'", StaticSql "; this; ());"],
     SqlStatement
-      [NotBlock "select ", Block "'unclosed parentheses inside string ((((('", NotBlock ", ((", Block "'string (('", NotBlock "));"],
+      [StaticSql "select ", StaticSql "'unclosed parentheses inside string ((((('", StaticSql ", ((", StaticSql "'string (('", StaticSql "));"],
     SqlStatement
-      [ NotBlock $
+      [ StaticSql $
           "CREATE STATISTICS IF NOT EXISTS test_stat_expr"
             <> "\n( dependencies,mcv) ON employee_id, lower(employee_name)"
             <> "\nFROM employee;"
       ],
     -- We still want the following to be parsed; it's best to run invalid statements than have
     -- a parser so strict that it might refuse valid ones.
-    SqlStatement [NotBlock "invalid statement, bad parentheses ()));"],
-    SqlStatement [NotBlock "begin;"],
-    SqlStatement [NotBlock "BEGiN", Block "/*a*/", NotBlock ";"],
-    SqlStatement [NotBlock "BEgIN \n  ;"],
-    SqlStatement [NotBlock "ROllBaCk;"],
-    SqlStatement [NotBlock "ROllBaCk", Block "/*a*/", NotBlock ";"],
-    SqlStatement [NotBlock "ROllBaCk   ;"],
-    SqlStatement [NotBlock "COmmIT;"],
-    SqlStatement [NotBlock "COMMIT", Block "/*a*/", NotBlock ";"],
-    SqlStatement [NotBlock "cOMMIT   ;"],
+    SqlStatement [StaticSql "invalid statement, bad parentheses ()));"],
+    SqlStatement [StaticSql "begin;"],
+    SqlStatement [StaticSql "BEGiN", StaticSql "/*a*/", StaticSql ";"],
+    SqlStatement [StaticSql "BEgIN \n  ;"],
+    SqlStatement [StaticSql "ROllBaCk;"],
+    SqlStatement [StaticSql "ROllBaCk", StaticSql "/*a*/", StaticSql ";"],
+    SqlStatement [StaticSql "ROllBaCk   ;"],
+    SqlStatement [StaticSql "COmmIT;"],
+    SqlStatement [StaticSql "COMMIT", StaticSql "/*a*/", StaticSql ";"],
+    SqlStatement [StaticSql "cOMMIT   ;"],
     SqlStatement
-      [NotBlock "COPY employee FROM STDIN WITH (FORMAT CSV);"],
+      [StaticSql "COPY employee FROM STDIN WITH (FORMAT CSV);"],
     SqlStatement
-      [NotBlock "copy ", Block "\"]schema\"", NotBlock ".employee FROM stdin \n WITH (FORMAT CSV);"],
+      [StaticSql "copy ", StaticSql "\"]schema\"", StaticSql ".employee FROM stdin \n WITH (FORMAT CSV);"],
     -- Fully qualified identifiers part 1 + table without columns, but with one row (this is possible!)
     SqlStatement
-      [NotBlock "CoPy ", Block "\"]some-database\"", NotBlock "   .  ", Block "\"schema\"", NotBlock "  .  employee from stdin with \n (FORMAT CSV);"],
+      [StaticSql "CoPy ", StaticSql "\"]some-database\"", StaticSql "   .  ", StaticSql "\"schema\"", StaticSql "  .  employee from stdin with \n (FORMAT CSV);"],
     -- Fully qualified identifiers part 2 + specifying columns
     SqlStatement
-      [NotBlock "CoPy ", Block "\"]employee\"", NotBlock " \n  (col1,", Block "\"col2\"", NotBlock "   , \n\n  col4  ) from stdin with (FORMAT CSV);"]
+      [StaticSql "CoPy ", StaticSql "\"]employee\"", StaticSql " \n  (col1,", StaticSql "\"col2\"", StaticSql "   , \n\n  col4  ) from stdin with (FORMAT CSV);"]
   ]
 
 newtype ShuffleOfPieces = ShuffleOfPieces [SqlStatement] deriving stock (Show)
@@ -290,36 +290,34 @@ spec = do
         length query.queryParams `shouldBe` 2
     it "Single command with and without semi-colon" $ hedgehog $ do
       randomSeed <- forAll $ Gen.int Range.linearBounded
-      liftIO $ do
-        let stmts :: [NonEmpty SqlStatement] =
-              map
-                (parseSql AcceptOnlyDollarNumberedArgs)
-                [ "CREATE TABLE hello;",
-                  "CREATE TABLE hello",
-                  "CREATE TABLE hello; -- Comment",
-                  "CREATE TABLE hello -- Comment",
-                  "CREATE TABLE hello -- Comment\n;"
-                ]
-        map (fmap flattenBlocksInPieces) stmts
-          `shouldBe` [ NE.singleton $ SqlStatement [NotBlock "CREATE TABLE hello;"],
-                       NE.singleton $ SqlStatement [NotBlock "CREATE TABLE hello"],
-                       NE.singleton $
-                         SqlStatement
-                           [ NotBlock "CREATE TABLE hello;",
-                             Block " -- Comment"
-                           ],
-                       NE.singleton $
-                         SqlStatement
-                           -- The comment below not being a CommentPiece is definitely a limitation
-                           -- of our parser. But it still satisfies two important criteria:
-                           -- 1. The comment gets sent with the query, which is important for identification
-                           --    in logs.
-                           -- 2. Question marks/parameter bindings inside the comment will not be replaced
-                           [NotBlock "CREATE TABLE hello ", Block "-- Comment"],
-                       NE.singleton $
-                         SqlStatement
-                           [NotBlock "CREATE TABLE hello ", Block "-- Comment\n", NotBlock ";"]
-                     ]
+      let stmts :: [NonEmpty SqlStatement] =
+            map
+              (parseSql AcceptOnlyDollarNumberedArgs)
+              [ "CREATE TABLE hello;",
+                "CREATE TABLE hello",
+                "CREATE TABLE hello; -- Comment",
+                "CREATE TABLE hello -- Comment",
+                "CREATE TABLE hello -- Comment\n;"
+              ]
+      map (fmap flattenBlocksInPieces) stmts
+        === [ NE.singleton $ SqlStatement [StaticSql "CREATE TABLE hello;"],
+              NE.singleton $ SqlStatement [StaticSql "CREATE TABLE hello"],
+              NE.singleton $
+                SqlStatement
+                  [ StaticSql "CREATE TABLE hello; -- Comment"
+                  ],
+              NE.singleton $
+                SqlStatement
+                  -- The comment below not being a CommentPiece is definitely a limitation
+                  -- of our parser. But it still satisfies two important criteria:
+                  -- 1. The comment gets sent with the query, which is important for identification
+                  --    in logs.
+                  -- 2. Question marks/parameter bindings inside the comment will not be replaced
+                  [StaticSql "CREATE TABLE hello -- Comment"],
+              NE.singleton $
+                SqlStatement
+                  [StaticSql "CREATE TABLE hello -- Comment\n;"]
+            ]
     it "Statement separation boundaries are good" $ hedgehog $ do
       origPieces <- fmap NE.fromList $ forAll $ Gen.list (Range.linear 1 100) genSingleSqlStatement
       let allSqlAsOneBigText :: Text =

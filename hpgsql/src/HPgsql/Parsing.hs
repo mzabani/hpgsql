@@ -43,10 +43,7 @@ import Prelude hiding (takeWhile)
 newtype SqlStatement = SqlStatement {statementBlocks :: [BlockOrNotBlock]}
   deriving stock (Show, Eq)
 
--- | Blocks are the name we give to some expressions that have a beginning and an end, inside of which
--- semicolons are not to be considered statement boundaries. These include strings, comments,
--- parenthesised expressions and dollar-quoted strings.
-data BlockOrNotBlock = Block !Text | NotBlock !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !QQExprKind !Text
+data BlockOrNotBlock = StaticSql !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !QQExprKind !Text
   deriving stock (Eq, Show)
 
 data QQExprKind = QQInterpolation | QQEmbeddedQuery
@@ -74,25 +71,25 @@ sqlStatementParser popts = do
       (\c -> not (isPossibleBlockStartingChar popts c) && c /= ';')
   mc <- peekChar
   case mc of
-    Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [NotBlock t1]
+    Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [StaticSql t1]
     Just ';' -> do
       void $ char ';'
       -- We take any comments followed by EOF here
       cws <- optional $ commentOrSpaceParser True <* endOfInput
-      pure $ [NotBlock t1, NotBlock ";"] ++ fromMaybe [] cws
+      pure $ [StaticSql t1, StaticSql ";"] ++ fromMaybe [] cws
     Just _ -> do
-      t2 <- many1 (blockParser popts) <|> (\pt -> [[NotBlock pt]]) <$> Parsec.take 1
+      t2 <- many1 (blockParser popts) <|> (\pt -> [[StaticSql pt]]) <$> Parsec.take 1
       -- After reading blocks or just a char, we still need to find a semi-colon
       -- or EOF to get a statement from start to finish!
       t3 <- sqlStatementParser popts <|> ([] <$ endOfInput)
-      pure $ NotBlock t1 : mconcat t2 <> t3
+      pure $ StaticSql t1 : mconcat t2 <> t3
 
 -- | Parses 0 or more consecutive white-space or comments
 commentOrSpaceParser :: Bool -> Parser [BlockOrNotBlock]
 commentOrSpaceParser atLeastOne =
   if atLeastOne
-    then many1 (commentParser <|> Block <$> takeWhile1 Char.isSpace)
-    else many' (commentParser <|> Block <$> takeWhile1 Char.isSpace)
+    then many1 (commentParser <|> StaticSql <$> takeWhile1 Char.isSpace)
+    else many' (commentParser <|> StaticSql <$> takeWhile1 Char.isSpace)
   where
     commentParser :: Parser BlockOrNotBlock
     commentParser = doubleDashComment <|> cStyleComment
@@ -102,8 +99,7 @@ eol = string "\n" <|> string "\r\n"
 
 blockText :: BlockOrNotBlock -> Text
 blockText = \case
-  Block t -> t
-  NotBlock t -> t
+  StaticSql t -> t
   QuestionMarkArg -> "?"
   DollarNumberedArg n -> "$" <> Text.pack (show n)
   QuasiQuoterExpression QQInterpolation t -> "#{" <> t <> "}"
@@ -123,10 +119,10 @@ blockParser popts =
   -- our parsers will treat those also as regular characters, which should be fine.
   -- This seems fragile, but our tests will error out if changes make this unsupported.
   (: [])
-      <$> ( case popts of
-              AcceptQuasiQuoterExpressions -> quasiQuoterExpressionParser
-              _ -> fail "No quasiquoter expressions"
-          )
+    <$> ( case popts of
+            AcceptQuasiQuoterExpressions -> quasiQuoterExpressionParser
+            _ -> fail "No quasiquoter expressions"
+        )
     <|> (: []) <$> parseStdConformingString
     <|> parenthesisedExpression popts
     <|> (: []) <$> cStyleComment
@@ -166,8 +162,8 @@ isPossibleBlockStartingChar popts c =
     || c
       == '?'
     || ( case popts of
-          AcceptQuasiQuoterExpressions -> c == '#' || c == '^'
-          _ -> False
+           AcceptQuasiQuoterExpressions -> c == '#' || c == '^'
+           _ -> False
        )
 
 quasiQuoterExpressionParser :: Parser BlockOrNotBlock
@@ -197,11 +193,11 @@ questionMarkQueryArgParser = do
   void $ char '?'
   escapedQuestionMark <- optional $ char '?'
   case escapedQuestionMark of
-    Just _ -> pure $ NotBlock "?"
+    Just _ -> pure $ StaticSql "?"
     Nothing -> pure QuestionMarkArg
 
 dollarStringParser :: Parser BlockOrNotBlock
-dollarStringParser = fmap Block $ do
+dollarStringParser = fmap StaticSql $ do
   void $ char '$'
   b <- takeWhile (/= '$')
   void $ char '$'
@@ -220,14 +216,14 @@ dollarStringParser = fmap Block $ do
         Just e -> pure $ t <> e
 
 doubleDashComment :: Parser BlockOrNotBlock
-doubleDashComment = fmap Block $ do
+doubleDashComment = fmap StaticSql $ do
   begin <- string "--"
   rest <- Parsec.takeWhile (\c -> c /= '\n' && c /= '\r')
   end <- eol <|> "" <$ endOfInput
   pure $ begin <> rest <> end
 
 cStyleComment :: Parser BlockOrNotBlock
-cStyleComment = fmap Block $ do
+cStyleComment = fmap StaticSql $ do
   openComment <- string "/*"
   rest <-
     Parsec.scan
@@ -258,7 +254,7 @@ parenthesisedExpression :: ParsingOpts -> Parser [BlockOrNotBlock]
 parenthesisedExpression popts = do
   openParen <- string "(" <|> fail "No open paren"
   rest <- insideParenParser
-  pure $ NotBlock openParen : rest
+  pure $ StaticSql openParen : rest
   where
     insideParenParser :: Parser [BlockOrNotBlock]
     insideParenParser = do
@@ -267,14 +263,14 @@ parenthesisedExpression popts = do
           (\c -> not (isPossibleBlockStartingChar popts c) && c /= ')')
       nextChar <- peekChar
       case nextChar of
-        Nothing -> pure [NotBlock more] -- Be gentle with EOF
+        Nothing -> pure [StaticSql more] -- Be gentle with EOF
         Just ')' -> do
           closeParen <- string ")"
-          pure [NotBlock more, NotBlock closeParen]
+          pure [StaticSql more, StaticSql closeParen]
         Just _ -> do
-          blocksOrOtherwise <- blockParser popts <|> (\t -> [NotBlock t]) <$> Parsec.take 1
+          blocksOrOtherwise <- blockParser popts <|> (\t -> [StaticSql t]) <$> Parsec.take 1
           rest <- insideParenParser -- We're still inside an openParen after parsing a block or a character
-          pure $ NotBlock more : blocksOrOtherwise ++ rest
+          pure $ StaticSql more : blocksOrOtherwise ++ rest
 
 -- | Parses a value using backslash as an escape char for any char that matches
 -- the supplied predicate. Does not consume the ending char and RETURNS any
@@ -293,7 +289,7 @@ parseWithEscapeCharPreserve untilc = do
     _ -> pure cs
 
 doubleQuotedIdentifier :: Parser BlockOrNotBlock
-doubleQuotedIdentifier = fmap Block $ do
+doubleQuotedIdentifier = fmap StaticSql $ do
   openingQuote <- string "\""
   rest <- parseWithEscapeCharPreserve (== '"')
   ending <- string "\""
@@ -303,7 +299,7 @@ doubleQuotedIdentifier = fmap Block $ do
 -- by beginning with an `E`. Consecutive simple quotes are also treated as a single quote, just like in std conforming strings.
 -- See https://www.postgresql.org/docs/current/sql-syntax-lexical.html
 cStyleEscapedString :: Parser BlockOrNotBlock
-cStyleEscapedString = fmap Block $ do
+cStyleEscapedString = fmap StaticSql $ do
   openingChars <- string "E'"
   rest <-
     Parsec.scan
@@ -325,7 +321,7 @@ cStyleEscapedString = fmap Block $ do
 -- | Parses a single quoted standard conforming string, i.e. strings that use '' as a representation of a single quote, and
 -- takes any other character literally.
 parseStdConformingString :: Parser BlockOrNotBlock
-parseStdConformingString = fmap Block $ do
+parseStdConformingString = fmap StaticSql $ do
   openingQuote <- string "'"
   rest <-
     Parsec.scan
@@ -342,14 +338,12 @@ flattenBlocks :: [BlockOrNotBlock] -> [BlockOrNotBlock]
 flattenBlocks =
   map
     ( \bs@(firstEl :| _) -> case firstEl of
-        NotBlock _ -> NotBlock $ blockListText $ NE.toList bs
-        Block _ -> Block $ blockListText $ NE.toList bs
+        StaticSql _ -> StaticSql $ blockListText $ NE.toList bs
         x -> x
     )
     . NE.groupBy
       ( \a b -> case (a, b) of
-          (NotBlock _, NotBlock _) -> True
-          (Block _, Block _) -> True
+          (StaticSql _, StaticSql _) -> True
           _ -> False
       )
     . filter (\b -> blockText b /= "")
