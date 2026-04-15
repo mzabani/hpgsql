@@ -1169,8 +1169,7 @@ copyFromS conn copyQ allRows =
         let byteStream :: Stream (Of Builder.Builder) IO b
             byteStream = S.map (toBinaryCopyBytes encCtx) (S.cons firstRow otherRows)
             chunkedByteStream :: Stream (Of Builder.Builder) IO b
-            chunkedByteStream =
-              S.mapped (S.foldMap id) (S.chunksOf 100 byteStream)
+            chunkedByteStream = chunkBuildersBySize 16384 byteStream
         -- Using strict bytestrings reduces allocations a tiny little bit.. not sure why, but maybe
         -- fusion rules?
         S.mapM_
@@ -1187,6 +1186,24 @@ copyFromS conn copyQ allRows =
 -- Returns the count of inserted rows.
 copyFromL :: (ToPgRow r) => HPgConnection -> Query -> [r] -> IO Int64
 copyFromL conn copyQ rows = fst <$> copyFromS conn copyQ (S.each rows)
+
+-- | Accumulates builders until their combined length reaches or exceeds the
+-- given size in bytes, then yields the accumulated builder and starts over.
+chunkBuildersBySize :: (Monad m) => Int32 -> Stream (Of Builder.Builder) m r -> Stream (Of Builder.Builder) m r
+chunkBuildersBySize maxSize = go mempty
+  where
+    go !acc !stream = do
+      e <- S.lift $ S.next stream
+      case e of
+        Left r -> do
+          when (Builder.builderLength acc > 0) $
+            S.yield acc
+          pure r
+        Right (b, rest) ->
+          let acc' = acc <> b
+           in if Builder.builderLength acc' >= maxSize
+                then S.yield acc' >> go mempty rest
+                else go acc' rest
 
 copyStart :: HPgConnection -> Query -> IO ()
 copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) = do
