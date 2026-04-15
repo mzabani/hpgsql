@@ -95,4 +95,4 @@ instance (FromJSON a) => FromPgField (Aeson a) where
 
 instance (ToJSON a) => ToPgField (Aeson a) where
   toTypeOid _ _ = Just jsonbOid
-  toPgField _ (Aeson v) = Just $ LBS.cons 1 (Aeson.encode v)
+  toPgField _ (Aeson v) = Just $ BS.cons 1 (LBS.toStrict $ Aeson.encode v)

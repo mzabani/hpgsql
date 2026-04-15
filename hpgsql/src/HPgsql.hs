@@ -94,7 +94,6 @@ import qualified HPgsql.SimpleParser as Parser
 import HPgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
-import qualified Network.Socket.ByteString as SocketBS
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
 import Streaming (Of (..), Stream)
 import qualified Streaming as S

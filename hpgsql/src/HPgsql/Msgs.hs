@@ -77,7 +77,7 @@ data AuthenticationOk = AuthenticationOk
 data BackendKeyData = BackendKeyData {backendPid :: Int32, backendSecretKey :: Int32}
   deriving stock (Show)
 
-data Bind = Bind {paramsValuesInOrder :: ![Maybe LBS.ByteString], resultColumnFmts :: !Int}
+data Bind = Bind {paramsValuesInOrder :: ![Maybe ByteString], resultColumnFmts :: !Int}
   deriving stock (Show)
 
 -- | PId first, secret key second
@@ -255,7 +255,7 @@ instance ToPgMessage Bind where
             map
               ( \case
                   Nothing -> Builder.int32BE (-1)
-                  Just val -> Builder.int32BE (fromIntegral $ LBS.length val) <> Builder.lazyByteString val
+                  Just val -> Builder.int32BE (fromIntegral $ BS.length val) <> Builder.byteString val
               )
               paramsValuesInOrder
         numResultColumnsFmtCodes :: Int16 = fromIntegral resultColumnFmts

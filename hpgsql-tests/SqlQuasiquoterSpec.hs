@@ -46,7 +46,7 @@ spec = do
       length query.queryParams `shouldBe` 1
 
 -- | Shared property: concatenating arbitrary queries produces valid results.
-checkQueryConcatenation :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)]) -> PropertyT IO ()
+checkQueryConcatenation :: Gen (Query, [(Maybe Oid, Maybe ByteString)]) -> PropertyT IO ()
 checkQueryConcatenation gen = hedgehog $ do
   queries <- forAll $ Gen.list (Range.linear 1 50) gen
   let concatenated = foldr1 (<>) $ map fst queries
@@ -99,11 +99,11 @@ genChar = Gen.enum 'a' 'z'
 genString :: Gen String
 genString = Gen.string (Range.linearFrom 0 (-10) 10) genChar
 
-toComparableParams :: (ToPgRow a) => a -> [(Maybe Oid, Maybe LBS.ByteString)]
+toComparableParams :: (ToPgRow a) => a -> [(Maybe Oid, Maybe ByteString)]
 toComparableParams = map ($ EncodingContext builtinPgTypesMap) . toPgParams
 
 -- | Queries built with mkQuery, including reused $N placeholders.
-genMkQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
+genMkQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
 genMkQuery =
   Gen.choice
     [ do
@@ -145,7 +145,7 @@ genMkQuery =
     ]
 
 -- | Queries built with the sql quasiquoter and #{} interpolation.
-genInterpolatedQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
+genInterpolatedQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
 genInterpolatedQuery =
   Gen.choice
     [ pure ([sql|SELECT 1, '#{x}', '^{y}';|], []),
@@ -164,7 +164,7 @@ genInterpolatedQuery =
     ]
 
 -- | Queries built with ^{} embedded queries, including reused placeholders.
-genEmbeddedQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
+genEmbeddedQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
 genEmbeddedQuery =
   Gen.choice
     [ do
@@ -203,7 +203,7 @@ genEmbeddedQuery =
     ]
 
 -- | Mix of mkQuery, #{} interpolation, and ^{} embedding.
-genMixedQuery :: Gen (Query, [(Maybe Oid, Maybe LBS.ByteString)])
+genMixedQuery :: Gen (Query, [(Maybe Oid, Maybe ByteString)])
 genMixedQuery =
   Gen.choice
     [ genMkQuery,
