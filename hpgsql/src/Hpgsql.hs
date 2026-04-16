@@ -148,6 +148,10 @@ fullTransactionStatus sttv = do
             TransInError
           else TransActive
 
+-- | The current transaction status.
+-- Note that if `withTransaction` is interruped by an asynchronous exception,
+-- this may still report `TransActive` until you run your next command.
+-- See `withTransaction` for details.
 transactionStatus :: HPgConnection -> IO TransactionStatus
 transactionStatus conn = snd <$> STM.atomically (fullTransactionStatus conn.internalConnectionState)
 
@@ -196,6 +200,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
             { totalQueriesSent = 0,
               currentPipeline = [],
               notificationsReceived = notifQueue,
+              mustIssueRollbackBeforeNextCommand = False,
               transactionStatusBeforeCurrentPipeline = TransIdle
             }
       let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer socketMutex originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
@@ -921,7 +926,7 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
   unless (null queriesToDrain) $ do
     (txnStatusBeforePipeline, _) <- STM.atomically $ fullTransactionStatus conn.internalConnectionState
     debugPrint $ "Going to take control-msg lock to drain " ++ show queriesToDrain ++ ". txnStatusBeforePipeline is " ++ show txnStatusBeforePipeline
-    withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ const $ do
+    withControlMsgsLock conn (fmap (.mustIssueRollbackBeforeNextCommand) . STM.readTVar) (const $ pure ()) $ \mustIssueRollback -> do
       -- It is possible not just in theory for the cancellation request to
       -- arrive/be processed by postgres _before_ the previous statement was
       -- event sent, since cancellation requests go through a different
@@ -934,11 +939,13 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
       -- so this is not merely hypothetical.
       -- What we do here is fire a cancellation request every 0.5 seconds to cover
       -- for that.
-      debugPrint "Cancelling active statement to drain"
+      debugPrint $ "Cancelling active statement to drain. mustIssueRollback=" ++ show mustIssueRollback
       -- We don't want to send cancellation requests if we're in an explicit transaction
       -- because that would put the transaction in TransInError, which is not semantics-preserving.
-      let isInExplicitTransaction = txnStatusBeforePipeline == TransInTrans
-      unless isInExplicitTransaction $ sendCancellationRequest conn
+      -- Unless of course the transaction was interrupted by an asynchronous exception, in
+      -- which case it's fine to cancel because we're about to ROLLBACK anyway.
+      let canSendCancel = txnStatusBeforePipeline /= TransInTrans || mustIssueRollback
+      when canSendCancel $ sendCancellationRequest conn
       -- putStrLn $ "Draining " ++ show queriesToDrain
       -- debugPrint $ "Draining " ++ show queriesToDrain
       let drainUntilError [] = pure ()
@@ -957,10 +964,19 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
               Just () -> pure ()
               Nothing -> do
                 debugPrint $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
-                unless isInExplicitTransaction $ sendCancellationRequest conn
+                when canSendCancel $ sendCancellationRequest conn
                 leftToDrain <- acquireOwnershipOfOrphanedQueries
                 alternateDrainingWithCancelReqs leftToDrain
       alternateDrainingWithCancelReqs queriesToDrain
+
+      -- After draining, we ROLLBACK if we must. A failed command still leaves
+      -- the need for "ROLLBACK", after all.
+      when mustIssueRollback $ debugPrint "Executing ROLLBACK after draining finished."
+      mask $ \restore -> do
+        restore $ when mustIssueRollback $ execute_ conn "ROLLBACK"
+        STM.atomically $ do
+          st <- STM.readTVar conn.internalConnectionState
+          STM.writeTVar conn.internalConnectionState st {mustIssueRollbackBeforeNextCommand = False}
   where
     -- \| Returns queries that have been taken possession of by this thread for cancellation and draining
     -- or an empty list if there's no need for that.
@@ -1347,9 +1363,8 @@ _globalDebugLock :: MVar Bool
 _globalDebugLock = unsafePerformIO $ newMVar True
 
 debugPrint :: String -> IO ()
-debugPrint _ = pure ()
-
--- debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
+-- debugPrint _ = pure ()
+debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
 
 {-# INLINE timeDebugNonBlockingOperation #-}
 timeDebugNonBlockingOperation :: String -> IO a -> IO a

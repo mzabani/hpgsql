@@ -58,7 +58,7 @@ import Data.Word (Word16)
 
 #endif
 import qualified Control.Concurrent.STM as STM
-import Hpgsql.Query (SingleQuery (..))
+import Hpgsql.Query (Query, SingleQuery (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
 import System.Mem.Weak (Weak)
@@ -250,6 +250,12 @@ data InternalConnectionState = InternalConnectionState
   { totalQueriesSent :: !Integer,
     -- | We support only one pipeline sent to the backend at a time.
     currentPipeline :: ![QueryState],
+    -- | In cases like when an asynchronous exception interrupts a `withTransaction`
+    -- section, we want a "ROLLBACK" to run _before_ any next commands, to preserve
+    -- the invariant that `withTransaction` ensures the started transaction is no more
+    -- regardless of what happens.
+    -- When such a thing happens, this field is True.
+    mustIssueRollbackBeforeNextCommand :: Bool,
     notificationsReceived :: !(TQueue NotificationResponse),
     transactionStatusBeforeCurrentPipeline :: !TransactionStatus
   }
