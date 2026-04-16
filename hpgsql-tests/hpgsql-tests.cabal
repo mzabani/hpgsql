@@ -29,6 +29,7 @@ executable hpgsql-tests
       ConnectivitySpec
       CopySpec
       DbUtils
+      DocumentationExamplesSpec
       EncodingDecodingSpec
       NotificationsSpec
       ParsingSpec
@@ -81,6 +82,7 @@ executable hpgsql-tests
     , hpgsql
     , hspec
     , hspec-hedgehog
+    , postgresql-simple
     , random
     , safe-exceptions
     , scientific
