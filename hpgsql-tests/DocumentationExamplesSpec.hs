@@ -7,14 +7,16 @@ module DocumentationExamplesSpec where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (Concurrently (..), runConcurrently)
-import Control.Exception.Safe (SomeException, bracket, fromException, onException, throwString, try)
+import Control.Exception.Safe (SomeException, bracket, fromException, onException, throwString, try, tryAny)
 import Control.Monad (void)
 import Data.IORef (newIORef, readIORef, writeIORef)
+import qualified Data.List as List
 import qualified Database.PostgreSQL.Simple as PGSimple
 import DbUtils (aroundConn, testConnInfo)
 import Hpgsql
 import Hpgsql.Connection (libpqConnString)
 import Hpgsql.Query (sql)
+import Hpgsql.Transaction (withTransaction)
 import Test.Hspec
 
 spec :: Spec
@@ -23,9 +25,15 @@ spec = describe "INTERRUPTION-SAFETY.md examples" $ do
     it
       "Hpgsql: flip onException logErrorToDatabase runs the handler and rethrows the original exception"
       onExceptionLogsErrorToDatabaseExample
+    it
+      "Hpgsql: withTransaction rolls back cleanly when an async exception interrupts a query"
+      withTransactionExample
   it
     "postgresql-simple: flip onException logErrorToDatabase fails with \"another command is already in progress\""
     postgresqlSimpleOnExceptionLogsErrorToDatabaseExample
+  it
+    "postgresql-simple: withTransaction leaves the connection in a bad state (\"another command is already in progress\")"
+    postgresqlSimpleWithTransactionExample
 
 -- | Reproduces the pseudo-code from INTERRUPTION-SAFETY.md:
 --
@@ -127,6 +135,50 @@ postgresqlSimpleOnExceptionLogsErrorToDatabaseExample = do
               <> "succeeded."
         Just (Left handlerExc) ->
           show handlerExc `shouldContain` "another command is already in progress"
+
+-- | Reproduces the @withTransaction@ example from INTERRUPTION-SAFETY.md
+-- for Hpgsql.
+withTransactionExample :: HPgConnection -> IO ()
+withTransactionExample conn = do
+  let runSomeQuery :: IO ()
+      runSomeQuery =
+        execute_ conn [sql|SELECT pg_sleep(5)|]
+
+  void $
+    tryAny $
+      withTransaction conn $ do
+        transactionStatus conn `shouldReturn` TransInTrans
+        runConcurrently $
+          (,)
+            <$> Concurrently (readSomeFileFromDisk >> runSomeQuery)
+            <*> Concurrently doSomethingElse
+
+  -- Run any other query and verify the transaction was rolled back
+  execute_ conn "SELECT 1"
+  transactionStatus conn `shouldReturn` TransIdle
+
+-- | The exact same scenario as 'withTransactionExample', but for postgresql-simple.
+postgresqlSimpleWithTransactionExample :: IO ()
+postgresqlSimpleWithTransactionExample = do
+  connInfo <- testConnInfo
+  bracket
+    (PGSimple.connectPostgreSQL (libpqConnString connInfo))
+    PGSimple.close
+    $ \conn -> do
+      let runSomeQuery :: IO ()
+          runSomeQuery =
+            void $ PGSimple.execute_ conn "SELECT pg_sleep(5)"
+
+      void $
+        try @_ @SomeException $
+          PGSimple.withTransaction conn $
+            runConcurrently $
+              (,)
+                <$> Concurrently (readSomeFileFromDisk >> runSomeQuery)
+                <*> Concurrently doSomethingElse
+
+      -- New queries will throw
+      PGSimple.execute_ conn "SELECT 1" `shouldThrow` \(ex :: SomeException) -> "another command is already in progress" `List.isInfixOf` show ex
 
 readSomeFileFromDisk :: IO ()
 readSomeFileFromDisk =

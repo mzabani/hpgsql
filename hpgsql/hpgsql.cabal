@@ -33,6 +33,7 @@ library
       Hpgsql.Parsing
       Hpgsql.Query
       Hpgsql.Time
+      Hpgsql.Transaction
       Hpgsql.TypeInfo
   other-modules:
       Hpgsql.Base
