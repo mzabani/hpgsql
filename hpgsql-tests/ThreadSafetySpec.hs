@@ -7,7 +7,9 @@ import Control.Concurrent (modifyMVar_, myThreadId, threadDelay)
 import Control.Concurrent.Async (Concurrently (..), cancel, forConcurrently, forConcurrently_, mapConcurrently, wait, withAsync)
 import Control.Exception.Safe (SomeException, try)
 import Control.Monad (forM_, void, when)
+import Control.Monad.IO.Class (liftIO)
 import Data.Containers.ListUtils (nubOrd)
+import Data.Int (Int32)
 import Data.Text (Text)
 import DbUtils
   ( aroundConn,
@@ -74,6 +76,9 @@ spec = do
         it
           ("Can send query after COPY thread killed - useTimeout " ++ show useTimeout)
           (sendQueryAfterCopyKilled useTimeout)
+        it
+          ("Can send query after BINARY COPY thread killed - useTimeout " ++ show useTimeout)
+          (sendQueryAfterBinaryCopyKilled useTimeout)
 
 -- | A function that behaves just like `timeout` except that `myThreadId` inside the time-limited
 -- action will be the same as the calling thread's if `useTimeout` is true (because it will use `timeout`)
@@ -127,6 +132,26 @@ sendQueryAfterCopyKilled useTimeout conn = do
       putCopyData conn "5,Dracula\n"
       putCopyData conn "6,The Grinch\n"
       threadDelay 10_000_000
+  didNotFinish `shouldBe` Nothing
+  queryWith (rowParser @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
+  execute_ conn [sql|DROP TABLE employee|]
+
+sendQueryAfterBinaryCopyKilled :: Bool -> HPgConnection -> IO ()
+sendQueryAfterBinaryCopyKilled useTimeout conn = do
+  execute_ conn [sql|CREATE TABLE employee (    employee_id SERIAL PRIMARY KEY    , employee_name TEXT NOT NULL);|]
+  -- A slow row stream so the COPY is guaranteed to be mid-flight when the
+  -- timeout/withAsync cancels it. We yield two rows and then block so the
+  -- async exception lands after rows have been sent but before the COPY
+  -- has finished.
+  let slowRows = do
+        S.yield ((5, "Dracula") :: (Int32, Text))
+        S.yield (6, "The Grinch")
+        liftIO $ threadDelay 10_000_000
+  didNotFinish <- getQueryKilledBeforeItsFinished useTimeout 300_000
+    $ copyFromS
+      conn
+      [sql|COPY employee FROM STDIN WITH (FORMAT BINARY);|]
+      slowRows
   didNotFinish `shouldBe` Nothing
   queryWith (rowParser @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
   execute_ conn [sql|DROP TABLE employee|]
