@@ -55,9 +55,9 @@ import Database.PostgreSQL.Simple.TypeInfo.Types (TypeInfo)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import GHC.Generics
 import GHC.IO.Exception
-import HPgsql (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))
-import qualified HPgsql
-import qualified HPgsql.Connection
+import Hpgsql (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))
+import qualified Hpgsql
+import qualified Hpgsql.Connection
 
 -- | A Field represents metadata about a particular field
 --
@@ -272,10 +272,10 @@ connectPostgreSQL :: ByteString -> IO Connection
 connectPostgreSQL connstr = do
   connectionObjects <- newMVar (IntMap.empty)
   connectionTempNameCounter <- newIORef 0
-  case HPgsql.Connection.parseConnString (TE.decodeUtf8 connstr) of
+  case Hpgsql.Connection.parseConnString (TE.decodeUtf8 connstr) of
     Left err -> error err
     Right connStr -> do
-      hpgConn <- mapHpgsqlErrors $ HPgsql.connect connStr 30
+      hpgConn <- mapHpgsqlErrors $ Hpgsql.connect connStr 30
       pure $ Connection {..}
 
 -- | Turns a 'ConnectInfo' data structure into a libpq connection string.
@@ -316,7 +316,7 @@ oid2int :: Oid -> Int
 oid2int (Oid x) = fromIntegral x
 {-# INLINE oid2int #-}
 
--- | Maps HPgsql's 'PostgresError' to postgresql-simple's 'SqlError', and
+-- | Maps Hpgsql's 'PostgresError' to postgresql-simple's 'SqlError', and
 -- some IrrecoverableHpgsqlError errors with a PostgresError behind them
 -- as well.
 postgresErrorToSqlError :: SomeException -> Maybe SqlError
@@ -339,7 +339,7 @@ postgresErrorToSqlError e
               sqlStatement = failedStatement
             }
 
--- | Wraps an IO action to rethrow HPgsql's 'PostgresError' as postgresql-simple's 'SqlError'.
+-- | Wraps an IO action to rethrow Hpgsql's 'PostgresError' as postgresql-simple's 'SqlError'.
 mapHpgsqlErrors :: IO a -> IO a
 mapHpgsqlErrors = handleJust postgresErrorToSqlError throwIO
 
@@ -347,13 +347,13 @@ mapHpgsqlErrors = handleJust postgresErrorToSqlError throwIO
 execute_ :: Connection -> Query -> IO Int64
 execute_ conn (Query stmt) =
   mapHpgsqlErrors $
-    HPgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 stmt)
+    Hpgsql.execute (hpgConn conn) (fromString $ T.unpack $ TE.decodeUtf8 stmt)
 
 disconnectedError :: SqlError
 disconnectedError = fatalError "connection disconnected"
 
 close :: Connection -> IO ()
-close Connection {..} = mapHpgsqlErrors $ HPgsql.closeGracefully hpgConn
+close Connection {..} = mapHpgsqlErrors $ Hpgsql.closeGracefully hpgConn
 
 data Row = Row
   { row :: {-# UNPACK #-} !PQ.Row,

@@ -10,8 +10,8 @@ import DbUtils
     irrecoverableErrorWithMsg,
     testConnInfo,
   )
-import HPgsql
-import HPgsql.Query (sql)
+import Hpgsql
+import Hpgsql.Query (sql)
 import System.Timeout (timeout)
 import Test.Hspec
 

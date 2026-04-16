@@ -1,4 +1,4 @@
-module HPgsql.Builder where
+module Hpgsql.Builder where
 
 -- \| This module replicates parts of the API of Data.ByteString.Builder but its own
 -- builder is length-aware, which makes other parts of the code a little bit nicer.

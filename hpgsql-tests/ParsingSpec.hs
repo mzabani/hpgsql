@@ -29,10 +29,10 @@ import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.IO as Text
 import Debug.Trace
 import GHC.Num (Natural)
-import HPgsql (Only (..))
-import HPgsql.Encoding (ToPgRow (..))
-import HPgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
-import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
+import Hpgsql (Only (..))
+import Hpgsql.Encoding (ToPgRow (..))
+import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
+import Hpgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
 import Hedgehog (Gen, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range

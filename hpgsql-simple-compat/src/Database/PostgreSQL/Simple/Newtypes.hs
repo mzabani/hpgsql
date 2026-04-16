@@ -6,4 +6,4 @@ module Database.PostgreSQL.Simple.Newtypes
   )
 where
 
-import HPgsql.Types (Aeson (..))
+import Hpgsql.Types (Aeson (..))

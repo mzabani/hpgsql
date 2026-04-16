@@ -42,11 +42,11 @@ import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
-import HPgsql.Builder (BinaryField (..))
-import HPgsql.Encoding (EncodingContext, ToPgField (..))
-import HPgsql.Time (Unbounded (..))
-import HPgsql.TypeInfo (Oid)
-import HPgsql.Types (Aeson, PGArray)
+import Hpgsql.Builder (BinaryField (..))
+import Hpgsql.Encoding (EncodingContext, ToPgField (..))
+import Hpgsql.Time (Unbounded (..))
+import Hpgsql.TypeInfo (Oid)
+import Hpgsql.Types (Aeson, PGArray)
 
 -- | How to render an element when substituting it into a query.
 data Action

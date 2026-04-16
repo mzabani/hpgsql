@@ -1,4 +1,4 @@
-module HPgsql.Time
+module Hpgsql.Time
   ( Unbounded (..),
   )
 where

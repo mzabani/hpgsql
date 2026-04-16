@@ -32,25 +32,25 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Internal as Base hiding (result, row)
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types (Query (..))
-import HPgsql (Query, execute_, queryWithM)
-import HPgsql.Encoding (RowParserMonadic)
-import HPgsql.Query (escapeIdentifier, sql)
+import Hpgsql (Query, execute_, queryWithM)
+import Hpgsql.Encoding (RowParserMonadic)
+import Hpgsql.Query (escapeIdentifier, sql)
 
 -- | Cursor within a transaction.
 data Cursor = Cursor !Database.PostgreSQL.Simple.Types.Query !Connection
 
 -- | Declare a temporary cursor. The cursor is given a
 -- unique name for the given connection.
-declareCursor :: Connection -> HPgsql.Query -> IO Cursor
+declareCursor :: Connection -> Hpgsql.Query -> IO Cursor
 declareCursor conn q = mapHpgsqlErrors $ do
   name <- newTempName conn
-  void $ HPgsql.execute_ (hpgConn conn) [sql|DECLARE ^{escapeIdentifier (fromQuery name)} NO SCROLL CURSOR FOR ^{q}|]
+  void $ Hpgsql.execute_ (hpgConn conn) [sql|DECLARE ^{escapeIdentifier (fromQuery name)} NO SCROLL CURSOR FOR ^{q}|]
   return $ Cursor name conn
 
 -- | Close the given cursor.
 closeCursor :: Cursor -> IO ()
 closeCursor (Cursor name conn) =
-  (void $ mapHpgsqlErrors $ HPgsql.execute_ (hpgConn conn) [sql|CLOSE ^{escapeIdentifier $ fromQuery name}|]) `E.catch` \ex ->
+  (void $ mapHpgsqlErrors $ Hpgsql.execute_ (hpgConn conn) [sql|CLOSE ^{escapeIdentifier $ fromQuery name}|]) `E.catch` \ex ->
     -- Don't throw exception if CLOSE failed because the transaction is
     -- aborted.  Otherwise, it will throw away the original error.
     unless (isFailedTransactionError ex) $ throwIO ex

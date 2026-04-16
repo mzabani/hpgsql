@@ -3,7 +3,7 @@
 -- to https://hackage.haskell.org/package/postgresql-simple-0.7.0.0/docs/src/Database.PostgreSQL.Simple.TypeInfo.Static.html
 -- We started with that and later came up with our own, though.
 -- We thank you for their great work.
-module HPgsql.TypeInfo
+module Hpgsql.TypeInfo
   ( boolOid,
     byteaOid,
     charOid,

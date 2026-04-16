@@ -15,7 +15,7 @@ import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Debug.Trace
-import HPgsql (ConnString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), defaultConnectOpts, execute, execute_, withConnection, withConnectionOpts)
+import Hpgsql (ConnString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), defaultConnectOpts, execute, execute_, withConnection, withConnectionOpts)
 import System.Environment (getEnv)
 import System.Mem (performGC)
 import Test.Hspec

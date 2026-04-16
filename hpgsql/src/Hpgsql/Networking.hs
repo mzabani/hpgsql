@@ -1,4 +1,4 @@
-module HPgsql.Networking
+module Hpgsql.Networking
   ( recvNonBlocking,
     socketWaitRead,
     socketWaitWrite,

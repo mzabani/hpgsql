@@ -48,7 +48,7 @@ import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
 import Database.PostgreSQL.Simple.Internal hiding (result, row)
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Simple.Types
-import qualified HPgsql
+import qualified Hpgsql
 
 -- | Issue a @COPY FROM STDIN@ or @COPY TO STDOUT@ query.   In the former
 --   case, the connection's state will change to @CopyIn@;  in the latter,
@@ -68,9 +68,9 @@ copy_ conn template = do
   let qry = toHpgsqlQuery template ()
   doCopy "Database.PostgreSQL.Simple.Copy.copy_" conn qry
 
-doCopy :: B.ByteString -> Connection -> HPgsql.Query -> IO ()
+doCopy :: B.ByteString -> Connection -> Hpgsql.Query -> IO ()
 doCopy _funcName conn q = mapHpgsqlErrors $ do
-  HPgsql.copyStart (hpgConn conn) q
+  Hpgsql.copyStart (hpgConn conn) q
 
 data CopyOutResult
   = -- | Data representing either exactly
@@ -93,7 +93,7 @@ data CopyOutResult
 --   connection remains in the @CopyIn@ state after this function
 --   is called.
 putCopyData :: Connection -> B.ByteString -> IO ()
-putCopyData conn dat = mapHpgsqlErrors $ HPgsql.putCopyData (hpgConn conn) dat
+putCopyData conn dat = mapHpgsqlErrors $ Hpgsql.putCopyData (hpgConn conn) dat
 
 -- | Completes a @COPY FROM STDIN@ query.  Returns the number of rows
 --   processed.
@@ -103,4 +103,4 @@ putCopyData conn dat = mapHpgsqlErrors $ HPgsql.putCopyData (hpgConn conn) dat
 --   connection's state changes back to ready after this function
 --   is called.
 putCopyEnd :: Connection -> IO Int64
-putCopyEnd conn = mapHpgsqlErrors $ HPgsql.copyEnd (hpgConn conn)
+putCopyEnd conn = mapHpgsqlErrors $ Hpgsql.copyEnd (hpgConn conn)

@@ -1,6 +1,6 @@
-module HPgsql.Msgs (AuthenticationOk (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), Sync (..), parsePgMessage) where
+module Hpgsql.Msgs (AuthenticationOk (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), Sync (..), parsePgMessage) where
 
--- Many types are defined in HPgsql.InternalTypes and re-exported here.
+-- Many types are defined in Hpgsql.InternalTypes and re-exported here.
 
 -- TODO: Make this whole module internal!
 
@@ -22,10 +22,10 @@ import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
 import Data.Word (Word8)
-import HPgsql.Builder (BinaryField, Builder)
-import qualified HPgsql.Builder as Builder
-import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
-import HPgsql.TypeInfo (Oid (..))
+import Hpgsql.Builder (BinaryField, Builder)
+import qualified Hpgsql.Builder as Builder
+import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
+import Hpgsql.TypeInfo (Oid (..))
 
 class ToPgMessage a where
   toPgMessage :: a -> Builder

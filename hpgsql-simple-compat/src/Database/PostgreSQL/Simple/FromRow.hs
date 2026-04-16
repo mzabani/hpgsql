@@ -35,7 +35,7 @@ where
 
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import GHC.Generics (Generic (..))
-import HPgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), ProductTypeDecoder (..), RowParserMonadic, singleColRowParser, toMonadicRowParser, (:.) (..))
+import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), ProductTypeDecoder (..), RowParserMonadic, singleColRowParser, toMonadicRowParser, (:.) (..))
 import Prelude hiding (null)
 
 type RowParser = RowParserMonadic

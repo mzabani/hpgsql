@@ -14,8 +14,8 @@ import DbUtils
     pgErrorMustContain,
     withRollback,
   )
-import HPgsql
-import HPgsql.Query (sql)
+import Hpgsql
+import Hpgsql.Query (sql)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen

@@ -8,9 +8,9 @@
   - "--ignore-glob=hpgsql-benchmarks/**"
   - "--ignore-glob=hpgsql-simple-compat/**"
   - "--ignore-glob=hpgsql-simple-compat-tests/**"
-  - "--ignore-glob=hpgsql/src/HPgsql/Networking.hs" # Mostly a copy from another library, best to keep similar to that
+  - "--ignore-glob=hpgsql/src/Hpgsql/Networking.hs" # Mostly a copy from another library, best to keep similar to that
 
-- ignore: {name: "Use camelCase", within: [ HPgsql.TypeInfo ]}
+- ignore: {name: "Use camelCase", within: [ Hpgsql.TypeInfo ]}
 - ignore: {name: "Avoid lambda"} # Preferred arity can be an important optimization
 - ignore: {name: "Redundant lambda"} # Preferred arity can be an important optimization
 - ignore: {name: "Replace case with maybe"}

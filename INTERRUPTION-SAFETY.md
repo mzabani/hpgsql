@@ -34,7 +34,7 @@ might actually leave the transaction in a different state, and the exception mig
 
 With Hpgsql you shouldn't run into such issues, or at least we promise that:
 - Hpgsql is interruption safe, so a query can be interrupted by asynchronous exceptions and you should still be able to run new queries on the same connection. Naturally, it is up to you to determine which queries ran or not to completion, since they might have side-effects.
-- HPgsql will throw either `PostgresError` or `IrrecoverableHpgsqlError`, and:
+- Hpgsql will throw either `PostgresError` or `IrrecoverableHpgsqlError`, and:
   - If you receive a `IrrecoverableHpgsqlError`, Hpgsql makes no promises about which statements ran to completion and what connection state is, and you should `closeForcefully` the connection without running any other queries.
   - If you receive a `PostgresError` exception, postgres and Hpgsql's states are synced and you can issue new queries afterwards.
-  - It is possible HPgsql throws a different kind of exception. File a bug report if that happens, and if you know it came from HPgsql, treat it like a `IrrecoverableHpgsqlError`.
+  - It is possible Hpgsql throws a different kind of exception. File a bug report if that happens, and if you know it came from Hpgsql, treat it like a `IrrecoverableHpgsqlError`.

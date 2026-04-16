@@ -16,8 +16,8 @@ import DbUtils
     testConnInfo,
     withRollback,
   )
-import HPgsql
-import HPgsql.Query (sql)
+import Hpgsql
+import Hpgsql.Query (sql)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import System.Mem (performGC)
@@ -188,7 +188,7 @@ threadThatSendsPipelinMustBeThreadThatConsumesResults :: HPgConnection -> IO ()
 threadThatSendsPipelinMustBeThreadThatConsumesResults conn = do
   res <- queryWithStreaming (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10)"
   withAsync (S.effects res) $ \otherThreadResults ->
-    wait otherThreadResults `shouldThrow` irrecoverableErrorWithMsg "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
+    wait otherThreadResults `shouldThrow` irrecoverableErrorWithMsg "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
 
 queryCancellationInTheFuture :: IO ()
 queryCancellationInTheFuture = do

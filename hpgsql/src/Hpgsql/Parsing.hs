@@ -1,7 +1,7 @@
 -- |
 --
 -- This module contains parsers that are helpful to separate SQL statements from each other by finding query boundaries: semi-colons, but not when inside a string or a parenthesised expression, for example.
-module HPgsql.Parsing
+module Hpgsql.Parsing
   ( parseSql,
     flattenBlocksInPieces,
     sqlStatementText,

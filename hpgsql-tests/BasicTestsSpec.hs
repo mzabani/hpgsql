@@ -11,16 +11,16 @@ import DbUtils
     pgErrorMustContain,
     withRollback,
   )
-import HPgsql
-import HPgsql.Encoding (toMonadicRowParser)
-import HPgsql.Query (mkQuery, sql)
+import Hpgsql
+import Hpgsql.Encoding (toMonadicRowParser)
+import Hpgsql.Query (mkQuery, sql)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Test.Hspec
 
 spec :: Spec
 spec = do
-  aroundConn $ describe "HPgsql" $ parallel $ do
+  aroundConn $ describe "Hpgsql" $ parallel $ do
     it
       "Querying and returning a few rows"
       queryingAndReturningAFewRows

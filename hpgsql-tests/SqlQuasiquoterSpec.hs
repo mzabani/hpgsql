@@ -12,12 +12,12 @@ import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import HPgsql (Only (..))
-import HPgsql.Builder (BinaryField (..))
-import HPgsql.Encoding (ToPgRow (..))
-import HPgsql.Parsing (ParsingOpts (..), parseSql, sqlStatementText)
-import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
-import HPgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
+import Hpgsql (Only (..))
+import Hpgsql.Builder (BinaryField (..))
+import Hpgsql.Encoding (ToPgRow (..))
+import Hpgsql.Parsing (ParsingOpts (..), parseSql, sqlStatementText)
+import Hpgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
+import Hpgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range

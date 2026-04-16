@@ -55,9 +55,9 @@ import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
-import HPgsql.Encoding (ToPgField (..), (:.) (..))
-import qualified HPgsql.Encoding as HPgsql
-import HPgsql.Types (PGArray (..))
+import Hpgsql.Encoding (ToPgField (..), (:.) (..))
+import qualified Hpgsql.Encoding as Hpgsql
+import Hpgsql.Types (PGArray (..))
 
 -- | A placeholder for the SQL @NULL@ value.
 data Null = Null
@@ -165,8 +165,8 @@ newtype Binary a = Binary {fromBinary :: a}
 
 instance ToField (Binary ByteString)
 
-instance HPgsql.FromPgField (Binary ByteString) where
-  fieldParser = Binary <$> HPgsql.fieldParser
+instance Hpgsql.FromPgField (Binary ByteString) where
+  fieldParser = Binary <$> Hpgsql.fieldParser
 
 instance ToPgField (Binary ByteString) where
   toTypeOid _ tyiCache = toTypeOid (Proxy @ByteString) tyiCache

@@ -5,7 +5,7 @@
 --
 -- In benchmarks, this can improve performance by 12-15% materializing
 -- query results.
-module HPgsql.SimpleParser
+module Hpgsql.SimpleParser
   ( Parser (..),
     ParseResult (..),
     parseOnly,

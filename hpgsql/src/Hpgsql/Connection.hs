@@ -1,4 +1,4 @@
-module HPgsql.Connection
+module Hpgsql.Connection
   ( ConnString (..),
     parseConnString,
     libpqConnString,
@@ -35,7 +35,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
-import HPgsql.InternalTypes (ConnString (..))
+import Hpgsql.InternalTypes (ConnString (..))
 import Network.URI
   ( URI (..),
     URIAuth (..),

@@ -8,8 +8,8 @@ import DbUtils
   ( irrecoverableErrorMustContain,
     testConnInfo,
   )
-import HPgsql
-import HPgsql.Query (sql)
+import Hpgsql
+import Hpgsql.Query (sql)
 import Test.Hspec
 
 spec :: Spec

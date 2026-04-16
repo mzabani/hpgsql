@@ -1,4 +1,4 @@
-module HPgsql
+module Hpgsql
   ( query,
     queryWith,
     queryWithStreaming,
@@ -77,18 +77,18 @@ import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 import GHC.Conc (ThreadStatus (..), threadStatus)
-import HPgsql.Base
-import qualified HPgsql.Builder as Builder
-import HPgsql.Connection (ConnString (..))
-import HPgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
-import HPgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
-import HPgsql.Locking (getMyWeakThreadId, withMutex)
-import HPgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
-import qualified HPgsql.Msgs as Msgs
-import HPgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
-import HPgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements)
-import qualified HPgsql.SimpleParser as Parser
-import HPgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
+import Hpgsql.Base
+import qualified Hpgsql.Builder as Builder
+import Hpgsql.Connection (ConnString (..))
+import Hpgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
+import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
+import Hpgsql.Locking (getMyWeakThreadId, withMutex)
+import Hpgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
+import qualified Hpgsql.Msgs as Msgs
+import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
+import Hpgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements)
+import qualified Hpgsql.SimpleParser as Parser
+import Hpgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString as SocketBS
@@ -265,7 +265,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
 -- Note that builtin postgres types are always available in the typeInfo cache;
 -- this just refreshes any other custom types, including removing those that
 -- no longer exist and adding new ones.
--- HPgsql runs this automatically for new connections unless you disable it.
+-- Hpgsql runs this automatically for new connections unless you disable it.
 -- This is a Pipeline so you can batch it with other commands for reduced latency.
 -- See `ConnectOpts` and `resetTypeInfoCache` for more.
 refreshTypeInfoCache :: HPgConnection -> Pipeline (IO ())
@@ -335,7 +335,7 @@ closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finall
 -- closing the connection's socket in the kernel without making postgres
 -- aware of it.
 -- Use this if you need to close the connection in exception handlers or
--- if you received an irrecoverable HPgsql exception.
+-- if you received an irrecoverable Hpgsql exception.
 closeForcefully :: HPgConnection -> IO ()
 closeForcefully conn@(HPgConnection {socket}) = whenNotClosed conn $ do
   Socket.close socket
@@ -365,7 +365,7 @@ receiveNextMsgWithMaskedContinuation :: (Show a) => HPgConnection -> PgMsgParser
 receiveNextMsgWithMaskedContinuation conn parser f =
   receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser $ \case
     Right p -> f p
-    Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " ++ show msgIdentChar ++ ". This is an internal error in HPgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
+    Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " ++ show msgIdentChar ++ ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
 -- the internal buffer and the supplied function runs to completion.
@@ -446,7 +446,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
       if LBS.length lbs >= nbytes
         then pure (LBS.drop nbytes lbs)
         else
-          error "Bug in HPgsql. Internal buffer's bytes weren't filled enough"
+          error "Bug in Hpgsql. Internal buffer's bytes weren't filled enough"
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
@@ -481,7 +481,7 @@ sendCancellationRequest conn = do
           _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
   case copyState of
     Just StillCopying ->
-      atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail "COPY statement automatically cancelled by HPgsql because it was interrupted", SomeMessage Sync], markCopyFailSent)
+      atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail "COPY statement automatically cancelled by Hpgsql because it was interrupted", SomeMessage Sync], markCopyFailSent)
     Just CopyDoneAndSyncSent ->
       pure
         () -- Already finished, nothing to cancel
@@ -611,13 +611,13 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
     getQueryStateIfFirstOrThrow = updateConnStateTxn conn $ \sttv -> do
       st <- STM.readTVar sttv
       case currentPipeline st of
-        [] -> throwIrrecoverableError $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in HPgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
+        [] -> throwIrrecoverableError $ "QueryId " <> show qryId <> " does not exist because the pipeline is empty. This is most likely a bug in Hpgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
         queries
-          | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Bug in HPgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
-          | any ((/= thisThreadId) . queryOwner) queries -> throwIrrecoverableError "HPgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
+          | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Bug in Hpgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " ++ show (qryId, queries)
+          | any ((/= thisThreadId) . queryOwner) queries -> throwIrrecoverableError "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
         (splitQueries -> (earlierQueries, thisQuery))
           | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
-          | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? HPgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
+          | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
           | otherwise -> pure thisQuery
 
     splitQueries :: [QueryState] -> ([QueryState], QueryState)
@@ -654,7 +654,7 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
             (RespCommandComplete msg, RowDescriptionOrNoDataOrCopyInResponseReceived noDataRowDesc) -> CommandCompleteReceived noDataRowDesc msg
             (RespReadyForQuery rq, ErrorResponseReceived _ err) -> ReadyForQueryReceived (Left err) rq
             (RespReadyForQuery rq, CommandCompleteReceived _ cmd) -> ReadyForQueryReceived (Right cmd) rq
-            (_, before) -> error $ "Bug in HPgsql. Response messages in invalid order. Had " ++ show before ++ " and received " ++ show respMsg
+            (_, before) -> error $ "Bug in Hpgsql. Response messages in invalid order. Had " ++ show before ++ " and received " ++ show respMsg
           allQueries = currentPipeline st
       STM.writeTVar sttv $
         st
@@ -739,7 +739,7 @@ consumeResults conn qryId = do
                           receiveReadyForQueryIfNecessary thisThreadId
                           pure $ Left $ Right cmd
                         ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
-                        _ -> throwIrrecoverableError "Internal error in HPgsql. After a DataRow we should get either an ErrorResponse or a CommandComplete message"
+                        _ -> throwIrrecoverableError "Internal error in Hpgsql. After a DataRow we should get either an ErrorResponse or a CommandComplete message"
               )
               ()
           finalStream = case mDataRow of
@@ -1044,7 +1044,7 @@ pipelineCmdInternal qs =
 -- to the server.
 -- Note that the thread that runs this must be the thread that consumes the
 -- results of every query in the supplied pipeline, and in order.
--- Anything else is not officially supported by HPgsql and may result in deadlocks or undefined behaviour.
+-- Anything else is not officially supported by Hpgsql and may result in deadlocks or undefined behaviour.
 runPipeline :: HPgConnection -> Pipeline a -> IO a
 runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
   case mQueries of
@@ -1079,10 +1079,10 @@ consumeStreamingResults rp conn qryId = S.effect $ do
       -- This is likely an error that happened when binding parameters (e.g. more/fewer params necessary than were sent)
       -- or a query that has no parameters and fails very early (e.g. "SELECT 1/0")
       rowCount :> res <- S.length rowsStream
-      when (rowCount > 0) $ throwIrrecoverableErrorWithStatement qText "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
+      when (rowCount > 0) $ throwIrrecoverableErrorWithStatement qText "Bug in Hpgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we got more than 0 rows in results"
       case res of
         Left err -> throwPostgresError qText err
-        Right _cmd -> throwIrrecoverableErrorWithStatement qText "Bug in HPgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
+        Right _cmd -> throwIrrecoverableErrorWithStatement qText "Bug in Hpgsql. We didn't get either NoData or RowDescription, so we assumed there was an error binding the query, but we then received a CommandComplete."
     Just (Left3 _noData) -> throwIrrecoverableErrorWithStatement qText "You have sent a count-returning query but expected it to be a rows-returning query. This is not supported."
     Just (Right3 _copyInResponse) -> throwIrrecoverableErrorWithStatement qText "You have sent a COPY FROM STDIN query but expected it to be a rows-returning query. This is not supported."
     Just (Middle3 (RowDescription coltypes)) -> do
@@ -1243,7 +1243,7 @@ copyEnd conn = do
       [] -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd"
       [qs] -> case qs.queryProtocol of
         ExtendedQuery -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd, but rather there was a regular query"
-        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was issued by a different thread, and HPgsql does not support multiple threads running/ending the same COPY statement"
+        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was issued by a different thread, and Hpgsql does not support multiple threads running/ending the same COPY statement"
         CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was already finished"
         CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement had previously failed"
       _ -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active pipeline with other statements running when a copyEnd was attempted"

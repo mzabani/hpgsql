@@ -1,4 +1,4 @@
-module HPgsql.Base where
+module Hpgsql.Base where
 
 import Control.Monad (void)
 import Data.Bifunctor (second)

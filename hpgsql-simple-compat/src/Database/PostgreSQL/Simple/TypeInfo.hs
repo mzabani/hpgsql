@@ -34,7 +34,7 @@ import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.TypeInfo.Static
 import Database.PostgreSQL.Simple.TypeInfo.Types
-import HPgsql.Encoding ()
+import Hpgsql.Encoding ()
 
 -- | Returns the metadata of the type with a particular oid.  To find
 --   this data, 'getTypeInfo' first consults hpgsql-simple-compat's

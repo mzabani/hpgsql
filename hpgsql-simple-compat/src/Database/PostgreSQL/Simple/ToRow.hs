@@ -29,7 +29,7 @@ where
 
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
 import GHC.Generics (Generic (..))
-import HPgsql.Encoding (Only (..), ProductTypeEncoder, ToPgRow (..), genericToPgRow, (:.) (..))
+import Hpgsql.Encoding (Only (..), ProductTypeEncoder, ToPgRow (..), genericToPgRow, (:.) (..))
 
 -- | A collection type that can be turned into a list of rendering
 -- 'Action's.

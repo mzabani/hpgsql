@@ -1,4 +1,4 @@
-module HPgsql.InternalTypes
+module Hpgsql.InternalTypes
   ( -- * Simple types
     ConnString (..),
     ConnectOpts (..),
@@ -8,7 +8,7 @@ module HPgsql.InternalTypes
     NotificationResponse (..),
     PoolCleanup (..),
     TransactionStatus (..),
-    EncodingContext (..), -- re-exported from HPgsql.TypeInfo
+    EncodingContext (..), -- re-exported from Hpgsql.TypeInfo
     throwIrrecoverableError,
 
     -- * Msgs types (moved to avoid cycles)
@@ -58,8 +58,8 @@ import Data.Word (Word16)
 
 #endif
 import qualified Control.Concurrent.STM as STM
-import HPgsql.Query (SingleQuery (..))
-import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
+import Hpgsql.Query (SingleQuery (..))
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
 import System.Mem.Weak (Weak)
 
@@ -82,15 +82,15 @@ instance Show ConnString where
   show _ = "ConnectionString"
 
 data ConnectOpts = ConnectOpts
-  { -- | How long in ms HPgsql will sleep before re-checking if active queries have been orphaned
+  { -- | How long in ms Hpgsql will sleep before re-checking if active queries have been orphaned
     -- from their issuing threads having died. The default is 500ms, and this is only relevant
     -- if you plan on concurrently issuing queries on a single connection, and even then only
     -- if you expect your threads to be killed by asynchronous exceptions frequently enough,
-    -- and you want resume using the connection and cannot wait ~500ms until HPgsql realizes
+    -- and you want resume using the connection and cannot wait ~500ms until Hpgsql realizes
     -- it's fine to do so.
     -- You probably don't need to worry about this or tune it.
     killedThreadPollIntervalMs :: Int,
-    -- | How long in ms HPgsql will wait before re-sending a cancellation request
+    -- | How long in ms Hpgsql will wait before re-sending a cancellation request
     -- while draining orphaned queries (queries from dead threads). The default is 500ms,
     -- and this is only relevant if you plan on interrupting your queries with
     -- asynchronous exceptions, either by use of concurrency primitives or functions like
@@ -154,7 +154,7 @@ throwIrrecoverableError :: (MonadThrow m) => String -> m a
 throwIrrecoverableError errMsg = throw $ IrrecoverableHpgsqlError {hpgsqlDetails = errMsg, innerException = Nothing, relatedStatement = Nothing}
 
 -- ------------------------------------------------------------------
--- Msgs types (moved from HPgsql.Msgs to avoid cycles)
+-- Msgs types (moved from Hpgsql.Msgs to avoid cycles)
 -- ------------------------------------------------------------------
 
 data ParseComplete = ParseComplete
@@ -188,7 +188,7 @@ newtype ReadyForQuery
   deriving stock (Show)
 
 -- ------------------------------------------------------------------
--- Internal connection state types (moved from HPgsql)
+-- Internal connection state types (moved from Hpgsql)
 -- ------------------------------------------------------------------
 
 data Either3 a b c = Left3 !a | Middle3 !b | Right3 !c

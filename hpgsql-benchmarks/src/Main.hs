@@ -35,9 +35,9 @@ import qualified Database.PostgreSQL.Simple as PGSimple
 import qualified Database.PostgreSQL.Simple.Copy as PGSimple
 import qualified Database.PostgreSQL.Simple.Streaming as StreamingPostgresSimple
 import GHC.Generics (Generic)
-import qualified HPgsql
-import HPgsql.Connection (libpqConnString)
-import qualified HPgsql.Query as HPgsql
+import qualified Hpgsql
+import Hpgsql.Connection (libpqConnString)
+import qualified Hpgsql.Query as Hpgsql
 import qualified Hasql.Connection as HasqlConn
 import qualified Hasql.Connection.Setting as HasqlSetting
 import qualified Hasql.Connection.Setting.Connection as HasqlConnSetting
@@ -82,7 +82,7 @@ data BenchRow = BenchRow
     brMaybeDay :: !(Maybe Day)
   }
   deriving stock (Generic, Show, Eq)
-  deriving anyclass (NFData, HPgsql.FromPgRow, PGSimple.FromRow)
+  deriving anyclass (NFData, Hpgsql.FromPgRow, PGSimple.FromRow)
 
 data HasqlBenchRow = HasqlBenchRow
   { hbrId :: !Int32,
@@ -102,13 +102,13 @@ data HasqlBenchRow = HasqlBenchRow
   deriving stock (Generic, Show, Eq)
   deriving anyclass (NFData)
 
-testConnInfo :: IO HPgsql.ConnString
+testConnInfo :: IO Hpgsql.ConnString
 testConnInfo = do
   portStr <- getEnv "PGPORT"
   hostname <- getEnv "PGHOST"
   database <- getEnv "PGDATABASE"
   user <- getEnv "PGUSER"
-  pure HPgsql.ConnString {user, database, hostname, port = read portStr, password = "", options = ""}
+  pure Hpgsql.ConnString {user, database, hostname, port = read portStr, password = "", options = ""}
 
 superForce :: (NFData a) => IO a -> IO a
 superForce vio = vio >>= evaluate . force
@@ -226,7 +226,7 @@ main = do
       (conn, pgSimpleConn, hasqlConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
         conn <-
-          HPgsql.connect hpgsqlConnInfo 10
+          Hpgsql.connect hpgsqlConnInfo 10
         pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
         hasqlConn <-
           either (\e -> error $ "hasql connection failed: " ++ show e) id
@@ -282,7 +282,7 @@ main = do
         it ("hpgsql Tuple List (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
-              HPgsql.queryWith (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+              Hpgsql.queryWith (Hpgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
         it ("hasql Tuple List (" ++ show n ++ " rows)") $
           void $
             bench ("hasql Tuple List (" ++ show n ++ " rows)") $ do
@@ -295,7 +295,7 @@ main = do
         it ("hpgsql Record List (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Record List (" ++ show n ++ " rows)") $
-              HPgsql.queryWith (HPgsql.rowParser @BenchRow) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+              Hpgsql.queryWith (Hpgsql.rowParser @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
         it ("hasql Record List (" ++ show n ++ " rows)") $
           void $
             bench ("hasql Record List (" ++ show n ++ " rows)") $ do
@@ -309,7 +309,7 @@ main = do
       (conn, pgSimpleConn, hasqlConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
         conn <-
-          HPgsql.connect hpgsqlConnInfo 10
+          Hpgsql.connect hpgsqlConnInfo 10
         pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
         hasqlConn <-
           either (\e -> error $ "hasql connection failed: " ++ show e) id
@@ -368,7 +368,7 @@ main = do
         it ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $ do
-              res <- HPgsql.queryWithStreaming (HPgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+              res <- Hpgsql.queryWithStreaming (Hpgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
               S.effects res
         it ("hasql Tuple Stream (" ++ show n ++ " rows)") $
           void $
@@ -384,7 +384,7 @@ main = do
         it ("hpgsql Record Stream (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Record Stream (" ++ show n ++ " rows)") $ do
-              res <- HPgsql.queryWithStreaming (HPgsql.rowParser @BenchRow) conn (HPgsql.mkQuery sql (HPgsql.Only n))
+              res <- Hpgsql.queryWithStreaming (Hpgsql.rowParser @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
               S.effects res
         it ("hasql Record Stream (" ++ show n ++ " rows)") $
           void $
@@ -400,7 +400,7 @@ main = do
     describe "COPY FROM STDIN" $ do
       (conn, pgSimpleConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
-        conn <- HPgsql.connect hpgsqlConnInfo 10
+        conn <- Hpgsql.connect hpgsqlConnInfo 10
         pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
         pure (conn, pgSimpleConn)
       let createCopyBenchTable :: (IsString s) => s
@@ -410,14 +410,14 @@ main = do
         it ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $ do
-              HPgsql.execute_ conn "BEGIN"
-              HPgsql.execute_ conn createCopyBenchTable
+              Hpgsql.execute_ conn "BEGIN"
+              Hpgsql.execute_ conn createCopyBenchTable
               void $
-                HPgsql.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
+                Hpgsql.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
                   S.map
                     mkRow
                     (S.each [1 .. fromIntegral n])
-              HPgsql.execute_ conn "ROLLBACK"
+              Hpgsql.execute_ conn "ROLLBACK"
         it ("postgresql-simple text COPY (" ++ show n ++ " rows)") $
           void $
             bench ("postgresql-simple text COPY (" ++ show n ++ " rows)") $ do

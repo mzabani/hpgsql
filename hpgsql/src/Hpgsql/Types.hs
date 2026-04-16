@@ -1,4 +1,4 @@
-module HPgsql.Types
+module Hpgsql.Types
   ( Aeson (..),
     PgJson, -- Do not export ctor
     Values (..),
@@ -17,10 +17,10 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
-import HPgsql.Builder (BinaryField (..))
-import HPgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
-import HPgsql.Query (Query (..), commaSeparatedRowTuples)
-import HPgsql.TypeInfo (jsonOid, jsonbOid)
+import Hpgsql.Builder (BinaryField (..))
+import Hpgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
+import Hpgsql.Query (Query (..), commaSeparatedRowTuples)
+import Hpgsql.TypeInfo (jsonOid, jsonbOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
 newtype PGArray a = PGArray {fromPGArray :: [a]}
@@ -40,7 +40,7 @@ newtype Values a = Values [a]
 --
 -- > [sql| INSERT INTO emp(id,name) ^{valuesToQuery (Values rows)} ON CONFLICT DO NOTHING |]
 valuesToQuery :: (ToPgRow a) => Values a -> Query
-valuesToQuery (Values []) = error "HPgsql: empty Values lists are not supported because postgres does not support them"
+valuesToQuery (Values []) = error "Hpgsql: empty Values lists are not supported because postgres does not support them"
 valuesToQuery (Values rows) =
   let allParams = map toPgParams rows
    in "VALUES " <> commaSeparatedRowTuples allParams
@@ -55,7 +55,7 @@ newtype PgJson = PgJson ByteString
 
 instance ToJSON PgJson where
   toJSON (PgJson bs) = case Aeson.eitherDecodeStrict' bs of
-    Left err -> error $ "Bug in HPgsql. PgJson not valid JSON: " ++ err
+    Left err -> error $ "Bug in Hpgsql. PgJson not valid JSON: " ++ err
     Right v -> v
 
   toEncoding (PgJson bs) = AesonInternal.unsafeToEncoding (Builder.byteString bs)

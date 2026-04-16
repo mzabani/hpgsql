@@ -1,6 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 
-module HPgsql.Encoding
+module Hpgsql.Encoding
   ( FromPgRow (..),
     FromPgField (..),
     ToPgField (..),
@@ -64,12 +64,12 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
-import HPgsql.Base (StrictTuple (..))
-import HPgsql.Builder (BinaryField (..))
-import qualified HPgsql.Builder as Builder
-import qualified HPgsql.SimpleParser as Parser
-import HPgsql.Time (Unbounded (..))
-import HPgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
+import Hpgsql.Base (StrictTuple (..))
+import Hpgsql.Builder (BinaryField (..))
+import qualified Hpgsql.Builder as Builder
+import qualified Hpgsql.SimpleParser as Parser
+import Hpgsql.Time (Unbounded (..))
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
   { typeOid :: !Oid,
@@ -132,7 +132,7 @@ instance Applicative RowParser where
   pure v = RowParser (const $ pure v) (map (,True)) 0
   RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in tc1 cols1 ++ tc2 cols2) (nc1 + nc2)
 
-instance (TypeError (TypeLits.Text "RowParser does not have a Monad instance in HPgsql because HPgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowParser where
+instance (TypeError (TypeLits.Text "RowParser does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowParser where
   (>>=) = error "inaccessible bind in Monad RowParser instance"
 
 -- | TODO: I think this can actually be exported. Maybe it helps users avoid `Only` if they prefer?
@@ -558,7 +558,7 @@ binaryIntDecoder typOid = \bs ->
       | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . Cereal.decode @Int64)
       | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . Cereal.decode @Int32)
       | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . Cereal.decode @Int16)
-      | otherwise = error "Bug in HPgsql. Decoding binary integral type not an int2, int4 or int8"
+      | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
 binaryFloat4Decoder :: ByteString -> Float
@@ -878,7 +878,7 @@ instance FromPgField Aeson.Value where
              in \case
                   Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
                     Just d -> Right d
-                    Nothing -> Left "Bug in HPgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
                   Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
@@ -920,7 +920,7 @@ arrayField !elementParser =
       !_hasNull <- int32Parser
       !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
       let !elementColInfo = ColumnInfo elementTypeOid encodingContext
-      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
+      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
       if ndim == 0
         then pure mempty
         else do
@@ -959,7 +959,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
         !_hasNull <- int32Parser
         !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
         let !elementColInfo = ColumnInfo elementTypeOid encodingContext
-        when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in HPgsql. Got array with ndim=" ++ show ndim
+        when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
         unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
         -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
         numRows <- do

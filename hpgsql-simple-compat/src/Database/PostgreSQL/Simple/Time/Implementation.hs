@@ -23,7 +23,7 @@ import Data.Time.Compat (Day, LocalTime, NominalDiffTime, TimeOfDay, TimeZone, U
 import Data.Time.LocalTime.Compat (CalendarDiffTime)
 import qualified Database.PostgreSQL.Simple.Time.Internal.Parser as TP
 import qualified Database.PostgreSQL.Simple.Time.Internal.Printer as TPP
-import HPgsql.Time (Unbounded (..))
+import Hpgsql.Time (Unbounded (..))
 import Prelude hiding (take)
 
 type LocalTimestamp = Unbounded LocalTime

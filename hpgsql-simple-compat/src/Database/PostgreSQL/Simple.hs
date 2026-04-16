@@ -153,9 +153,9 @@ import Database.PostgreSQL.Simple.Types
     Query (..),
     (:.) (..),
   )
-import qualified HPgsql
-import HPgsql.Encoding (RowParserMonadic)
-import qualified HPgsql.Query as HPgsql
+import qualified Hpgsql
+import Hpgsql.Encoding (RowParserMonadic)
+import qualified Hpgsql.Query as Hpgsql
 
 -- | Format a query string with a variable number of rows.
 --
@@ -170,7 +170,7 @@ import qualified HPgsql.Query as HPgsql
 --
 -- Throws 'FormatError' if the query string could not be formatted
 -- correctly.
-formatMany :: forall q. (ToRow q) => Connection -> Query -> [q] -> IO HPgsql.Query
+formatMany :: forall q. (ToRow q) => Connection -> Query -> [q] -> IO Hpgsql.Query
 formatMany _ q [] = fmtError "no rows supplied" q []
 formatMany _conn q@(Query template) qs = do
   -- First we replace the query string's ? with (?,?,?,...) with as many
@@ -189,8 +189,8 @@ formatMany _conn q@(Query template) qs = do
                 )
             [] ->
               pure $ before <> BS.intercalate "," (map renderRow qs) <> after
-  -- Now we ask HPgsql to parse the query with one ? per query parameter
-  pure $ HPgsql.mkQueryInternal pgSimpleQuery (concatMap toHpgsqlRowParams qs)
+  -- Now we ask Hpgsql to parse the query with one ? per query parameter
+  pure $ Hpgsql.mkQueryInternal pgSimpleQuery (concatMap toHpgsqlRowParams qs)
   where
     renderRow :: (ToRow q) => q -> B.ByteString
     renderRow row =
@@ -303,7 +303,7 @@ parseTemplate template =
 execute :: (ToRow q) => Connection -> Query -> q -> IO Int64
 execute conn template qs =
   mapHpgsqlErrors $
-    HPgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
+    Hpgsql.execute (hpgConn conn) (toHpgsqlQuery template qs)
 
 -- | Execute a multi-row @INSERT@, @UPDATE@, or other SQL query that is not
 -- expected to return results.
@@ -338,7 +338,7 @@ executeMany :: (ToRow q) => Connection -> Query -> [q] -> IO Int64
 executeMany _ _ [] = return 0
 executeMany conn q qs = mapHpgsqlErrors $ do
   qry <- formatMany conn q qs
-  HPgsql.execute (hpgConn conn) qry
+  Hpgsql.execute (hpgConn conn) qry
 
 -- | Execute @INSERT ... RETURNING@, @UPDATE ... RETURNING@, or other SQL
 -- query that accepts multi-row input and is expected to return results.
@@ -358,7 +358,7 @@ returning = returningWith fromRow
 -- | A version of 'returning' taking parser as argument
 returningWith :: (ToRow q) => RowParserMonadic r -> Connection -> Query -> [q] -> IO [r]
 returningWith _ _ _ [] = return []
-returningWith _parser _conn _q _qs = error "TODO HPgsql"
+returningWith _parser _conn _q _qs = error "TODO Hpgsql"
 
 -- | Perform a @SELECT@ or other SQL query that is expected to return
 -- results. All results are retrieved and converted before this
@@ -389,7 +389,7 @@ query_ conn q = query conn q ()
 queryWith :: (ToRow q) => RowParserMonadic r -> Connection -> Query -> q -> IO [r]
 queryWith parser conn template qs =
   mapHpgsqlErrors $
-    HPgsql.queryWithM parser (hpgConn conn) (toHpgsqlQuery template qs)
+    Hpgsql.queryWithM parser (hpgConn conn) (toHpgsqlQuery template qs)
 
 -- | A version of 'query_' taking parser as argument
 queryWith_ :: RowParserMonadic r -> Connection -> Query -> IO [r]

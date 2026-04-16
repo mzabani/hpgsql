@@ -125,11 +125,11 @@ import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
 import Database.PostgreSQL.Simple.Types (Binary (..))
-import HPgsql.Encoding (FieldParser (..), FromPgField (..), arrayField, nullableField)
-import qualified HPgsql.Encoding as HPgsql
-import HPgsql.Time (Unbounded (..))
-import HPgsql.TypeInfo (Oid)
-import HPgsql.Types (Aeson, PGArray (..))
+import Hpgsql.Encoding (FieldParser (..), FromPgField (..), arrayField, nullableField)
+import qualified Hpgsql.Encoding as Hpgsql
+import Hpgsql.Time (Unbounded (..))
+import Hpgsql.TypeInfo (Oid)
+import Hpgsql.Types (Aeson, PGArray (..))
 
 -- | Exception thrown if conversion from a SQL value to a Haskell
 -- value fails.
@@ -173,8 +173,8 @@ left = conversionError
 
 class FromField a where
   fromField :: FieldParser a
-  default fromField :: (HPgsql.FromPgField a) => FieldParser a
-  fromField = HPgsql.fieldParser
+  default fromField :: (Hpgsql.FromPgField a) => FieldParser a
+  fromField = Hpgsql.fieldParser
 
 instance FromField ()
 
@@ -235,7 +235,7 @@ instance (FromField a) => FromField (Vector a) where
 instance (FromField a) => FromField (PGArray a) where
   fromField = PGArray . Vector.toList <$> arrayField fromField
 
-instance {-# OVERLAPPING #-} (HPgsql.FromPgField a) => FromField (Vector (Vector a))
+instance {-# OVERLAPPING #-} (Hpgsql.FromPgField a) => FromField (Vector (Vector a))
 
 instance FromField (Binary ByteString)
 
@@ -255,15 +255,15 @@ instance (Aeson.FromJSON a) => FromField (Aeson a)
 -- -- than alternatives.
 -- instance {-# OVERLAPPABLE #-} (FromField a) => FromPgField a where
 --   fieldParser =
---     HPgsql.FieldParser
---       { HPgsql.fieldValueParser = \colInfo mbs ->
---           let field = Field {result = error "Field.result not available in hpgsql-simple-compat", column = error "Field.column not available in hpgsql-simple-compat", typeOid = fromHpgsqlOid $ HPgsql.typeOid colInfo}
+--     Hpgsql.FieldParser
+--       { Hpgsql.fieldValueParser = \colInfo mbs ->
+--           let field = Field {result = error "Field.result not available in hpgsql-simple-compat", column = error "Field.column not available in hpgsql-simple-compat", typeOid = fromHpgsqlOid $ Hpgsql.typeOid colInfo}
 --               strictBs = fmap LB.toStrict mbs
 --            in unsafePerformIO $ do
 --                 -- Build a Connection with a pre-populated TypeInfoCache from
---                 -- HPgsql's encodingContext. This allows 'typename', 'returnError',
+--                 -- Hpgsql's encodingContext. This allows 'typename', 'returnError',
 --                 -- and 'typeInfo' to work for any type in the cache.
---                 connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (HPgsql.encodingContext colInfo)
+--                 connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (Hpgsql.encodingContext colInfo)
 --                 let conn =
 --                       Connection
 --                         connectionObjects
@@ -273,8 +273,8 @@ instance (Aeson.FromJSON a) => FromField (Aeson a)
 --                 case ok of
 --                   Ok a -> pure (Right a)
 --                   Errors errs -> pure (Left (show errs)),
---         HPgsql.fieldFmt = BadlySupportedTextFmt,
---         HPgsql.allowedPgTypes = const True
+--         Hpgsql.fieldFmt = BadlySupportedTextFmt,
+--         Hpgsql.allowedPgTypes = const True
 --       }
 
 -- | Returns the data type name.  This is the preferred way of identifying

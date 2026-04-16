@@ -31,12 +31,12 @@ import DbUtils
   )
 import GHC.Float (float2Double)
 import GHC.Generics (Generic)
-import HPgsql
-import HPgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, singleColRowParser)
-import HPgsql.Query (mkQuery, sql)
-import HPgsql.Time (Unbounded (..))
-import HPgsql.TypeInfo (Oid, TypeInfo (..))
-import HPgsql.Types (PGArray (..), PgJson, Values (..), valuesToQuery)
+import Hpgsql
+import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, singleColRowParser)
+import Hpgsql.Query (mkQuery, sql)
+import Hpgsql.Time (Unbounded (..))
+import Hpgsql.TypeInfo (Oid, TypeInfo (..))
+import Hpgsql.Types (PGArray (..), PgJson, Values (..), valuesToQuery)
 import Hedgehog (PropertyT, annotateShow, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen

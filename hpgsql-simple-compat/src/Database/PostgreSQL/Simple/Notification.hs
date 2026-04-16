@@ -40,7 +40,7 @@ where
 import qualified Data.ByteString as B
 import Data.Text.Encoding (encodeUtf8)
 import Database.PostgreSQL.Simple.Internal
-import qualified HPgsql
+import qualified Hpgsql
 import System.Posix.Types (CPid)
 
 data Notification = Notification
@@ -57,15 +57,15 @@ data Notification = Notification
 --   being used for other purposes,   note however that PostgreSQL does not
 --   deliver notifications while a connection is inside a transaction.
 getNotification :: Connection -> IO Notification
-getNotification conn = fromHpgsqlNotification <$> HPgsql.getNotification (hpgConn conn)
+getNotification conn = fromHpgsqlNotification <$> Hpgsql.getNotification (hpgConn conn)
 
 -- | Non-blocking variant of 'getNotification'.   Returns a single notification,
 -- if available.   If no notifications are available,  returns 'Nothing'.
 getNotificationNonBlocking :: Connection -> IO (Maybe Notification)
-getNotificationNonBlocking conn = fmap fromHpgsqlNotification <$> HPgsql.getNotificationNonBlocking (hpgConn conn)
+getNotificationNonBlocking conn = fmap fromHpgsqlNotification <$> Hpgsql.getNotificationNonBlocking (hpgConn conn)
 
-fromHpgsqlNotification :: HPgsql.NotificationResponse -> Notification
-fromHpgsqlNotification HPgsql.NotificationResponse {..} =
+fromHpgsqlNotification :: Hpgsql.NotificationResponse -> Notification
+fromHpgsqlNotification Hpgsql.NotificationResponse {..} =
   Notification
     { notificationPid = fromIntegral notifierPid,
       notificationChannel = encodeUtf8 channelName,
@@ -80,4 +80,4 @@ fromHpgsqlNotification HPgsql.NotificationResponse {..} =
 -- process). Note that the PID belongs to a process executing on the
 -- database server host, not the local host!
 getBackendPID :: Connection -> IO CPid
-getBackendPID conn = pure $ fromIntegral $ HPgsql.getBackendPid (hpgConn conn)
+getBackendPID conn = pure $ fromIntegral $ Hpgsql.getBackendPid (hpgConn conn)

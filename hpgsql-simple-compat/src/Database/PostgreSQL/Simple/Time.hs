@@ -242,4 +242,4 @@ module Database.PostgreSQL.Simple.Time
 where
 
 import Database.PostgreSQL.Simple.Time.Implementation
-import HPgsql.Time (Unbounded (..))
+import Hpgsql.Time (Unbounded (..))

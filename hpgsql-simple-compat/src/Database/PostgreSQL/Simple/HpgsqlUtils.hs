@@ -8,13 +8,13 @@ import qualified Data.ByteString.Lazy as LBS
 import Database.PostgreSQL.Simple.ToField (Action (..))
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
-import qualified HPgsql
-import HPgsql.Builder (BinaryField)
-import qualified HPgsql.Query as HPgsql
-import HPgsql.TypeInfo (EncodingContext, Oid)
+import qualified Hpgsql
+import Hpgsql.Builder (BinaryField)
+import qualified Hpgsql.Query as Hpgsql
+import Hpgsql.TypeInfo (EncodingContext, Oid)
 
-toHpgsqlQuery :: (ToRow q) => Query -> q -> HPgsql.Query
-toHpgsqlQuery (Query qry) row = HPgsql.mkQueryInternal qry (toHpgsqlRowParams row)
+toHpgsqlQuery :: (ToRow q) => Query -> q -> Hpgsql.Query
+toHpgsqlQuery (Query qry) row = Hpgsql.mkQueryInternal qry (toHpgsqlRowParams row)
 
 toHpgsqlRowParams :: (ToRow q) => q -> [[Either ByteString (EncodingContext -> (Maybe Oid, BinaryField))]]
 toHpgsqlRowParams = concatMap actionToPgParams . toRow

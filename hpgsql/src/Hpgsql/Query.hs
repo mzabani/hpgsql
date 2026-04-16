@@ -1,7 +1,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module HPgsql.Query
+module Hpgsql.Query
   ( Query (..), -- We probably shouldn't export this ctor?
     SingleQuery (..), -- Nor this one
     sql,
@@ -26,11 +26,11 @@ import Data.String (IsString (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import HPgsql.Base (maximumOnOrDef, minimumOnOrDef)
-import HPgsql.Builder (BinaryField)
-import HPgsql.Encoding (ToPgField (..), ToPgRow (..))
-import HPgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), SqlStatement (..), parseSql, sqlStatementText)
-import HPgsql.TypeInfo (EncodingContext, Oid)
+import Hpgsql.Base (maximumOnOrDef, minimumOnOrDef)
+import Hpgsql.Builder (BinaryField)
+import Hpgsql.Encoding (ToPgField (..), ToPgRow (..))
+import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), SqlStatement (..), parseSql, sqlStatementText)
+import Hpgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
@@ -153,7 +153,7 @@ breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams =
       FragmentOfStaticSql t -> t
     go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, BinaryField)] -> [SingleQuery]
     go [] [] = []
-    go [] _ = error $ "HPgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
+    go [] _ = error $ "Hpgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
     go frags params =
       let (stmtFrags, nextFrags) = case List.break isLastFragmentOfAStatement frags of
             (firstStmts, []) -> (firstStmts, [])
@@ -188,9 +188,9 @@ mkQueryInternal queryTemplate allParams =
           ( \(!maxArgSoFar, !maxRealArgSoFar) sqlPiece -> case sqlPiece of
               StaticSql t -> ((maxArgSoFar, maxRealArgSoFar), [FragmentOfStaticSql $ encodeUtf8 t])
               DollarNumberedArg _ ->
-                error $ "Bug in HPgsql: parsed a DollarNumberedArg in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
+                error $ "Bug in Hpgsql: parsed a DollarNumberedArg in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
               QuasiQuoterExpression _ _ ->
-                error $ "Bug in HPgsql: parsed a QuasiQuoterExpression in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
+                error $ "Bug in Hpgsql: parsed a QuasiQuoterExpression in mkQueryInternal. Query: " ++ show (queryTemplate, mconcat $ map sqlStatementText $ NE.toList statements)
               QuestionMarkArg ->
                 let thisParamNum = maxArgSoFar + 1
                  in case Map.lookup thisParamNum paramsByIdx of
@@ -216,9 +216,9 @@ sql :: QuasiQuoter
 sql =
   QuasiQuoter
     { quoteExp = liftQueries . parseSql AcceptQuasiQuoterExpressions . Text.pack,
-      quotePat = error "HPgsql's sql quasiquoter does not implement quotePat",
-      quoteType = error "HPgsql's sql quasiquoter does not implement quoteType",
-      quoteDec = error "HPgsql's sql quasiquoter does not implement quoteDec"
+      quotePat = error "Hpgsql's sql quasiquoter does not implement quotePat",
+      quoteType = error "Hpgsql's sql quasiquoter does not implement quoteType",
+      quoteDec = error "Hpgsql's sql quasiquoter does not implement quoteDec"
     }
 
 liftQueries :: NonEmpty SqlStatement -> Q Exp
@@ -278,7 +278,7 @@ buildQueryFragsAndVars (InterpolatedHaskellExpr var : rest) n =
   let (restFrags, restVars) = buildQueryFragsAndVars rest (n + 1)
    in ([|QueryArgumentPlaceHolder $(litE (integerL (fromIntegral n)))|] : restFrags, var : restVars)
 buildQueryFragsAndVars (EmbeddedQueryExpr _ : _) _ =
-  error "Bug in HPgsql: EmbeddedQueryExpr should not appear in static path"
+  error "Bug in Hpgsql: EmbeddedQueryExpr should not appear in static path"
 
 -- | Parts used to build a SingleQuery at runtime when ^{} embedded queries are present.
 data QueryBuildPartQQ

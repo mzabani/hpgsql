@@ -25,22 +25,22 @@ tested-with:
 
 library
   exposed-modules:
-      HPgsql
-      HPgsql.Builder
-      HPgsql.Connection
-      HPgsql.Encoding
-      HPgsql.Types
-      HPgsql.Parsing
-      HPgsql.Query
-      HPgsql.Time
-      HPgsql.TypeInfo
+      Hpgsql
+      Hpgsql.Builder
+      Hpgsql.Connection
+      Hpgsql.Encoding
+      Hpgsql.Types
+      Hpgsql.Parsing
+      Hpgsql.Query
+      Hpgsql.Time
+      Hpgsql.TypeInfo
   other-modules:
-      HPgsql.Base
-      HPgsql.InternalTypes
-      HPgsql.Locking
-      HPgsql.Msgs
-      HPgsql.Networking
-      HPgsql.SimpleParser
+      Hpgsql.Base
+      Hpgsql.InternalTypes
+      Hpgsql.Locking
+      Hpgsql.Msgs
+      Hpgsql.Networking
+      Hpgsql.SimpleParser
       Paths_hpgsql
   autogen-modules:
       Paths_hpgsql
