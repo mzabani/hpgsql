@@ -1,9 +1,9 @@
 module Hpgsql.Transaction (IsolationLevel (..), ReadWriteMode (..), begin, commit, rollback, withTransaction, withTransactionMode, beginMode) where
 
 import Control.Exception.Safe (Exception (..), bracketWithError)
-import Data.Maybe (mapMaybe)
 import Hpgsql (execute_)
 import Hpgsql.InternalTypes (HPgConnection, IrrecoverableHpgsqlError)
+import Hpgsql.Query (Query)
 
 -- The types and constructors here have matching names to postgresql-simple where
 -- I thought sameness would be convenient. The implementation is of course our
@@ -40,6 +40,7 @@ beginMode conn il rw = do
         ReadUncommitted -> Just "ISOLATION LEVEL READ UNCOMMITTED"
   execute_ conn $ "BEGIN " <> withComma readWrite isolLvl
   where
+    withComma :: Maybe Query -> Maybe Query -> Query
     withComma mv1 mv2 = case (mv1, mv2) of
       (Just v1, Just v2) -> v1 <> "," <> v2
       (Just v1, Nothing) -> v1

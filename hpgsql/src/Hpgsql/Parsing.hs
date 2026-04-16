@@ -54,7 +54,7 @@ data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs
 
 -- | Parses one or more SQL statements (separated by semi-colons).
 parseSql :: ParsingOpts -> Text -> NonEmpty SqlStatement
-parseSql popts (Text.strip -> str) = case Parsec.parseOnly (many' (sqlStatementParser popts) <* endOfInput) str of
+parseSql popts str = case Parsec.parseOnly (many' (sqlStatementParser popts) <* endOfInput) str of
   Right mStatements ->
     case NE.nonEmpty mStatements of
       Just stmts -> fmap SqlStatement stmts

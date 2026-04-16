@@ -29,13 +29,13 @@ import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.IO as Text
 import Debug.Trace
 import GHC.Num (Natural)
+import Hedgehog (Gen, annotateShow, forAll, (===))
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Range
 import Hpgsql (Only (..))
 import Hpgsql.Encoding (ToPgRow (..))
 import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), SqlStatement (..), flattenBlocksInPieces, parseSql, sqlStatementText)
 import Hpgsql.Query (Query (..), SingleQuery (..), breakQueryIntoStatements, mkQuery, sql)
-import Hedgehog (Gen, annotateShow, forAll, (===))
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
 import Streaming (Of (..), Stream)
 import qualified Streaming.Internal as S
 import qualified Streaming.Prelude as S
@@ -330,9 +330,8 @@ spec = do
         === fmap flattenBlocksInPieces origPieces
     it "Statements concatenation matches original" $ hedgehog $ do
       SyntacticallyValidRandomSql {..} <- forAll genSyntacticallyValidRandomSql
-      liftIO $ do
-        let stmts = parseSql AcceptOnlyDollarNumberedArgs unSyntRandomSql
-        mconcat (map sqlStatementText (NE.toList stmts)) `shouldBe` Text.strip unSyntRandomSql
+      let stmts = parseSql AcceptOnlyDollarNumberedArgs unSyntRandomSql
+      mconcat (map sqlStatementText (NE.toList stmts)) === unSyntRandomSql
 
     it "parseSql AcceptQuasiQuoterExpressions preserves quasiquoter expressions with parentheses" $ do
       let input = "SELECT ^{escapeIdentifier (fromQuery name)}, #{someFunc (arg1) arg2}"
@@ -364,10 +363,9 @@ spec = do
 
     it "Sql Migration Parser never fails, even for random text" $ hedgehog $ do
       RandomSql {unRandomSql} <- forAll genRandomSql
-      liftIO $ do
-        let stmts = parseSql AcceptOnlyDollarNumberedArgs unRandomSql
-        let t = mconcat $ map sqlStatementText $ NE.toList stmts
-        t `shouldBe` Text.strip unRandomSql
+      let stmts = parseSql AcceptOnlyDollarNumberedArgs unRandomSql
+      let t = mconcat $ map sqlStatementText $ NE.toList stmts
+      t === unRandomSql
 
 getUniqueNE :: (HasCallStack) => Query -> SingleQuery
 getUniqueNE = NE.head . breakQueryIntoStatements
