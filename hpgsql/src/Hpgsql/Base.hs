@@ -36,6 +36,16 @@ lastAndInitNE (x :| xs) =
       let (others, l) = lastAndInitNE neXs
        in (x : others, l)
 
+-- | Only returns a Just for list with 2 or more elements,
+-- and no element from the input is missing in the returned
+-- value, and no element is repeated.
+lastTwoAndInit :: [a] -> ([a], Maybe (a, a))
+lastTwoAndInit xs = case lastAndInit xs of
+  (l, Nothing) -> (l, Nothing)
+  (l, Just lst) -> case lastAndInit l of
+    (_, Nothing) -> (l ++ [lst], Nothing)
+    (l', Just secLst) -> (l', Just (secLst, lst))
+
 whenNonEmpty :: [a] -> (NonEmpty a -> IO b) -> IO ()
 whenNonEmpty [] _ = pure ()
 whenNonEmpty (x : xs) f = void $ f (x :| xs)

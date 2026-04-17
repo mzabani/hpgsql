@@ -3,12 +3,12 @@
 -- This module contains parsers that are helpful to separate SQL statements from each other by finding query boundaries: semi-colons, but not when inside a string or a parenthesised expression, for example.
 module Hpgsql.Parsing
   ( parseSql,
-    flattenBlocksInPieces,
-    sqlStatementText,
-    SqlStatement (..),
     BlockOrNotBlock (..),
     ParsingOpts (..),
     QQExprKind (..),
+    blockListText,
+    blockText,
+    flattenBlocks,
   )
 where
 
@@ -34,16 +34,12 @@ import qualified Data.Attoparsec.Text as Parsec
 import qualified Data.Char as Char
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Language.Haskell.Meta.Parse (parseExp)
 import Prelude hiding (takeWhile)
 
-newtype SqlStatement = SqlStatement {statementBlocks :: [BlockOrNotBlock]}
-  deriving stock (Show, Eq)
-
-data BlockOrNotBlock = StaticSql !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !QQExprKind !Text
+data BlockOrNotBlock = StaticSql !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !QQExprKind !Text | SemiColon | CommentsOrWhitespace !Text
   deriving stock (Eq, Show)
 
 data QQExprKind = QQInterpolation | QQEmbeddedQuery
@@ -53,46 +49,36 @@ data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs
   deriving stock (Show)
 
 -- | Parses one or more SQL statements (separated by semi-colons).
-parseSql :: ParsingOpts -> Text -> NonEmpty SqlStatement
-parseSql popts str = case Parsec.parseOnly (many' (sqlStatementParser popts) <* endOfInput) str of
-  Right mStatements ->
-    case NE.nonEmpty mStatements of
-      Just stmts -> fmap SqlStatement stmts
-      Nothing -> if str == "" then NE.singleton $ SqlStatement [] else error "Bug in hpgsql when parsing SQL. No statements found."
+parseSql :: ParsingOpts -> Text -> [BlockOrNotBlock]
+parseSql _ "" = []
+parseSql popts str = case Parsec.parseOnly (many' (sqlStatementParser popts True) <* endOfInput) str of
+  Right mStatements -> mconcat mStatements
   Left err -> error $ "Bug in hpgsql when parsing SQL: " ++ err
 
-sqlStatementText :: SqlStatement -> Text
-sqlStatementText (SqlStatement ls) = Text.concat $ map blockText ls
-
-sqlStatementParser :: ParsingOpts -> Parser [BlockOrNotBlock]
-sqlStatementParser popts = do
+sqlStatementParser :: ParsingOpts -> Bool -> Parser [BlockOrNotBlock]
+sqlStatementParser popts isBeginningOfStmt = do
   t1 <-
-    takeWhile
-      (\c -> not (isPossibleBlockStartingChar popts c) && c /= ';')
+    (if isBeginningOfStmt then commentOrSpaceParser else fail "No whitespace parsing in the middle")
+      <|> (\t -> [StaticSql t | not (Text.null t)])
+        <$> takeWhile
+          (\c -> not (isPossibleBlockStartingChar popts c) && c /= ';')
   mc <- peekChar
   case mc of
-    Nothing -> if t1 == "" then fail "Cannot parse empty string as SQL statement" else pure [StaticSql t1]
+    Nothing -> if null t1 then fail "Nothing to parse" else pure t1
     Just ';' -> do
       void $ char ';'
-      -- We take any comments followed by EOF here
-      cws <- optional $ commentOrSpaceParser True <* endOfInput
-      pure $ [StaticSql t1, StaticSql ";"] ++ fromMaybe [] cws
+      pure $ t1 ++ [SemiColon]
     Just _ -> do
       t2 <- many1 (blockParser popts) <|> (\pt -> [[StaticSql pt]]) <$> Parsec.take 1
       -- After reading blocks or just a char, we still need to find a semi-colon
       -- or EOF to get a statement from start to finish!
-      t3 <- sqlStatementParser popts <|> ([] <$ endOfInput)
-      pure $ StaticSql t1 : mconcat t2 <> t3
-
--- | Parses 0 or more consecutive white-space or comments
-commentOrSpaceParser :: Bool -> Parser [BlockOrNotBlock]
-commentOrSpaceParser atLeastOne =
-  if atLeastOne
-    then many1 (commentParser <|> StaticSql <$> takeWhile1 Char.isSpace)
-    else many' (commentParser <|> StaticSql <$> takeWhile1 Char.isSpace)
+      t3 <- sqlStatementParser popts False <|> ([] <$ endOfInput)
+      pure $ t1 ++ mconcat t2 <> t3
   where
-    commentParser :: Parser BlockOrNotBlock
-    commentParser = doubleDashComment <|> cStyleComment
+    -- \| Parses 1 or more consecutive white-space or comments
+    commentOrSpaceParser :: Parser [BlockOrNotBlock]
+    commentOrSpaceParser =
+      many1 (CommentsOrWhitespace <$> takeWhile1 Char.isSpace <|> doubleDashComment <|> cStyleComment)
 
 eol :: Parser Text
 eol = string "\n" <|> string "\r\n"
@@ -100,13 +86,13 @@ eol = string "\n" <|> string "\r\n"
 blockText :: BlockOrNotBlock -> Text
 blockText = \case
   StaticSql t -> t
+  CommentsOrWhitespace t -> t
   QuestionMarkArg -> "?"
   DollarNumberedArg n -> "$" <> Text.pack (show n)
   QuasiQuoterExpression QQInterpolation t -> "#{" <> t <> "}"
   QuasiQuoterExpression QQEmbeddedQuery t -> "^{" <> t <> "}"
+  SemiColon -> ";"
 
--- TODO: Doesn't attoparsec have something that returns all of the parsed text when applying
--- a Parser? We should probably use that instead of this.
 blockListText :: [BlockOrNotBlock] -> Text
 blockListText = Text.concat . map blockText
 
@@ -216,14 +202,14 @@ dollarStringParser = fmap StaticSql $ do
         Just e -> pure $ t <> e
 
 doubleDashComment :: Parser BlockOrNotBlock
-doubleDashComment = fmap StaticSql $ do
+doubleDashComment = fmap CommentsOrWhitespace $ do
   begin <- string "--"
   rest <- Parsec.takeWhile (\c -> c /= '\n' && c /= '\r')
   end <- eol <|> "" <$ endOfInput
   pure $ begin <> rest <> end
 
 cStyleComment :: Parser BlockOrNotBlock
-cStyleComment = fmap StaticSql $ do
+cStyleComment = fmap CommentsOrWhitespace $ do
   openComment <- string "/*"
   rest <-
     Parsec.scan
@@ -339,15 +325,13 @@ flattenBlocks =
   map
     ( \bs@(firstEl :| _) -> case firstEl of
         StaticSql _ -> StaticSql $ blockListText $ NE.toList bs
+        CommentsOrWhitespace _ -> CommentsOrWhitespace $ blockListText $ NE.toList bs
         x -> x
     )
     . NE.groupBy
       ( \a b -> case (a, b) of
           (StaticSql _, StaticSql _) -> True
+          (CommentsOrWhitespace _, CommentsOrWhitespace _) -> True
           _ -> False
       )
     . filter (\b -> blockText b /= "")
-
-flattenBlocksInPieces :: SqlStatement -> SqlStatement
-flattenBlocksInPieces (SqlStatement blks) =
-  SqlStatement $ flattenBlocks blks

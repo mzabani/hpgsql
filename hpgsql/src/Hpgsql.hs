@@ -1363,8 +1363,9 @@ _globalDebugLock :: MVar Bool
 _globalDebugLock = unsafePerformIO $ newMVar True
 
 debugPrint :: String -> IO ()
--- debugPrint _ = pure ()
-debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
+debugPrint _ = pure ()
+
+-- debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
 
 {-# INLINE timeDebugNonBlockingOperation #-}
 timeDebugNonBlockingOperation :: String -> IO a -> IO a

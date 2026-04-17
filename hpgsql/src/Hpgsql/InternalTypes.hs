@@ -58,7 +58,7 @@ import Data.Word (Word16)
 
 #endif
 import qualified Control.Concurrent.STM as STM
-import Hpgsql.Query (Query, SingleQuery (..))
+import Hpgsql.Query (SingleQuery (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
 import System.Mem.Weak (Weak)
