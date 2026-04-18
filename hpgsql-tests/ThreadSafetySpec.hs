@@ -13,6 +13,7 @@ import Data.Int (Int32)
 import Data.Text (Text)
 import DbUtils
   ( aroundConn,
+    irrecoverableErrorMustContain,
     irrecoverableErrorWithMsg,
     pgErrorMustContain,
     testConnInfo,
@@ -41,6 +42,9 @@ spec = do
         it
           "Query interruption is semantics-preserving inside explicit transaction"
           interruptingQueryInsideTransactionPreservesSemantics
+        it
+          "Interrupting COPY statement is sadly not semantics preserving inside transaction"
+          interruptingCopyInsideTransactionDoesNotPreserveSemantics
         it
           "Send queries concurrently"
           sendQueriesConcurrently
@@ -147,11 +151,12 @@ sendQueryAfterBinaryCopyKilled useTimeout conn = do
         S.yield ((5, "Dracula") :: (Int32, Text))
         S.yield (6, "The Grinch")
         liftIO $ threadDelay 10_000_000
-  didNotFinish <- getQueryKilledBeforeItsFinished useTimeout 300_000
-    $ copyFromS
-      conn
-      [sql|COPY employee FROM STDIN WITH (FORMAT BINARY);|]
-      slowRows
+  didNotFinish <-
+    getQueryKilledBeforeItsFinished useTimeout 300_000 $
+      copyFromS
+        conn
+        [sql|COPY employee FROM STDIN WITH (FORMAT BINARY);|]
+        slowRows
   didNotFinish `shouldBe` Nothing
   queryWith (rowParser @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
   execute_ conn [sql|DROP TABLE employee|]
@@ -177,10 +182,10 @@ assumptionsAboutThreadIdBehaviour _conn = do
 
 cancelAnyRunningStatementIsIdempotent :: HPgConnection -> IO ()
 cancelAnyRunningStatementIsIdempotent conn = do
-  cancelAnyRunningStatement conn
-  cancelAnyRunningStatement conn
-  cancelAnyRunningStatement conn
-  cancelAnyRunningStatement conn
+  cancelAnyRunningStatement conn False
+  cancelAnyRunningStatement conn False
+  cancelAnyRunningStatement conn False
+  cancelAnyRunningStatement conn False
 
 sendQueriesConcurrently :: HPgConnection -> IO ()
 sendQueriesConcurrently conn = forConcurrently_ [1 .. 10] $ const $ do
@@ -203,7 +208,7 @@ cancelStreamingQueryThenTryToConsumeResults conn = do
   firstTwoElems `shouldBe` [Only 1, Only 2]
   thirdAndFourthElems `shouldBe` [Only 3, Only 4]
   fifthAndSixthElems `shouldBe` [Only 5, Only 6]
-  cancelAnyRunningStatement conn
+  cancelAnyRunningStatement conn False
   -- Consuming the stream now will do what? For now it:
   -- 1. Might not throw if the query finished running in the server. Change 100000000 to 5 to see this test fail.
   -- 2. Might throw with "canceling statement due to user request", like in this test.
@@ -227,7 +232,7 @@ queryCancellationInTheFuture = do
   forM_ [1 :: Int .. 1_000] $
     const $
       withConnection hpgsqlConnInfo 10 $ \conn -> do
-        cancelAnyRunningStatement conn
+        cancelAnyRunningStatement conn False
         execute conn "select true" `shouldReturn` 1
 
 -- | Massively exercise sending an asynchronous exception to a query
@@ -252,8 +257,13 @@ exerciseInterruptionSafety conn = do
 -- query interruption.
 interruptingQueryInsideTransactionPreservesSemantics :: HPgConnection -> IO ()
 interruptingQueryInsideTransactionPreservesSemantics conn = withRollback conn $ do
-  forM_ [1 .. 2] $ const $ do
-    withAsync (execute conn [sql|select pg_sleep(0.5)|]) $ \queryAsync -> do
+  -- The long-running action the main thread will start and then cancel
+  -- mid-flight. Both branches take ~0.5s to complete on their own, so the
+  -- 250ms threadDelay below is guaranteed to land while the action is
+  -- still in progress.
+  let longRunningAction = execute_ conn [sql|select pg_sleep(0.5)|]
+  forM_ [1 .. 2 :: Int] $ const $ do
+    withAsync longRunningAction $ \queryAsync -> do
       threadDelay 250_000
       cancel queryAsync
     -- The timeouts above pretty much ensure the query started and was cancelled
@@ -261,6 +271,37 @@ interruptingQueryInsideTransactionPreservesSemantics conn = withRollback conn $ 
     -- throw an error with "current transaction is aborted, commands ignored .."
     transactionStatus conn `shouldReturn` TransActive
     execute conn "SELECT 1" `shouldReturn` 1
+
+-- | When a COPY statement is interrupted inside a transaction, cancelling it
+-- would invalidate the entire transaction (which is not semantics-preserving),
+-- and not cancelling it leaves us in a state where it's not obvious how to continue,
+-- since we can't drain a COPY statement like a normal query, and we can't "finalize"
+-- it because it's possible not all rows have been inserted before the interruption.
+-- With nothing reasonable to do, we expect hpgsql to throw an exception explaining
+-- this as best as possible.
+interruptingCopyInsideTransactionDoesNotPreserveSemantics :: HPgConnection -> IO ()
+interruptingCopyInsideTransactionDoesNotPreserveSemantics conn = do
+  -- The last "execute" inside `go` will throw an IrrecoverableError
+  withRollback conn go `shouldThrow` irrecoverableErrorWithMsg "Hpgsql cannot resume execution from an interrupted COPY statement inside a transaction, because cancelling COPY would leave the transaction in an error state and completing it could partially complete it. There is no semantics preserving action possible."
+  where
+    go = do
+      execute_ conn [sql|CREATE TABLE employee (employee_id SERIAL PRIMARY KEY, employee_name TEXT NOT NULL);|]
+      -- The long-running action the main thread will start and then cancel
+      -- mid-flight. Both branches take ~0.5s to complete on their own, so the
+      -- 250ms threadDelay below is guaranteed to land while the action is
+      -- still in progress.
+      let longRunningAction =
+            let slowRows = do
+                  S.yield (1 :: Int32, "Dracula" :: Text)
+                  liftIO $ threadDelay 500_000
+             in void $ copyFromS conn [sql|COPY employee FROM STDIN WITH (FORMAT BINARY);|] slowRows
+      withAsync longRunningAction $ \queryAsync -> do
+        threadDelay 250_000
+        cancel queryAsync
+      -- The timeouts above pretty much ensure COPY started and was cancelled
+      -- during its execution.
+      transactionStatus conn `shouldReturn` TransActive
+      execute conn "SELECT 1" -- Will throw an irrecoverable error
 
 queryThatErrorsDueToBadFromPgFieldImplementation1 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = do
@@ -271,7 +312,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = d
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
-  when cancelQueryExplicitly $ cancelAnyRunningStatement conn
+  when cancelQueryExplicitly $ cancelAnyRunningStatement conn False
   execute conn "select true" `shouldReturn` 1
   queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
 
@@ -283,7 +324,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = d
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
-  when cancelQueryExplicitly $ cancelAnyRunningStatement conn
+  when cancelQueryExplicitly $ cancelAnyRunningStatement conn False
   -- modifyMVar_ _globalDebugLock $ const (pure True)
   -- putStrLn "AAAAAAAAAAAAA"
   execute conn "select true" `shouldReturn` 1

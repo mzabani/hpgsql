@@ -51,6 +51,7 @@ module Hpgsql
     copyFromL,
     copyFromS,
     withCopy_,
+    pipelineCmd_,
   )
 where
 
@@ -76,6 +77,7 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
+import Debug.Trace
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
@@ -486,7 +488,7 @@ sendCancellationRequest conn = do
           _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
   case copyState of
     Just StillCopying ->
-      atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail "COPY statement automatically cancelled by Hpgsql because it was interrupted", SomeMessage Sync], markCopyFailSent)
+      atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail "COPY statement cancelled by Hpgsql", SomeMessage Sync], markCopyFailSent)
     Just CopyDoneAndSyncSent ->
       pure
         () -- Already finished, nothing to cancel
@@ -822,8 +824,8 @@ queryStreaming = queryWithStreaming rowParser
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
 -- if it can't do that. Then runs the continuation.
-sendPipeline :: HPgConnection -> NonEmpty (ByteString, QueryProtocol) -> [SomeMessage] -> (NonEmpty QueryId -> IO a) -> IO a
-sendPipeline conn queriesBeingSent allMsgs continuation = do
+sendPipeline :: HPgConnection -> NonEmpty (ByteString, QueryProtocol) -> [SomeMessage] -> STM () -> (NonEmpty QueryId -> IO a) -> IO a
+sendPipeline conn queriesBeingSent allMsgs onMsgsSentTxn continuation = do
   thisWeakThreadId <- getMyWeakThreadId
   qryIds <- waitUntilPipelineIsReadyForNewQuery conn (getUniqueQueryStatesForNewPipeline queriesBeingSent) $ \(nextId, lastId) -> do
     -- If this thread is interrupted now, it is ok: only `totalQueriesSent` was bumped, but `currentPipeline`
@@ -840,6 +842,7 @@ sendPipeline conn queriesBeingSent allMsgs continuation = do
               st <- STM.readTVar (internalConnectionState conn)
               (_, txnStatusRightBeforeSendingPipeline) <- fullTransactionStatus (internalConnectionState conn)
               STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = NE.toList newPipeline, transactionStatusBeforeCurrentPipeline = txnStatusRightBeforeSendingPipeline}
+              onMsgsSentTxn -- Caller-supplied
           )
         debugPrint $ "+++ Sent QueryIds " ++ show [nextId .. lastId]
         pure $ fmap queryIdentifier newPipeline
@@ -867,7 +870,54 @@ sendPipeline conn queriesBeingSent allMsgs continuation = do
 waitUntilPipelineIsReadyForNewQuery :: forall a b. HPgConnection -> STM a -> (a -> IO b) -> IO b
 waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
   thisWeakThreadId <- getMyWeakThreadId
-  cancelAnyRunningStatement conn
+  queriesToDrain <- acquireOwnershipOfOrphanedQueries conn
+  withControlMsgsLock
+    conn
+    ( \sttv -> do
+        st <- STM.readTVar sttv
+        (txnStatusBeforePipeline, _) <- fullTransactionStatus sttv
+        pure
+          ( txnStatusBeforePipeline,
+            st.mustIssueRollbackBeforeNextCommand,
+            case st.currentPipeline of
+              [QueryState {queryProtocol = CopyQuery _, queryText}] -> Just queryText
+              _ -> Nothing
+          )
+    )
+    (const $ pure ())
+    $ \(txnStatusBeforePipeline, mustIssueRollback, isCopyCommand) -> do
+      whenJust isCopyCommand $ \copyCmd ->
+        when (not (null queriesToDrain) && txnStatusBeforePipeline == TransInTrans) $ throwIrrecoverableErrorWithStatement copyCmd "Hpgsql cannot resume execution from an interrupted COPY statement inside a transaction, because cancelling COPY would leave the transaction in an error state and completing it could partially complete it. There is no semantics preserving action possible."
+      -- We don't want to send cancellation requests if we're in an explicit transaction
+      -- because that would put the transaction in TransInError, which is not semantics-preserving
+      -- (so in that case we let statements complete and just drain them).
+      -- Unless of course the transaction was interrupted by an asynchronous exception, in
+      -- which case it's fine to cancel because we're about to ROLLBACK anyway.
+      let onlyDrainNotCancel = txnStatusBeforePipeline == TransInTrans && not mustIssueRollback
+      cancelAnyRunningStatement conn onlyDrainNotCancel
+      -- After draining, we ROLLBACK if we must. A failed command still leaves
+      -- the need for "ROLLBACK", after all.
+      when (mustIssueRollback && not (null queriesToDrain)) $ do
+        debugPrint "Executing ROLLBACK now that the pipeline is clear."
+        -- The command below would go into an infinite loop if not for the
+        -- `not (null queriesToDrain)` check a few lines up, but that's a big hack:
+        -- We couple updating internal connection state to sending the "ROLLBACK"
+        -- to the backend, but if "ROLLBACK" is interrupted here, it's still not
+        -- super clear what might happen. Some thoughts:
+        -- - If interruption happens before ROLLBACK is sent, the state will still have
+        --   mustIssueRollbackBeforeNextCommand=True. But without queries to drain,
+        --   this code will never run => Problem! TODO how do we fix this?
+        -- - If ROLLBACK gets sent, internal state will be updated with
+        --   mustIssueRollbackBeforeNextCommand=False. The next query will try to
+        --   drain it.
+        --    - The next query won't try to cancel it because of txnStatusBeforePipeline,
+        --      being TransInStrans, so it will only drain the ROLLBACK, which is great.
+        join $ runPipelineInternal conn (pipelineCmd_ "ROLLBACK") $ do
+          st <- STM.readTVar conn.internalConnectionState
+          STM.writeTVar conn.internalConnectionState st {mustIssueRollbackBeforeNextCommand = False}
+
+  -- Different threads might be racing to send their pipelines,
+  -- so we choose the winner with a mutex
   retOrRepeat <- withControlMsgsLock
     conn
     ( \sttv -> do
@@ -915,18 +965,23 @@ waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
 -- The cancellation request can also arrive after the active query finishes.
 --
 -- Modulo the race condition mentioned above, the database connection should be in a healthy
--- and usable state after this function returns.
-cancelAnyRunningStatement :: HPgConnection -> IO ()
-cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
+-- and usable state after this function returns, although keep in mind that cancelling a
+-- query inside a transaction is equivalent to that query throwing an error, so this
+-- can put transactions in an error state.
+cancelAnyRunningStatement ::
+  HPgConnection ->
+  -- | If True, this won't send cancellation requests to postgres and will just drain orphaned/interrupted queries until they complete, if any
+  Bool ->
+  IO ()
+cancelAnyRunningStatement conn@HPgConnection {connOpts} onlyDrainNotCancel = do
   -- Drain results of orphaned queries if necessary
-  queriesToDrain <- acquireOwnershipOfOrphanedQueries
+  queriesToDrain <- acquireOwnershipOfOrphanedQueries conn
   -- Acquire control-msg lock when draining to avoid a race condition where
   -- soon after draining the last query a different thread runs a new query.
   -- We want the supplied `f` function to run on a clean state/pipeline.
   unless (null queriesToDrain) $ do
-    (txnStatusBeforePipeline, _) <- STM.atomically $ fullTransactionStatus conn.internalConnectionState
-    debugPrint $ "Going to take control-msg lock to drain " ++ show queriesToDrain ++ ". txnStatusBeforePipeline is " ++ show txnStatusBeforePipeline
-    withControlMsgsLock conn (fmap (.mustIssueRollbackBeforeNextCommand) . STM.readTVar) (const $ pure ()) $ \mustIssueRollback -> do
+    debugPrint $ "Going to take control-msg lock to drain " ++ show queriesToDrain
+    withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ \() -> do
       -- It is possible not just in theory for the cancellation request to
       -- arrive/be processed by postgres _before_ the previous statement was
       -- event sent, since cancellation requests go through a different
@@ -939,13 +994,8 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
       -- so this is not merely hypothetical.
       -- What we do here is fire a cancellation request every 0.5 seconds to cover
       -- for that.
-      debugPrint $ "Cancelling active statement to drain. mustIssueRollback=" ++ show mustIssueRollback
-      -- We don't want to send cancellation requests if we're in an explicit transaction
-      -- because that would put the transaction in TransInError, which is not semantics-preserving.
-      -- Unless of course the transaction was interrupted by an asynchronous exception, in
-      -- which case it's fine to cancel because we're about to ROLLBACK anyway.
-      let canSendCancel = txnStatusBeforePipeline /= TransInTrans || mustIssueRollback
-      when canSendCancel $ sendCancellationRequest conn
+      debugPrint "Cancelling active pipeline to drain."
+      unless onlyDrainNotCancel $ sendCancellationRequest conn
       -- putStrLn $ "Draining " ++ show queriesToDrain
       -- debugPrint $ "Draining " ++ show queriesToDrain
       let drainUntilError [] = pure ()
@@ -964,50 +1014,42 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} = do
               Just () -> pure ()
               Nothing -> do
                 debugPrint $ "Sending another cancellation request as orphaned pipeline still not completely drained: " ++ show queriesToDrain
-                when canSendCancel $ sendCancellationRequest conn
-                leftToDrain <- acquireOwnershipOfOrphanedQueries
+                unless onlyDrainNotCancel $ sendCancellationRequest conn
+                leftToDrain <- acquireOwnershipOfOrphanedQueries conn
                 alternateDrainingWithCancelReqs leftToDrain
       alternateDrainingWithCancelReqs queriesToDrain
 
-      -- After draining, we ROLLBACK if we must. A failed command still leaves
-      -- the need for "ROLLBACK", after all.
-      when mustIssueRollback $ debugPrint "Executing ROLLBACK after draining finished."
-      mask $ \restore -> do
-        restore $ when mustIssueRollback $ execute_ conn "ROLLBACK"
-        STM.atomically $ do
-          st <- STM.readTVar conn.internalConnectionState
-          STM.writeTVar conn.internalConnectionState st {mustIssueRollbackBeforeNextCommand = False}
+-- | Returns queries that have been taken possession of by this thread for cancellation and draining
+-- or an empty list if there's no need for that.
+acquireOwnershipOfOrphanedQueries :: HPgConnection -> IO [QueryId]
+acquireOwnershipOfOrphanedQueries conn = do
+  thisThreadId <- getMyWeakThreadId
+  debugPrint $ "+++ I am " ++ show thisThreadId ++ " and will look for orphaned queries to drain"
+  withControlMsgsLock
+    conn
+    STM.readTVar
+    (const $ pure ())
+    $ \st -> do
+      if isRight (connectionReadyForNewPipeline st)
+        then pure []
+        else do
+          -- TODO: We should either move the WeakThreadId owner into the full pipeline,
+          -- or change this to a `takeWhile` because the internal model allows different
+          -- queries to have different owners, even if in practice that shouldn't happen.
+          let activeQueries = currentPipeline st
+          mustTakeOwnership <- fmap (List.foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} ->
+            -- See Note [`timeout` uses the same ThreadId] for why having the same ThreadId _still_ means
+            -- we need to cancel and drain those queries
+            if queryOwner == thisThreadId then pure True else threadDoesNotExist queryOwner
+          if mustTakeOwnership
+            then do
+              STM.atomically $ STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = thisThreadId}) $ currentPipeline st}
+              let owner = map queryOwner activeQueries
+              debugPrint $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
+              -- putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
+              pure $ map queryIdentifier activeQueries
+            else pure []
   where
-    -- \| Returns queries that have been taken possession of by this thread for cancellation and draining
-    -- or an empty list if there's no need for that.
-    acquireOwnershipOfOrphanedQueries :: IO [QueryId]
-    acquireOwnershipOfOrphanedQueries = do
-      thisThreadId <- getMyWeakThreadId
-      debugPrint $ "+++ I am " ++ show thisThreadId ++ " and will look for orphaned queries to drain"
-      withControlMsgsLock
-        conn
-        STM.readTVar
-        (const $ pure ())
-        $ \st -> do
-          if isRight (connectionReadyForNewPipeline st)
-            then pure []
-            else do
-              -- TODO: We should either move the WeakThreadId owner into the full pipeline,
-              -- or change this to a `takeWhile` because the internal model allows different
-              -- queries to have different owners, even if in practice that shouldn't happen.
-              let activeQueries = currentPipeline st
-              mustTakeOwnership <- fmap (List.foldl' (||) False) $ forM activeQueries $ \QueryState {queryOwner} ->
-                -- See Note [`timeout` uses the same ThreadId] for why having the same ThreadId _still_ means
-                -- we need to cancel and drain those queries
-                if queryOwner == thisThreadId then pure True else threadDoesNotExist queryOwner
-              if mustTakeOwnership
-                then do
-                  STM.atomically $ STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = thisThreadId}) $ currentPipeline st}
-                  let owner = map queryOwner activeQueries
-                  debugPrint $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
-                  -- putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
-                  pure $ map queryIdentifier activeQueries
-                else pure []
     threadDoesNotExist :: WeakThreadId -> IO Bool
     threadDoesNotExist (WeakThreadId wtid _) =
       deRefWeak wtid >>= \case
@@ -1045,6 +1087,9 @@ pipelineLM rowparser q = (S.toList_ =<<) <$> pipelineSM rowparser q
 pipelineCmd :: Query -> Pipeline (IO Int64)
 pipelineCmd = pipelineCmdInternal . breakQueryIntoStatements
 
+pipelineCmd_ :: Query -> Pipeline (IO ())
+pipelineCmd_ = fmap void . pipelineCmdInternal . breakQueryIntoStatements
+
 pipelineCmdInternal :: NonEmpty SingleQuery -> Pipeline (IO Int64)
 pipelineCmdInternal qs =
   Pipeline
@@ -1062,7 +1107,15 @@ pipelineCmdInternal qs =
 -- results of every query in the supplied pipeline, and in order.
 -- Anything else is not officially supported by Hpgsql and may result in deadlocks or undefined behaviour.
 runPipeline :: HPgConnection -> Pipeline a -> IO a
-runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
+runPipeline conn pipeline = runPipelineInternal conn pipeline (pure ())
+
+-- | Sends either a Pipeline or a ROLLBACK coupled with an STM transaction.
+-- The former use case is obviously useful and used widely, the second is
+-- super specific and exists only to avoid asynchronous exceptions from interrupting
+-- the "ROLLBACK" sent when a `withTransaction` section is itself interrupted.
+-- Check the caller for more info.
+runPipelineInternal :: HPgConnection -> Pipeline a -> STM () -> IO a
+runPipelineInternal conn (Pipeline (NE.nonEmpty -> mQueries) run) onMsgsSentTxn =
   case mQueries of
     Nothing -> pure $ run conn []
     Just queries -> do
@@ -1082,6 +1135,7 @@ runPipeline conn (Pipeline (NE.nonEmpty -> mQueries) run) =
         conn
         (fmap (\(SingleQuery {queryString}, _) -> (queryString, ExtendedQuery)) queries)
         (concatMap toMessages queries ++ [SomeMessage Sync])
+        onMsgsSentTxn
         $ \qryIds -> pure $ run conn (NE.toList qryIds)
 
 data WhichRowParser a = ApplicativeRowParser !(RowParser a) | MonadicRowParser !(RowParserMonadic a)
@@ -1162,6 +1216,7 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
       SomeMessage Execute,
       SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
     ]
+    (pure ())
     $ \(qryId :| _) -> do
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
@@ -1222,30 +1277,7 @@ chunkBuildersBySize maxSize = go mempty
                 else go acc' rest
 
 copyStart :: HPgConnection -> Query -> IO ()
-copyStart conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries, SingleQuery {..})) = do
-  -- If the query contains not just COPY, but other statements before, we run
-  -- those. This is awkward, but what else should we do? Throw?
-  whenNonEmpty firstQueries $ \fqne -> runPipeline conn $ pipelineCmdInternal fqne
-  thisThreadId <- getMyWeakThreadId
-  encodingContext <- readMVar conn.encodingContext
-  let paramOidsAndValues = map ($ encodingContext) queryParams
-  sendPipeline
-    conn
-    ((queryString, CopyQuery StillCopying) :| [])
-    [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),
-      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0},
-      -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
-      SomeMessage Execute,
-      SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
-    ]
-    $ \(qryId :| _) -> do
-      -- TODO: If this part is interrupted, I doubt Hpgsql can resume execution
-      -- sanely! Maybe at least for now we could detect an async exception and
-      -- rethrow an irrecoverable error? It could still go unnoticed in a
-      -- dead thread, though.
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+copyStart conn copyQry = snd <$> withCopyInternal conn copyQry (\_qryId -> pure (0, ()))
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn $ CopyData (Builder.byteString t)

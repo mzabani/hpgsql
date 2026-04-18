@@ -69,10 +69,10 @@ maximumOnOrDef def xs f =
     [] -> def
     ls -> maximum ls
 
--- whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
--- whenJust m f = case m of
---   Nothing -> pure ()
---   Just v -> f v
+whenJust :: (Applicative m) => Maybe a -> (a -> m ()) -> m ()
+whenJust m f = case m of
+  Nothing -> pure ()
+  Just v -> f v
 
 -- whenM :: IO Bool -> IO a -> IO ()
 -- whenM cond f = do
