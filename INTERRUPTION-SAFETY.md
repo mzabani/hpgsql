@@ -17,8 +17,10 @@ withTransaction $
 ```
 
 With Hpgsql you shouldn't run into such issues, or at least we promise that:
-- Hpgsql is interruption-safe, so a query can be interrupted by asynchronous exceptions and you should still be able to run new queries on the same connection without any other side-effects. Naturally, it is up to you to determine which queries ran or not to completion, since they might have side-effects.
+- Hpgsql is interruption-safe, so a query can be interrupted by asynchronous exceptions and you should still be able to run new queries on the same connection without any other side-effects. Naturally, it is up to you to determine which queries ran or not to completion, since they might have side-effects*.
 - Hpgsql will throw either `PostgresError` or `IrrecoverableHpgsqlError`, and:
   - If you receive a `IrrecoverableHpgsqlError`, Hpgsql makes no promises about which statements ran to completion and what connection state is, and you should `closeForcefully` the connection without running any other queries. These errors should only be thrown for "obvious" developer mistakes from which usually there would be no way to proceed, anyway.
   - If you receive a `PostgresError` exception, postgres and Hpgsql's states are synced and you can issue new queries afterwards.
   - It is possible Hpgsql throws a different kind of exception. File a bug report if that happens, and if you know it came from Hpgsql, treat it like a `IrrecoverableHpgsqlError`.
+
+* There are edge cases with different behaviour, but hpgsql will document them or throw an `IrrecoverableHpgsqlError` with informative instructions.

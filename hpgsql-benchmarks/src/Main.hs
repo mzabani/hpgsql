@@ -35,9 +35,6 @@ import qualified Database.PostgreSQL.Simple as PGSimple
 import qualified Database.PostgreSQL.Simple.Copy as PGSimple
 import qualified Database.PostgreSQL.Simple.Streaming as StreamingPostgresSimple
 import GHC.Generics (Generic)
-import qualified Hpgsql
-import Hpgsql.Connection (libpqConnString)
-import qualified Hpgsql.Query as Hpgsql
 import qualified Hasql.Connection as HasqlConn
 import qualified Hasql.Connection.Setting as HasqlSetting
 import qualified Hasql.Connection.Setting.Connection as HasqlConnSetting
@@ -45,6 +42,9 @@ import qualified Hasql.Decoders as HasqlDec
 import qualified Hasql.Encoders as HasqlEnc
 import qualified Hasql.Session as HasqlSess
 import qualified Hasql.Statement as HasqlStmt
+import qualified Hpgsql
+import Hpgsql.Connection (libpqConnString)
+import qualified Hpgsql.Query as Hpgsql
 import Numeric (showFFloat)
 import Statistics.Regression (olsRegress)
 import Streaming (Of (..))
@@ -57,10 +57,11 @@ import Test.Hspec
   ( HasCallStack,
     describe,
     expectationFailure,
-    hspec,
     it,
     runIO,
   )
+import Test.Hspec.Core.Formatters.V2 (formatterToFormat, silent)
+import Test.Hspec.Core.Runner (configFormat, defaultConfig, hspecWith)
 
 -- Orphan NFData instances for large tuples (deepseq only provides up to 9-tuples)
 instance (NFData a, NFData b, NFData c, NFData d, NFData e, NFData f, NFData g, NFData h, NFData i, NFData j, NFData k, NFData l, NFData m) => NFData (a, b, c, d, e, f, g, h, i, j, k, l, m) where
@@ -121,8 +122,10 @@ bench name f = do
         Benchmarkable
           { allocEnv = \_ -> pure (),
             cleanEnv = \_ _ -> pure (),
-            runRepeatedly = \_ n -> forM_ [1 .. n] $ const $ do
-              !_ <- superForce f
+            runRepeatedly = \_ n -> do
+              forM_ [1 .. n] $ const $ do
+                !_ <- superForce f
+                pure ()
               performBlockingMajorGC,
             perRun = True -- If True, `runRepeatedly` is called with `n=1`. Not sure why this exists, though.
           }
@@ -221,7 +224,8 @@ main = do
   -- initializeTime must run first: https://hackage.haskell.org/package/criterion-measurement-0.2.0.0/docs/Criterion-Measurement.html#v:initializeTime
   initializeTime
 
-  hspec $ do
+  putStrLn "IMPORTANT: all measurements collected over 10 runs of each benchmark"
+  hspecWith defaultConfig {configFormat = Just (formatterToFormat silent)} $ do
     describe "Parsing 13-column rows into a List" $ do
       (conn, pgSimpleConn, hasqlConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
