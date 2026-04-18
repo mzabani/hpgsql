@@ -97,6 +97,7 @@ import Streaming (Of (..), Stream)
 import qualified Streaming as S
 import qualified Streaming.Internal as SInternal
 import qualified Streaming.Prelude as S
+import System.IO (stderr)
 import System.IO.Error (isResourceVanishedError)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Mem.Weak (deRefWeak)
@@ -428,13 +429,12 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               pure Nothing
             Just (Middle3 (NoticeResponse details)) -> do
               removeFirstBytesFromBufferOrThrow fullMessageLen
-              -- TODO: Print to stderr (what does psql do?)? Print in a nicer format?
               let severity =
                     fromMaybe
                       "Notice of unknown severity"
                       (Map.lookup ErrorSeverity details)
                   humanmsg = fromMaybe "no message" (Map.lookup ErrorHumanReadableMsg details)
-              Text.putStrLn $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
+              Text.hPutStrLn stderr $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
               pure Nothing
             Just (Right3 (ParameterStatus {..})) -> do
               removeFirstBytesFromBufferOrThrow fullMessageLen
