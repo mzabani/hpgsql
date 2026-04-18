@@ -1,0 +1,8 @@
+- Try to derive efficient COPY lines Generically
+- Implement putCopyError, enable simple-compat tests
+- Enable debugPrint, chase any race conditions
+- Change benchmarks to show max memory allocated at any given time
+- Write documentation
+- Add a bunch more types and instances
+- Change version to 0.1 everywhere
+- Double-check licensing
