@@ -13,7 +13,7 @@ Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API la
 
 ### Migrating from postgresql-simple
 
-This repository contains a fork of [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple) that preserves as much as possible** the names of modules, functions, types, classes, exceptions, etc. Its purpose is to ease migrating to hpgsql, and I intend to fully support its development to make it and keep it as similar to postgresql-simple as it can be.
+This repository contains [a fork of postgresql-simple](https://github.com/mzabani/hpgsql/tree/master/hpgsql-simple-compat) that preserves as much as possible** the names of modules, functions, types, classes, exceptions, etc. Its purpose is to ease migrating to hpgsql, and I intend to fully support its development to make it and keep it as similar to postgresql-simple as it can be.
 
 It is called hpgsql-simple-compat, and its implementation uses hpgsql. You can get a `HPgConnection` out of it so you can gradually migrate your queries to hpgsql.
 

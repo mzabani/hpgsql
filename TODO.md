@@ -1,6 +1,7 @@
 - Try to derive efficient COPY lines Generically
 - Implement putCopyError, enable simple-compat tests
 - Enable debugPrint, chase any race conditions
+  - run tests -- -m "Thread safety, interruption safety and trickier error semantics" 2>&1 | grep '✘'
 - Change benchmarks to show max memory allocated at any given time
 - Write documentation
 - Add a bunch more types and instances
