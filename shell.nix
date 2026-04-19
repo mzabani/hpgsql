@@ -17,6 +17,7 @@ in
      haskellPackages.haskell-language-server
      haskellPackages.hlint
      haskellPackages.hspec-discover
+     heaptrack
      postgres
      run
     ];

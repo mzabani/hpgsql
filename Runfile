@@ -2,8 +2,16 @@
 
 ##
 # Runs benchmarks with a postgresql DB listening.
-# OPTION NIX --nix Use a Nix-built test executable instead of compiling with cabal in the user's shell.
 benchmarks:
+    set -eo pipefail
+
+    cabal build hpgsql-benchmarks
+    nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
+
+##
+# Runs the benchmarks executable without all the CSV-producing and memory usage collecting tooling around it.
+# OPTION NIX --nix Use a Nix-built test executable instead of compiling with cabal in the user's shell.
+bench-single:
     set -eo pipefail
 
     [ -n "$1" ] && BARGS=$(printf "'%s' " "${@}")
@@ -13,7 +21,7 @@ benchmarks:
         nix-shell -A shellPg18 ./default.nix --run "./local/hpgsql-benchmarks/bin/hpgsql-benchmarks $BARGS"
     else
         cabal build hpgsql-benchmarks
-        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh $BARGS"
+        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-single.sh $BARGS"
     fi
 
 ##

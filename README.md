@@ -24,10 +24,12 @@ It also contains parts of [postgresql-libpq](https://hackage.haskell.org/package
 
 ### Performance
 
-Some benchmarks show materializing large query results with hpgsql takes \~28% the time postgresql-simple takes, and \~52% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1). Memory usage (only the one allocated by GHC's runtime, so not counting FFI/C allocated memory) is \~37% that of postgresql-simple, but still \~152% that of hasql (though again it's not clear what total allocated memory, that is, including libpq's allocations, is).
+Some benchmarks show materializing large query results with hpgsql takes \~38% the time postgresql-simple takes, and \~70% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
 
-When comparing hpgsql's Stream querying, hpgsql takes \~13% the time of [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and \~27% the memory (not counting FFI/C allocations).
+When comparing hpgsql's Stream querying, hpgsql takes \~13% the time of [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and of postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
 
-Sadly, hpgsql's binary COPY runs in about the same time as postgresql-simple's textual COPY, and uses 244% of postgresql-simple's memory (same caveat as always about FFI/C allocated memory).
+Sadly, hpgsql's binary COPY runs in about the same time as postgresql-simple's textual COPY.
+
+Peak allocated memory is harder to analyze.
 
 See [BENCHMARKS.md](/BENCHMARKS.md) for more details.

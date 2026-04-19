@@ -122,12 +122,11 @@ import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
-import Debug.Trace
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnString (..))
-import Hpgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgField (..), FromPgRow (..), Only (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
+import Hpgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgRow (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
@@ -1440,9 +1439,8 @@ _globalDebugLock :: MVar Bool
 _globalDebugLock = unsafePerformIO $ newMVar True
 
 debugPrint :: String -> IO ()
-debugPrint _ = pure ()
-
--- debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
+-- debugPrint _ = pure ()
+debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
 
 {-# INLINE timeDebugNonBlockingOperation #-}
 timeDebugNonBlockingOperation :: String -> IO a -> IO a

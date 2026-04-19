@@ -60,6 +60,7 @@ executable hpgsql-benchmarks
       ViewPatterns
   build-depends:
     aeson >= 2
+    , async
     , base
     , bytestring
     , hasql
@@ -72,6 +73,7 @@ executable hpgsql-benchmarks
     , postgresql-simple
     , resourcet
     , statistics
+    , stm
     , streaming
     , streaming-postgresql-simple
     , text
