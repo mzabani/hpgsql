@@ -2,6 +2,7 @@ module Database.PostgreSQL.LibPQ (fname, transactionStatus, Column (..), Connect
 
 import Data.ByteString (ByteString)
 import qualified Hpgsql
+import qualified Hpgsql.Transaction
 import Hpgsql.TypeInfo (Oid (..), TransactionStatus (..))
 
 data Connection = Connection {hpgConn :: Hpgsql.HPgConnection}
@@ -21,4 +22,4 @@ fname :: Result -> Column -> IO (Maybe ByteString)
 fname _ _ = pure Nothing
 
 transactionStatus :: Connection -> IO TransactionStatus
-transactionStatus conn = Hpgsql.transactionStatus $ hpgConn conn
+transactionStatus conn = Hpgsql.Transaction.transactionStatus $ hpgConn conn

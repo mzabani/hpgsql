@@ -27,17 +27,23 @@ library
   exposed-modules:
       Hpgsql
       Hpgsql.Builder
+      Hpgsql.Cancellation
       Hpgsql.Connection
+      Hpgsql.Copy
       Hpgsql.Encoding
-      Hpgsql.Types
+      Hpgsql.InternalTypes
+      Hpgsql.Notification
       Hpgsql.Parsing
+      Hpgsql.Pipeline
+      Hpgsql.Pool
       Hpgsql.Query
       Hpgsql.Time
       Hpgsql.Transaction
       Hpgsql.TypeInfo
+      Hpgsql.Types
   other-modules:
       Hpgsql.Base
-      Hpgsql.InternalTypes
+      Hpgsql.Internal
       Hpgsql.Locking
       Hpgsql.Msgs
       Hpgsql.Networking

@@ -19,7 +19,8 @@ import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
-import Hpgsql.Query (Query (..), commaSeparatedRowTuples)
+import Hpgsql.InternalTypes (Query (..))
+import Hpgsql.Query (commaSeparatedRowTuples)
 import Hpgsql.TypeInfo (jsonOid, jsonbOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.

@@ -16,7 +16,7 @@ import DbUtils (aroundConn, testConnInfo)
 import Hpgsql
 import Hpgsql.Connection (libpqConnString)
 import Hpgsql.Query (sql)
-import Hpgsql.Transaction (withTransaction)
+import Hpgsql.Transaction (transactionStatus, withTransaction)
 import Test.Hspec
 
 spec :: Spec

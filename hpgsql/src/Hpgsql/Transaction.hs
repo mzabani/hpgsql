@@ -1,8 +1,8 @@
-module Hpgsql.Transaction (IsolationLevel (..), ReadWriteMode (..), begin, commit, rollback, withTransaction, withTransactionMode, beginMode) where
+module Hpgsql.Transaction (IsolationLevel (..), ReadWriteMode (..), begin, commit, rollback, withTransaction, withTransactionMode, beginMode, transactionStatus) where
 
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), bracketWithError, isAsyncException)
-import Hpgsql (execute_)
+import Hpgsql.Internal (execute_, transactionStatus)
 import Hpgsql.InternalTypes (HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError)
 import Hpgsql.Query (Query)
 

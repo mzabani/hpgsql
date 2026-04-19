@@ -41,6 +41,7 @@ import qualified Data.ByteString as B
 import Data.Text.Encoding (encodeUtf8)
 import Database.PostgreSQL.Simple.Internal
 import qualified Hpgsql
+import qualified Hpgsql.Notification
 import System.Posix.Types (CPid)
 
 data Notification = Notification
@@ -57,15 +58,15 @@ data Notification = Notification
 --   being used for other purposes,   note however that PostgreSQL does not
 --   deliver notifications while a connection is inside a transaction.
 getNotification :: Connection -> IO Notification
-getNotification conn = fromHpgsqlNotification <$> Hpgsql.getNotification (hpgConn conn)
+getNotification conn = fromHpgsqlNotification <$> Hpgsql.Notification.getNotification (hpgConn conn)
 
 -- | Non-blocking variant of 'getNotification'.   Returns a single notification,
 -- if available.   If no notifications are available,  returns 'Nothing'.
 getNotificationNonBlocking :: Connection -> IO (Maybe Notification)
-getNotificationNonBlocking conn = fmap fromHpgsqlNotification <$> Hpgsql.getNotificationNonBlocking (hpgConn conn)
+getNotificationNonBlocking conn = fmap fromHpgsqlNotification <$> Hpgsql.Notification.getNotificationNonBlocking (hpgConn conn)
 
-fromHpgsqlNotification :: Hpgsql.NotificationResponse -> Notification
-fromHpgsqlNotification Hpgsql.NotificationResponse {..} =
+fromHpgsqlNotification :: Hpgsql.Notification.NotificationResponse -> Notification
+fromHpgsqlNotification Hpgsql.Notification.NotificationResponse {..} =
   Notification
     { notificationPid = fromIntegral notifierPid,
       notificationChannel = encodeUtf8 channelName,

@@ -15,7 +15,9 @@ import DbUtils
     withRollback,
   )
 import Hpgsql
+import Hpgsql.Copy (copyFromL, putCopyData, withCopy_)
 import Hpgsql.Query (sql)
+import Hpgsql.Transaction (transactionStatus)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen

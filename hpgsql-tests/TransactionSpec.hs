@@ -16,6 +16,7 @@ import Hpgsql.Transaction
     ReadWriteMode (..),
     beginMode,
     rollback,
+    transactionStatus,
     withTransaction,
   )
 import Test.Hspec

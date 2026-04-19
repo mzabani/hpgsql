@@ -13,6 +13,7 @@ import DbUtils
     withRollback,
   )
 import Hpgsql
+import Hpgsql.Pipeline (pipelineCmd, pipelineCmd_, pipelineL, pipelineS, runPipeline)
 import Hpgsql.Query (sql)
 import Hedgehog
 import qualified Hedgehog as Gen

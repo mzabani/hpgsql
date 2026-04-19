@@ -43,6 +43,7 @@ import qualified Hasql.Encoders as HasqlEnc
 import qualified Hasql.Session as HasqlSess
 import qualified Hasql.Statement as HasqlStmt
 import qualified Hpgsql
+import qualified Hpgsql.Copy
 import Hpgsql.Connection (libpqConnString)
 import qualified Hpgsql.Query as Hpgsql
 import Numeric (showFFloat)
@@ -417,7 +418,7 @@ main = do
               Hpgsql.execute_ conn "BEGIN"
               Hpgsql.execute_ conn createCopyBenchTable
               void $
-                Hpgsql.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
+                Hpgsql.Copy.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
                   S.map
                     mkRow
                     (S.each [1 .. fromIntegral n])

@@ -1,3 +1,4 @@
+- hasql Streaming benchmarking is not using a fold-like function!
 - Try to derive efficient COPY lines Generically
 - Implement putCopyError, enable simple-compat tests
 - Enable debugPrint, chase any race conditions

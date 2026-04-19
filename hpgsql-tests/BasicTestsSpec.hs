@@ -14,6 +14,7 @@ import DbUtils
 import Hpgsql
 import Hpgsql.Encoding (toMonadicRowParser)
 import Hpgsql.Query (mkQuery, sql)
+import Hpgsql.Transaction (transactionStatus)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Test.Hspec

@@ -11,6 +11,13 @@ module Hpgsql.InternalTypes
     EncodingContext (..), -- re-exported from Hpgsql.TypeInfo
     throwIrrecoverableError,
 
+    -- * Query types (moved from Hpgsql.Query)
+    SingleQueryFragment (..),
+    Query (..),
+    SingleQuery (..),
+    breakQueryIntoStatements,
+    renumberParamsFrom,
+
     -- * Msgs types (moved to avoid cycles)
     ParseComplete (..),
     BindComplete (..),
@@ -49,8 +56,13 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
+import Data.List.NonEmpty (NonEmpty (..))
+import qualified Data.List.NonEmpty as NE
 import Data.Map.Strict (Map)
+import Data.String (IsString (..))
 import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 #if MIN_VERSION_base(4,19,0)
 import Data.Word (Word16, Word64)
 #else
@@ -58,10 +70,147 @@ import Data.Word (Word16)
 
 #endif
 import qualified Control.Concurrent.STM as STM
-import Hpgsql.Query (SingleQuery (..))
+import Hpgsql.Base (lastTwoAndInit, maximumOnOrDef, minimumOnOrDef)
+import Hpgsql.Builder (BinaryField)
+import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), parseSql)
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
 import System.Mem.Weak (Weak)
+
+-- ------------------------------------------------------------------
+-- Query types (moved from Hpgsql.Query)
+-- ------------------------------------------------------------------
+
+-- | A fragment of a single SQL statement, which is either static SQL or
+-- a placeholder for a query argument.
+data SingleQueryFragment
+  = FragmentOfStaticSql !ByteString
+  | FragmentWithSemiColon
+  | FragmentOfCommentsOrWhitespace !ByteString
+  | -- | The number/index of the query argument, starting from 1 in a single statement
+    QueryArgumentPlaceHolder !Int
+  deriving stock (Eq, Show)
+
+-- | Zero, one, or more SQL statements. The query parameters and query fragments continue to go up in number across different
+-- statements, e.g. "SELECT $1; SELECT $2; SELECT $3; ...".
+data Query = Query {queryString :: ![SingleQueryFragment], queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)]}
+
+-- | A single statement, not multiple, with dollar-numbered query arguments
+-- starting from $1.
+data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)]}
+
+instance Show Query where
+  show = show . NE.toList . breakQueryIntoStatements
+
+instance Show SingleQuery where
+  -- Careful not exposing query arguments
+  show (SingleQuery {queryString}) = show queryString
+
+instance Semigroup Query where
+  q1 <> q2 =
+    let maxArgQ1 =
+          maximumOnOrDef
+            0
+            q1.queryString
+            ( \case
+                QueryArgumentPlaceHolder n -> Just n
+                _ -> Nothing
+            )
+        (_, remappedQ2) =
+          renumberParamsFrom
+            q2.queryString
+            (maxArgQ1 + 1)
+     in Query {queryString = q1.queryString <> remappedQ2, queryParams = q1.queryParams <> q2.queryParams}
+
+instance IsString Query where
+  fromString s =
+    let blocks = parseSql AcceptOnlyDollarNumberedArgs (Text.pack s)
+        queryFrags =
+          map
+            ( \case
+                StaticSql t -> FragmentOfStaticSql $ encodeUtf8 t
+                SemiColon -> FragmentWithSemiColon
+                CommentsOrWhitespace t -> FragmentOfCommentsOrWhitespace $ encodeUtf8 t
+                DollarNumberedArg _ ->
+                  error "Dollar-numbered query arguments are not supported in string literals. Use the sql quasiquoter or mkQuery instead."
+                QuestionMarkArg ->
+                  error "Question mark query arguments are not supported in string literals. Use the sql quasiquoter or mkQuery instead."
+                QuasiQuoterExpression _ _ ->
+                  error "Bug in Hpgsql: parseSql AcceptOnlyDollarNumberedArgs returned quasiquoter expression."
+            )
+            blocks
+     in Query {queryString = queryFrags, queryParams = []}
+
+-- | For internal usage only. Takes a `Query` and breaks it up into
+-- individual SQL statements that can be sent to a postgres backend.
+breakQueryIntoStatements :: Query -> NonEmpty SingleQuery
+breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams = allQueryParams} =
+  -- If a user insists in trying to run an empty query, or if
+  -- they mistakenly concatenate empty statements, we let them
+  toEmptyQueryIfNecessary $
+    map toSingleQuery $
+      -- If a query string is "SELECT 1; -- comments and empty space", we put
+      -- all comments and whitespace together with that last "real" SQL statement
+      fixLastEmptyStatement $
+        go fullQueryString allQueryParams
+  where
+    toEmptyQueryIfNecessary [] = NE.singleton $ SingleQuery {queryString = "", queryParams = allQueryParams}
+    toEmptyQueryIfNecessary (x : xs) = x :| xs
+    toSingleQuery (blks, prms) = SingleQuery {queryString = mconcat $ map fragToBytestring blks, queryParams = prms}
+    allWhitespaceOrComments =
+      all
+        ( \case
+            FragmentOfCommentsOrWhitespace _ -> True
+            _ -> False
+        )
+    fixLastEmptyStatement :: [([SingleQueryFragment], [EncodingContext -> (Maybe Oid, BinaryField)])] -> [([SingleQueryFragment], [EncodingContext -> (Maybe Oid, BinaryField)])]
+    fixLastEmptyStatement indivStmts = case lastTwoAndInit indivStmts of
+      (_, Nothing) -> indivStmts -- Only 0 or 1 statements found
+      (firstStmts, Just (secLst, lst))
+        | allWhitespaceOrComments (fst lst) -> firstStmts ++ [secLst <> lst]
+        | otherwise -> indivStmts
+    isLastFragmentOfAStatement = \case
+      FragmentWithSemiColon -> True
+      _ -> False
+    fragToBytestring = \case
+      QueryArgumentPlaceHolder n -> "$" <> intToBs n
+      FragmentOfStaticSql t -> t
+      FragmentWithSemiColon -> ";"
+      FragmentOfCommentsOrWhitespace t -> t
+    go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, BinaryField)] -> [([SingleQueryFragment], [EncodingContext -> (Maybe Oid, BinaryField)])]
+    go [] [] = []
+    go [] _ = error $ "Hpgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
+    go frags params =
+      let (stmtFrags, nextFrags) = case List.break isLastFragmentOfAStatement frags of
+            (firstStmts, []) -> (firstStmts, [])
+            (firstStmts, semiColon : next) -> (firstStmts ++ [semiColon], next)
+          (maxArgNum, thisQueryFrags) = renumberParamsFrom stmtFrags 1
+          (thisQueryParams, nextParams) = List.splitAt maxArgNum params
+       in (thisQueryFrags, thisQueryParams) : go nextFrags nextParams
+
+intToBs :: Int -> ByteString
+intToBs = encodeUtf8 . Text.pack . show
+
+-- | Returns new fragments remapped with `renumberFrom` as the smallest query argument number,
+-- and also returns the maximum (new) query argument number, or 0 if there were no query arguments.
+renumberParamsFrom :: [SingleQueryFragment] -> Int -> (Int, [SingleQueryFragment])
+renumberParamsFrom frags renumberFrom =
+  List.mapAccumR
+    ( \(!maxSoFar) -> \case
+        QueryArgumentPlaceHolder n -> let newNum = n - smallestArgNum + renumberFrom in (max newNum maxSoFar, QueryArgumentPlaceHolder newNum)
+        x -> (maxSoFar, x)
+    )
+    0
+    frags
+  where
+    smallestArgNum =
+      minimumOnOrDef
+        1
+        frags
+        ( \case
+            QueryArgumentPlaceHolder n -> Just n
+            _ -> Nothing
+        )
 
 -- ------------------------------------------------------------------
 -- Simple types

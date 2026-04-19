@@ -11,6 +11,8 @@ import DbUtils
     testConnInfo,
   )
 import Hpgsql
+import Hpgsql.Notification (NotificationResponse (..), getNotification, getNotificationNonBlocking)
+import Hpgsql.Pool (beforeReturningToPool)
 import Hpgsql.Query (sql)
 import System.Timeout (timeout)
 import Test.Hspec

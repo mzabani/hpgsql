@@ -33,6 +33,7 @@ import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import Hpgsql
 import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, singleColRowParser)
+import Hpgsql.Pipeline (pipelineL, runPipeline)
 import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid, TypeInfo (..))
