@@ -190,6 +190,7 @@ cancelAnyRunningStatementIsIdempotent conn = do
   cancelAnyRunningStatement conn False
   cancelAnyRunningStatement conn False
   cancelAnyRunningStatement conn False
+  execute_ conn "SELECT 1"
 
 sendQueriesConcurrently :: HPgConnection -> IO ()
 sendQueriesConcurrently conn = forConcurrently_ [1 .. 10] $ const $ do

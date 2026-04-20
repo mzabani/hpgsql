@@ -14,7 +14,6 @@ import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Debug.Trace
 import Hpgsql (ConnString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), defaultConnectOpts, execute, execute_, withConnection, withConnectionOpts)
 import System.Environment (getEnv)
 import System.Mem (performGC)
@@ -32,9 +31,10 @@ aroundConn :: SpecWith HPgConnection -> Spec
 aroundConn = around $ \act -> do
   connstr <- testConnInfo
   -- Use use a very low polling interval to hopefully exercise code paths
-  -- where polling does not detect dead threads in the very first check,
-  -- and a very low cancellation request resend interval also to test more
-  -- aggressive interruption of our code, and to make tests run faster.
+  -- where polling does not detect dead threads in the very first check.
+  -- A very low cancellation request resend interval is dangerous, however,
+  -- because it can prevent orphaned query draining from ever completing.
+  -- We recommend >=100ms in the docs, but tests seem to be fine with 10ms.
   withConnectionOpts defaultConnectOpts {killedThreadPollIntervalMs = 1, cancellationRequestResendIntervalMs = 10} connstr 10 act
 
 pgErrorMustContain :: ByteString -> [(ErrorDetail, LBS.ByteString)] -> PostgresError -> Bool

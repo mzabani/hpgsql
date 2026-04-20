@@ -83,6 +83,15 @@ tests:
     echo "--- Running hlint"
     hlint .
 
+##
+# Runs tests 100 times, reporting how many passed and how many failed.
+# This is useful to better test thread safety and interruption safety, as those
+# lead to flaky tests when not properly implemented.
+tests-stress:
+    set -eo pipefail
+
+    ./scripts/run-tests-100.sh
+
 ## 
 # Runs hpgsql-simple-compat's tests.
 # OPTION PG --pg <pg> The version of the postgresql instance to start or 'all'. Defaults to 18 if unspecified.

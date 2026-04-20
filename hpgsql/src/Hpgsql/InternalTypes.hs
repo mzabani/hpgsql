@@ -244,6 +244,9 @@ data ConnectOpts = ConnectOpts
     -- and this is only relevant if you plan on interrupting your queries with
     -- asynchronous exceptions, either by use of concurrency primitives or functions like
     -- `timeout`, and continue using the connection for new queries after that.
+    -- It is not recommend setting this below 100ms, because orphaned query draining
+    -- alternates with resending cancellation requests, so if this is too low it is possible
+    -- that draining never finishes, leading to a form of livelock.
     cancellationRequestResendIntervalMs :: Int,
     -- | Immediately after connecting, run a query to fetch all types
     -- from the `pg_type` table. This makes them available in FromPgField

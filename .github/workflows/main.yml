@@ -59,6 +59,11 @@ jobs:
         # to many things, and our library relies on a lot of ThreadId tracking,
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
+        concurrently -g --timings --names build-single-threaded-rts,build-ghc984,build-ghc967 \
+          'nix-build --no-out-link --argstr threading "-threaded" -A hpgsql-tests' \
+          'nix-build --no-out-link --argstr ghc ghc984 -A hpgsql-tests' \
+          'nix-build --no-out-link --argstr ghc ghc967 -A hpgsql-tests'
+
         concurrently -g --timings --names single-threaded-rts,ghc984,ghc967 \
           'timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
           'timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
@@ -128,6 +133,7 @@ jobs:
         # to many things, and our library relies on a lot of ThreadId tracking,
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
+        nix-build --no-out-link --argstr threading "-threaded" -A hpgsql-tests
         timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
 
     - name: Run hpgsql-simple-compat tests

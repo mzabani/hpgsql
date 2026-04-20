@@ -445,59 +445,52 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
       fullMessageLen = 5 + lenLeftToFetch
   restOfMsg <- LBS.drop 5 . LBS.take fullMessageLen <$> if bufLen >= fullMessageLen then pure currentBuf else receiveUntilBufferHasAtLeast fullMessageLen
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen
-  -- We don't let `go` recursively call itself or even `receivedNoticeOrParameterSoTryAgain`
-  -- because it would inherit its own masking, which would be bad!
-  -- We don't want to have to test the behaviour of our functions with both
-  -- masking and unmasking!
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f
     Just res -> pure res
   where
-    go msgIdentChar restOfMsg fullMessageLen = mask_ $ do
+    -- We mask_ because if the supplied IO action runs with a message extracted from
+    -- the recvBuffer, then we _must_ remove that message from recvBuffer.
+    -- TODO: These IO actions are always STM transactions (some times just a `pure` call),
+    -- so maybe we should reflect that in the type to avoid the impression that
+    -- anything can happen.
+    go msgIdentChar restOfMsg fullMessageLen = mask_ $ modifyMVar recvBuffer $ \lbs -> do
+      let !bufferWithoutMsg =
+            if LBS.length lbs >= fullMessageLen
+              then LBS.drop fullMessageLen lbs
+              else
+                error "Bug in Hpgsql. Internal buffer's bytes weren't filled enough"
+
       case parsePgMessage msgIdentChar restOfMsg parser of
         Just msg -> do
-          removeFirstBytesFromBufferOrThrow fullMessageLen
           debugPrint $ "Received " ++ show msg
-          -- sttv <- STM.atomically $ STM.readTVar (internalConnectionState conn)
-          -- debugPrint $ "Received " ++ show msg ++ "for pipeline " ++ show (currentPipeline sttv)
-          -- putStrLn $ "Received " ++ show msg
-          Just <$> f (Right msg)
+          fmap (bufferWithoutMsg,) $ Just <$> f (Right msg)
         Nothing -> do
           -- This could be a Notification, NOTICE or a ParameterStatus message, since these
           -- can be received _at any time_ according to the docs.
           case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
             Just (Left3 notifResponse) -> do
               debugPrint "Received notification. Will add it to internal queue."
-              removeFirstBytesFromBufferOrThrow fullMessageLen
               STM.atomically $ do
                 sttv <- STM.readTVar $ internalConnectionState conn
                 STM.writeTQueue (notificationsReceived sttv) notifResponse
-              pure Nothing
+              pure (bufferWithoutMsg, Nothing)
             Just (Middle3 (NoticeResponse details)) -> do
-              removeFirstBytesFromBufferOrThrow fullMessageLen
               let severity =
                     fromMaybe
                       "Notice of unknown severity"
                       (Map.lookup ErrorSeverity details)
                   humanmsg = fromMaybe "no message" (Map.lookup ErrorHumanReadableMsg details)
               Text.hPutStrLn stderr $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
-              pure Nothing
+              pure (bufferWithoutMsg, Nothing)
             Just (Right3 (ParameterStatus {..})) -> do
-              removeFirstBytesFromBufferOrThrow fullMessageLen
               modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
-              pure Nothing
+              pure (bufferWithoutMsg, Nothing)
             Nothing ->
               -- Just in case this is a postgres error, it might include useful information,
               -- so we spit that out
               let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
-               in Just <$> f (Left (msgIdentChar, mPgError))
-
-    removeFirstBytesFromBufferOrThrow :: Int64 -> IO ()
-    removeFirstBytesFromBufferOrThrow nbytes = modifyMVar_ recvBuffer $ \lbs -> do
-      if LBS.length lbs >= nbytes
-        then pure (LBS.drop nbytes lbs)
-        else
-          error "Bug in Hpgsql. Internal buffer's bytes weren't filled enough"
+               in fmap (lbs,) $ Just <$> f (Left (msgIdentChar, mPgError))
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
@@ -511,7 +504,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
         else do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
-          modifyMVar_ recvBuffer $ \lbs -> mask $ \restore -> do
+          mask $ \restore -> modifyMVar_ recvBuffer $ \lbs -> do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
             pure (lbs <> LBS.fromStrict someBytes)
@@ -1014,7 +1007,7 @@ waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
 -- can put transactions in an error state.
 cancelAnyRunningStatement ::
   HPgConnection ->
-  -- | If True, this won't send cancellation requests to postgres and will just drain orphaned/interrupted queries until they complete, if any
+  -- | If True, this won't send cancellation requests to postgres and will just drain orphaned/interrupted queries until they complete, if any.
   Bool ->
   IO ()
 cancelAnyRunningStatement conn@HPgConnection {connOpts} onlyDrainNotCancel = do
@@ -1027,16 +1020,16 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} onlyDrainNotCancel = do
     debugPrint $ "Going to take control-msg lock to drain " ++ show queriesToDrain
     withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ \() -> do
       -- It is possible not just in theory for the cancellation request to
-      -- arrive/be processed by postgres _before_ the previous statement was
-      -- event sent, since cancellation requests go through a different
-      -- connection, so there's no guarantee of delivery in order.
-      -- Even if the cancellation request arrives later at the server machine,
+      -- arrive/be processed by postgres _before_ the current pipeline has
+      -- reached postgres, since cancellation requests go through a different
+      -- connection, so there's no guarantee of ordered delivery.
+      -- Even if the cancellation request arrives later at the server,
       -- the kernel can still deliver them in different order, and postgres
       -- itself can process them in different order, at least due to the
       -- kernel's scheduler not giving guarantees.
       -- We've seen it happen in our tests (i.e. "Exercise interruption safety"),
       -- so this is not merely hypothetical.
-      -- What we do here is fire a cancellation request every 0.5 seconds to cover
+      -- What we do here is fire a cancellation request every few seconds to cover
       -- for that.
       debugPrint "Cancelling active pipeline to drain."
       unless onlyDrainNotCancel $ sendCancellationRequest conn
@@ -1050,9 +1043,12 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} onlyDrainNotCancel = do
             -- of other queries as the whole pipeline is trashed
             case eErrorOrCmdComplete of
               Right _cmdComplete -> drainUntilError qs
-              -- Left _err -> putStrLn "Got error, stopping draining" >> pure ()
               Left _err -> pure ()
           alternateDrainingWithCancelReqs qs = do
+            -- If the cancellationRequestResendIntervalMs is too short, draining
+            -- will never complete...
+            -- We could with `withAsync` to run these in parallel, but it feels overkill.
+            -- So we recommend in the docs that people don't set this too low.
             drained <- timeout (1000 * cancellationRequestResendIntervalMs connOpts) $ drainUntilError qs
             case drained of
               Just () -> pure ()
