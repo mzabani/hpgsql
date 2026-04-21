@@ -7,7 +7,7 @@ hpgsql's repository contains a small benchmark suite that compares hpgsql to pos
 > - While wall clock times are probably reliable, peak heap allocations are measured by [heaptrack](https://github.com/KDE/heaptrack), and I'm no specialist in using it, nor do I understand glibc's allocation algorithm well enough to know if I'm measuring something meaningful.
 > - hpgsql's advantage wanes if the same benchmarks run with a higher number of concurrent connections/queries. This might indicate the bottleneck moves to networking and/or postgres, but it might indicate hpgsql gets worse comparatively with more connections. I don't know which it is.
 > - On my computer, GHC's runtime seems to allocate ~72MB in the heap even when no work is done, so it's not obvious what memory allocated per row (or some unit of work) is for each library.
-> - These benchmarks were taken on non-encrypted postgres connections.
+> - These benchmarks were taken on non-encrypted Unix Domain socket postgres connections.
 
 ## Running benchmarks yourself
 You can clone hpgsql and if you have Nix and direnv allowed, you should be able to run this with `run benchmarks` in the repository's root.

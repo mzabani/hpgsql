@@ -427,9 +427,7 @@ receiveNextMsgWithMaskedContinuation conn parser f =
 -- CAREFUL: avoid doing networking or too much work in your supplied function. It must
 -- be really cheap!
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> IO b) -> IO b
-receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = rethrowAsIrrecoverable $ do
-  -- \^ We rethrow as irrecoverable because an error here is likely a socket receiving error.
-  --
+receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = do
   -- We need to preserve the invariant that the internal buffer's first byte is
   -- always the first byte of a valid Message while keeping this function
   -- interruptible.
@@ -504,7 +502,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
         else do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
-          mask $ \restore -> modifyMVar_ recvBuffer $ \lbs -> do
+          mask $ \restore -> rethrowAsIrrecoverable $ modifyMVar_ recvBuffer $ \lbs -> do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
             pure (lbs <> LBS.fromStrict someBytes)
