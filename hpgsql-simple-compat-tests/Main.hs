@@ -75,7 +75,7 @@ tests env =
         testCase "Savepoint" . testSavepoint,
         testCase "Unicode" . testUnicode,
         testCase "Values" . testValues,
-        -- testCase "Copy"                 . testCopy,
+        testCase "Copy" . testCopy,
         testCopyFailures,
         testCase "Double" . testDouble,
         testCase "1-ary generic" . testGeneric1,
@@ -471,45 +471,51 @@ testValues TestEnv {..} = do
       vals' <- query_ conn "DELETE FROM values_test RETURNING *"
       sort vals @?= sort vals'
 
--- testCopy :: TestEnv -> Assertion
--- testCopy TestEnv {..} = do
---   execute_ conn "CREATE TEMPORARY TABLE copy_test (x int, y text)"
---   copy_ conn "COPY copy_test FROM STDIN (FORMAT CSV)"
---   mapM_ (putCopyData conn) copyRows
---   putCopyEnd conn
---   copy_ conn "COPY copy_test FROM STDIN (FORMAT CSV)"
---   mapM_ (putCopyData conn) abortRows
---   putCopyError conn "aborted"
---   -- Hmm, does postgres always produce \n as an end-of-line here, or
---   -- are there cases where it will use a \r\n as well?
---   copy_ conn "COPY copy_test TO STDOUT (FORMAT CSV)"
---   rows <- loop []
---   sort rows @?= sort copyRows
---   -- Now, let's just verify that the connection state is back to ready,
---   -- so that we can issue more queries:
---   [Only (x :: Int)] <- query_ conn "SELECT 2 + 2"
---   x @?= 4
---   -- foldCopyData
---   copy_ conn "COPY copy_test TO STDOUT (FORMAT CSV)"
---   (acc, count) <-
---     foldCopyData
---       conn
---       (\acc row -> return (row : acc))
---       (\acc count -> return (acc, count))
---       []
---   sort acc @?= sort copyRows
---   count @?= 2
---   where
---     copyRows =
---       [ "1,foo\n",
---         "2,bar\n"
---       ]
---     abortRows = ["3,baz\n"]
---     loop rows = do
---       mrow <- getCopyData conn
---       case mrow of
---         CopyOutDone _ -> return rows
---         CopyOutRow row -> loop (row : rows)
+testCopy :: TestEnv -> Assertion
+testCopy TestEnv {..} = do
+  execute_ conn "CREATE TEMPORARY TABLE copy_test (x int, y text)"
+  copy_ conn "COPY copy_test FROM STDIN (FORMAT CSV)"
+  mapM_ (putCopyData conn) copyRows
+  putCopyEnd conn
+  copy_ conn "COPY copy_test FROM STDIN (FORMAT CSV)"
+  mapM_ (putCopyData conn) abortRows
+  putCopyError conn "aborted"
+  where
+    -- Tests below have been disabled because hpgsql doesn't support
+    -- COPY TO STDOUT yet.
+
+    -- Hmm, does postgres always produce \n as an end-of-line here, or
+    -- are there cases where it will use a \r\n as well?
+    -- copy_ conn "COPY copy_test TO STDOUT (FORMAT CSV)"
+    -- rows <- loop []
+    -- sort rows @?= sort copyRows
+    -- -- Now, let's just verify that the connection state is back to ready,
+    -- -- so that we can issue more queries:
+    -- [Only (x :: Int)] <- query_ conn "SELECT 2 + 2"
+    -- x @?= 4
+
+    -- -- foldCopyData
+    -- copy_ conn "COPY copy_test TO STDOUT (FORMAT CSV)"
+    -- (acc, count) <-
+    --   foldCopyData
+    --     conn
+    --     (\acc row -> return (row : acc))
+    --     (\acc count -> return (acc, count))
+    --     []
+    -- sort acc @?= sort copyRows
+    -- count @?= 2
+
+    copyRows =
+      [ "1,foo\n",
+        "2,bar\n"
+      ]
+    abortRows = ["3,baz\n"]
+
+-- loop rows = do
+--   mrow <- getCopyData conn
+--   case mrow of
+--     CopyOutDone _ -> return rows
+--     CopyOutRow row -> loop (row : rows)
 
 testCopyFailures :: TestEnv -> TestTree
 testCopyFailures env =

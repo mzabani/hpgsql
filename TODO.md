@@ -1,5 +1,6 @@
-- Try to derive efficient COPY lines Generically
 - Implement putCopyError, enable simple-compat tests
+- Import postgresql-query into repository
+- Try to derive efficient COPY lines Generically
 - Write documentation
 - Add a bunch more types and instances
 - Connecting with a password

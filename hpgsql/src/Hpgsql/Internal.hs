@@ -97,6 +97,7 @@ module Hpgsql.Internal
     pipelineLM,
     withCopyInternal,
     copyEndInternal,
+    putCopyError,
   )
 where
 
@@ -1319,6 +1320,27 @@ copyStart conn copyQry = snd <$> withCopyInternal conn copyQry (\_qryId -> pure 
 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn $ CopyData (Builder.byteString t)
+
+putCopyError :: HPgConnection -> String -> IO ()
+putCopyError conn causeForFailure = withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ const $ do
+  mCopyState <-
+    STM.atomically $
+      STM.readTVar (internalConnectionState conn) >>= \st -> pure $ case currentPipeline st of
+        [QueryState {queryProtocol = CopyQuery copyState}] -> Just copyState
+        _ -> Nothing
+  case mCopyState of
+    Just StillCopying -> do
+      let markCopyFailSent = do
+            let sttv = internalConnectionState conn
+            st <- STM.readTVar sttv
+            case currentPipeline st of
+              [qs@QueryState {queryProtocol = CopyQuery StillCopying}] -> STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = [qs {queryProtocol = CopyQuery CopyFailAndSyncSent}]}
+              _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
+      atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail causeForFailure, SomeMessage Sync], markCopyFailSent)
+    Just copyState ->
+      throwIrrecoverableError $ "Current COPY command is not in a cancellable state. Its current state is " ++ show copyState
+    Nothing ->
+      throwIrrecoverableError "There is no active COPY command to cancel"
 
 copyEnd :: HPgConnection -> IO Int64
 copyEnd conn = do

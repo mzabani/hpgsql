@@ -14,14 +14,14 @@ import DbUtils
     pgErrorMustContain,
     withRollback,
   )
-import Hpgsql
-import Hpgsql.Copy (copyFromL, putCopyData, withCopy_)
-import Hpgsql.Query (sql)
-import Hpgsql.Transaction (transactionStatus)
 import Hedgehog (PropertyT, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
+import Hpgsql
+import Hpgsql.Copy (copyFromL, copyStart, putCopyData, putCopyError, withCopy_)
+import Hpgsql.Query (sql)
+import Hpgsql.Transaction (transactionStatus)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
@@ -36,6 +36,9 @@ spec = do
       copyBinaryFmtStatementSucceeding
     it
       "COPY error"
+      copyError
+    it
+      "putCopyError"
       copyError
 
 genRows :: Gen.Gen [(Int32, Text)]
@@ -79,6 +82,19 @@ copyError conn = do
       "COPY employee FROM STDIN WITH (FORMAT CSV);"
       (putCopyData conn "5,Dracula,column-that-does-not-exist\n")
       `shouldThrow` pgErrorMustContain "COPY employee FROM STDIN" [(ErrorSeverity, "ERROR"), (ErrorCode, "22P04"), (ErrorHumanReadableMsg, "extra data after last expected column")]
+    transactionStatus conn `shouldReturn` TransInError
+  execute_ conn "SELECT 1"
+  transactionStatus conn `shouldReturn` TransIdle
+
+copyErrorPutCopyError :: HPgConnection -> IO ()
+copyErrorPutCopyError conn = do
+  withRollback conn $ do
+    execute_ conn "CREATE UNLOGGED TABLE employee (employee_id SERIAL PRIMARY KEY, employee_name TEXT NOT NULL);"
+    copyStart
+      conn
+      "COPY employee FROM STDIN WITH (FORMAT CSV);"
+    putCopyData conn "5,Dracula\n"
+    putCopyError conn "Abort"
     transactionStatus conn `shouldReturn` TransInError
   execute_ conn "SELECT 1"
   transactionStatus conn `shouldReturn` TransIdle

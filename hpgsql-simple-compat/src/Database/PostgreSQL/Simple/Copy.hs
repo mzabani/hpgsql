@@ -37,12 +37,14 @@ module Database.PostgreSQL.Simple.Copy
     -- getCopyData,
     putCopyData,
     putCopyEnd,
-    -- putCopyError,
+    putCopyError,
   )
 where
 
 import qualified Data.ByteString.Char8 as B
 import Data.Int (Int64)
+import qualified Data.Text as Text
+import Data.Text.Encoding (decodeUtf8)
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
 import Database.PostgreSQL.Simple.Internal hiding (result, row)
@@ -105,3 +107,14 @@ putCopyData conn dat = mapHpgsqlErrors $ Hpgsql.Copy.putCopyData (hpgConn conn) 
 --   is called.
 putCopyEnd :: Connection -> IO Int64
 putCopyEnd conn = mapHpgsqlErrors $ Hpgsql.Copy.copyEnd (hpgConn conn)
+
+-- | Aborts a @COPY FROM STDIN@ query.  The string parameter is simply
+--   an arbitrary error message that may show up in the PostgreSQL
+--   server's log.
+--
+--   A connection must be in the @CopyIn@ state in order to call this
+--   function,  otherwise a 'SqlError' exception will result.  The
+--   connection's state changes back to ready after this function
+--   is called.
+putCopyError :: Connection -> B.ByteString -> IO ()
+putCopyError conn err = mapHpgsqlErrors $ Hpgsql.Copy.putCopyError (hpgConn conn) (Text.unpack $ decodeUtf8 err)
