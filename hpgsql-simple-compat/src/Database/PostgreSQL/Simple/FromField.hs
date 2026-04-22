@@ -117,6 +117,7 @@ import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (UTCTime)
 import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
 import Data.Typeable (Typeable, typeOf)
+import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import qualified Database.PostgreSQL.LibPQ as PQ
@@ -219,6 +220,8 @@ instance FromField Day
 instance FromField CalendarDiffTime
 
 instance FromField Aeson.Value
+
+instance FromField UUID
 
 instance FromField (Unbounded Day)
 

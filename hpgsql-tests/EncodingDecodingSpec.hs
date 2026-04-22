@@ -20,6 +20,8 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TE
 import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
+import Data.UUID.Types (UUID)
+import qualified Data.UUID.Types as UUID
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (CalendarDiffTime (..))
 import Data.Vector (Vector)
@@ -101,6 +103,12 @@ spec = parallel $ do
     it
       "Numeric extreme text decoding"
       numericExtremeTextDecoding
+    it
+      "UUID values round-trip"
+      uuidRoundTrip
+    it
+      "UUID text decoding"
+      uuidTextDecoding
     it
       "Json text decoding"
       jsonTextDecoding
@@ -444,6 +452,22 @@ jsonTextDecoding conn = hedgehog $ do
     pgEscape = concatMap $ \case
       '\'' -> "''"
       c -> [c]
+
+uuidRoundTrip :: HPgConnection -> PropertyT IO ()
+uuidRoundTrip conn = hedgehog $ do
+  uuidBytes <- Gen.forAll $ Gen.bytes (Gen.singleton 16)
+  let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
+      row = Only uuid
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1" row)
+  res === [row]
+
+uuidTextDecoding :: HPgConnection -> PropertyT IO ()
+uuidTextDecoding conn = hedgehog $ do
+  uuidBytes <- Gen.forAll $ Gen.bytes (Gen.singleton 16)
+  let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
+  res <- liftIO $ queryWith rowParser conn
+    (fromString $ "SELECT '" <> UUID.toString uuid <> "'::uuid")
+  res === [Only uuid]
 
 queryCompositeType :: HPgConnection -> IO ()
 queryCompositeType conn = withRollback conn $ do

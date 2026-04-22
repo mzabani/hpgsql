@@ -41,6 +41,7 @@ import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Typeable (Proxy (..), Typeable)
+import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (EncodingContext, ToPgField (..))
@@ -122,6 +123,8 @@ instance ToField LT.Text
 instance ToField String
 
 instance ToField Aeson.Value
+
+instance ToField UUID
 
 instance ToField (Unbounded Day)
 

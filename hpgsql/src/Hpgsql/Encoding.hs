@@ -57,6 +57,8 @@ import qualified Data.Text.Lazy.Encoding as LT
 import Data.Time (CalendarDiffDays (..), CalendarDiffTime (..), Day, NominalDiffTime, UTCTime (..), ZonedTime, diffDays, diffTimeToPicoseconds, fromGregorian, picosecondsToDiffTime, secondsToNominalDiffTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Calendar.Julian (addJulianDurationClip, fromJulian)
 import Data.Tuple.Only (Only (..))
+import Data.UUID.Types (UUID)
+import qualified Data.UUID.Types as UUID
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import Data.Word (Word32, Word64)
@@ -69,7 +71,7 @@ import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, varcharOid, voidOid)
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, uuidOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
   { typeOid :: !Oid,
@@ -419,6 +421,10 @@ instance ToPgField String where
 
   -- TODO: What about client_encoding?
   toPgField encCtx = toPgField encCtx . Text.pack
+
+instance ToPgField UUID where
+  toTypeOid _ _ = Just uuidOid
+  toPgField _ = NotNull . LBS.toStrict . UUID.toByteString
 
 instance ToPgField Aeson.Value where
   toTypeOid _ _ = Just jsonbOid
@@ -867,6 +873,13 @@ instance FromPgField CalendarDiffTime where
       (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decode bs
       Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
     Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
+
+instance FromPgField UUID where
+  fieldParser = parsePgType [uuidOid] $ \case
+    Just bs -> case UUID.fromByteString (LBS.fromStrict bs) of
+      Just uuid -> Right uuid
+      Nothing -> Left "Bug in Hpgsql: UUID field could not be decoded"
+    Nothing -> Left "Cannot decode SQL null as the Haskell UUID type. Use a `Maybe UUID`"
 
 instance FromPgField Aeson.Value where
   fieldParser =

@@ -90,5 +90,6 @@ executable hpgsql-tests
     , streaming
     , text
     , time
+    , uuid-types
     , vector
   default-language: Haskell2010

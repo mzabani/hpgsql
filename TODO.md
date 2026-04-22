@@ -3,6 +3,7 @@
 - Write documentation
 - Add a bunch more types and instances
 - Prepared statements
+- Test `VALUES`
 - Move RowParserMonadic to a separate module, document why it exists
 - `run format-hs`, check all is formatted in CI as the last step
 - Connecting with a password
