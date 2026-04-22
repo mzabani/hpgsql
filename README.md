@@ -6,8 +6,8 @@ Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API la
 - Query arguments passed via the protocol instead of being escaped into the query string
 - Pipeline support
 - Capable of streaming query results directly from the socket (not with cursors), and ability to use Streams in pipelines
-- [Interruption safety](/INTERRUPTION-SAFETY.md)
-- Reasonable thread safety; users can assume thread safety everywhere unless specific (and documented) instructions say otherwise
+- [Interruption safety](/INTERRUPTION-SAFETY.md), except for very specific (and documented) edge cases.
+- Thread safety, unless specific (and documented) instructions say otherwise.
 - A SQL quasiquoter like the one in [postgresql-query](https://hackage.haskell.org/package/postgresql-query) and [hasql-interpolate](https://hackage-content.haskell.org/package/hasql-interpolate-1.0.1.0/docs/Hasql-Interpolate.html)
 - Prepared statements (TODO, actually)
 
@@ -33,3 +33,7 @@ Sadly, hpgsql's binary COPY runs in about the same time as postgresql-simple's t
 Peak allocated memory is harder to analyze.
 
 See [BENCHMARKS.md](/BENCHMARKS.md) for more details.
+
+### Contributing
+
+See [CONTRIBUTING.md](/CONTRIBUTING.md)
