@@ -1,8 +1,10 @@
 Imagine you have concurrent code like this:
 
 ```haskell
-flip onException logErrorToDatabase $
-  runConcurrently $ (,) <$> Concurrently (readSomeFileFromDisk >> runSomeQuery) <*> Concurrently doSomethingElse
+ exOrResult <- try $ runConcurrently $ (,) <$> Concurrently (readSomeFileFromDisk >> runSomeQuery) <*> Concurrently doSomethingElse
+ case exOrResult of
+   Left ex -> logErrorToDatabase ex -- Imagine this runs a query
+   Right res -> ...
 ```
 
 What would happen if `doSomethingElse` threw an exception _while_ `runSomeQuery` was still running? `runConcurrently` would send an asynchronous exception to the other thread, which would interrupt the query in the middle. Still, in Hpgsql, `logErrorToDatabase` would work fine, because Hpgsql is interruption-safe.

@@ -584,7 +584,7 @@ withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = d
         mask $
           \restore -> do
             let go = do
-                  others <- modifyMVar (sendBuffer conn) $ \case
+                  others <- modifyMVar conn.sendBuffer $ \case
                     [] -> pure ([], [])
                     ((!msgs, afterSentTxn) : xs) ->
                       if LBS.null msgs
