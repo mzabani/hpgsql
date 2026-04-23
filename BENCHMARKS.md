@@ -71,6 +71,6 @@ hpgsql Tuple Stream (100000 rows),1.27682,72.07M
 This compares hpgsql's binary copy to a `forM` loop writing text rows.
 
 ```csv
-hpgsql copyFromS binary COPY (100000 rows),1.48896,72.07M
-postgresql-simple text COPY (100000 rows),1.42165,72.10M
+hpgsql copyFromS binary COPY (100000 rows),1.39321,72.07M
+postgresql-simple text COPY (100000 rows),1.4364,72.09M
 ```

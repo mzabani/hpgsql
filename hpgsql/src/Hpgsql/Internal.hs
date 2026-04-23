@@ -111,6 +111,7 @@ import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
+import Data.Data (Proxy (..))
 import Data.Either (isLeft, isRight)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
@@ -127,7 +128,7 @@ import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnString (..))
-import Hpgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgRow (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
+import Hpgsql.Encoding (ColumnInfo (..), ConversionState (..), FromPgRow (..), RowEncoder (..), RowParser (..), RowParserMonadic (..), ToPgRow (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
@@ -1271,13 +1272,16 @@ copyFromS conn copyQ allRows =
     -- Take the controlMsgsLock to flush all buffers
     withControlMsgsLock conn (const $ pure ()) (const $ pure ()) (const $ pure ())
     encCtx <- readMVar conn.encodingContext
+    let rowEncoder = toRowEncoder
+        !toBinaryRow = rowEncoder.toBinaryCopyBytes encCtx
+        numColsBs = Builder.int16BE $ fromIntegral $ length $ rowEncoder.toTypeOids (Proxy @r)
     rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData $ Builder.byteString "PGCOPY\n\xff\r\n\0" <> Builder.int32BE 0 <> Builder.int32BE 0
     eHasRows <- S.inspect allRows
     ret <- case eHasRows of
       Left ret -> pure ret
       Right (firstRow :> otherRows) -> do
         let byteStream :: Stream (Of Builder.Builder) IO b
-            byteStream = S.map (toBinaryCopyBytes encCtx) (S.cons firstRow otherRows)
+            byteStream = S.map (\row -> numColsBs <> toBinaryRow row) (S.cons firstRow otherRows)
             chunkedByteStream :: Stream (Of Builder.Builder) IO b
             chunkedByteStream = chunkBuildersBySize 16384 byteStream
         -- Using strict bytestrings reduces allocations a tiny little bit.. not sure why, but maybe

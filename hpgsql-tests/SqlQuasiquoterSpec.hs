@@ -17,9 +17,9 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Hpgsql (Only (..))
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (ToPgRow (..))
-import Hpgsql.Parsing (ParsingOpts (..), parseSql)
+import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
+import Hpgsql.Parsing (ParsingOpts (..), parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
 import Hpgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
 import Test.Hspec
@@ -103,7 +103,7 @@ genString :: Gen String
 genString = Gen.string (Range.linearFrom 0 (-10) 10) genChar
 
 toComparableParams :: (ToPgRow a) => a -> [(Maybe Oid, BinaryField)]
-toComparableParams = map ($ EncodingContext builtinPgTypesMap) . toPgParams
+toComparableParams = map ($ EncodingContext builtinPgTypesMap) . toRowEncoder.toPgParams
 
 -- | Queries built with mkQuery, including reused $N placeholders.
 genMkQuery :: Gen (Query, [(Maybe Oid, BinaryField)])

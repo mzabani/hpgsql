@@ -1,9 +1,9 @@
 - Import postgresql-query into repository
-- Try to derive efficient COPY lines Generically
 - Write documentation
 - Add a bunch more types and instances
+  - LocalTime too
+  - CI (case-insensitive)
 - Prepared statements
-- Test `VALUES`
 - Does it make sense to have PGArray if we could just make [a] an instance for vectors?
 - Move RowParserMonadic to a separate module, document why it exists
 - `run format-hs`, check all is formatted in CI as the last step

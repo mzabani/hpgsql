@@ -2,7 +2,6 @@ module Hpgsql.Types
   ( Aeson (..),
     PgJson, -- Do not export ctor
     PGArray (..),
-    vALUES,
   )
 where
 
@@ -13,14 +12,12 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.List as List
 import Data.Typeable (Proxy (..), Typeable)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (ColumnInfo (..), EncodingContext, FieldParser (..), FromPgField (..), ToPgField (..), ToPgRow (..))
-import Hpgsql.InternalTypes (Query (..), SingleQueryFragment (..))
-import Hpgsql.TypeInfo (Oid, jsonOid, jsonbOid)
+import Hpgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..))
+import Hpgsql.TypeInfo (jsonOid, jsonbOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
 newtype PGArray a = PGArray {fromPGArray :: [a]}
@@ -32,29 +29,6 @@ instance forall a. (ToPgField a) => ToPgField (PGArray a) where
 
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
   fieldParser = PGArray . Vector.toList <$> fieldParser
-
--- | Generates a query like @VALUES ($1,$2), ($3,$4)@ from a list of rows.
--- Can be embedded inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:
---
--- > [sql| INSERT INTO emp(id,name) ^{vALUES rows} ON CONFLICT DO NOTHING |]
-vALUES :: (ToPgRow a) => [a] -> Query
-vALUES [] = error "Hpgsql: empty Values lists are not supported because postgres does not support them"
-vALUES rows =
-  let allParams = map toPgParams rows
-   in "VALUES " <> commaSeparatedRowTuples allParams
-  where
-    commaSeparatedRowTuples :: [[EncodingContext -> (Maybe Oid, BinaryField)]] -> Query
-    commaSeparatedRowTuples rowTuples =
-      let (_, queryFragsPerRow) =
-            List.mapAccumR
-              ( \(!maxArgSoFar) singleRow ->
-                  let numParams = length singleRow
-                      numberedArgs = map (QueryArgumentPlaceHolder . (+ maxArgSoFar)) [1 .. numParams]
-                   in (maxArgSoFar + numParams, FragmentOfStaticSql "(" : (List.intersperse (FragmentOfStaticSql ",") numberedArgs ++ [FragmentOfStaticSql ")"]))
-              )
-              0
-              rowTuples
-       in Query {queryString = mconcat $ List.intersperse [FragmentOfStaticSql ","] queryFragsPerRow, queryParams = mconcat rowTuples}
 
 -- | A JSON type that does not incur the costs of deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates

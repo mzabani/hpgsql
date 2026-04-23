@@ -29,7 +29,7 @@ where
 
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
 import GHC.Generics (Generic (..))
-import Hpgsql.Encoding (Only (..), ProductTypeEncoder, ToPgRow (..), genericToPgRow, (:.) (..))
+import Hpgsql.Encoding (Only (..), ProductTypeEncoder, RowEncoder (..), ToPgRow (..), genericToPgRow, (:.) (..))
 
 -- | A collection type that can be turned into a list of rendering
 -- 'Action's.
@@ -55,7 +55,7 @@ import Hpgsql.Encoding (Only (..), ProductTypeEncoder, ToPgRow (..), genericToPg
 class ToRow a where
   toRow :: a -> [Action]
   default toRow :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [Action]
-  toRow = map QueryArgument . genericToPgRow
+  toRow = map QueryArgument . toPgParams genericToPgRow
   -- ^ ToField a collection of values.
 
 instance ToRow () where

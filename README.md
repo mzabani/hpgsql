@@ -28,7 +28,7 @@ Some benchmarks show materializing large query results with hpgsql takes \~38% t
 
 When comparing hpgsql's Stream querying, hpgsql takes \~13% the time of [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and of postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
 
-Sadly, hpgsql's binary COPY runs in about the same time as postgresql-simple's textual COPY.
+hpgsql's binary COPY runs in about the same time as postgresql-simple's textual COPY.
 
 Peak allocated memory is harder to analyze.
 

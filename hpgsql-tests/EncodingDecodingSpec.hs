@@ -40,10 +40,10 @@ import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import Hpgsql.Pipeline (pipelineL, runPipeline)
-import Hpgsql.Query (mkQuery, sql)
+import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid, TypeInfo (..))
-import Hpgsql.Types (PGArray (..), PgJson, vALUES)
+import Hpgsql.Types (PGArray (..), PgJson)
 import Numeric (showHex)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
@@ -628,6 +628,9 @@ queryGenericallyDerivedTypesRoundTrip conn = hedgehog $ do
 
 valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
 valuesTypeRoundTrip conn = hedgehog $ do
-  rows <- Gen.forAll $ Gen.list (Gen.linear 1 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
-  results <- liftIO $ query conn [sql|WITH t AS (^{vALUES rows}) SELECT * FROM t ORDER BY 1, 2|]
-  results === List.sort rows
+  rows2Tuple <- Gen.forAll $ Gen.list (Gen.linear 0 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
+  rowsSingleVal <- Gen.forAll $ Gen.list (Gen.linear 0 20) $ Only <$> Gen.int (Gen.linearFrom 0 (-1000) 1000)
+  results2Tuple <- liftIO $ query conn [sql|WITH t AS (^{vALUES rows2Tuple}) SELECT * FROM t|]
+  resultsSingleVal <- liftIO $ query conn [sql|WITH t AS (^{vALUES rowsSingleVal}) SELECT * FROM t|]
+  List.sort results2Tuple === List.sort rows2Tuple
+  List.sort resultsSingleVal === List.sort rowsSingleVal

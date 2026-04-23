@@ -13,6 +13,7 @@
 - ignore: {name: "Use camelCase", within: [ Hpgsql.TypeInfo ]}
 - ignore: {name: "Avoid lambda"} # Preferred arity can be an important optimization
 - ignore: {name: "Redundant lambda"} # Preferred arity can be an important optimization
+- ignore: {name: "Collapse lambdas"} # Preferred arity can be an important optimization
 - ignore: {name: "Replace case with maybe"}
 - ignore: {name: "Use const"} # Unclear what happens to functions' preferred arity when using const
 - ignore: {name: "Use for_"}

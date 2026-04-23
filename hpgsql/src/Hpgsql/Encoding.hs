@@ -5,6 +5,7 @@ module Hpgsql.Encoding
     FromPgField (..),
     ToPgField (..),
     ToPgRow (..),
+    RowEncoder (..),
     Only (..),
     ColumnInfo (..),
     ConversionState (..),
@@ -38,14 +39,13 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
 import Data.Fixed (divMod')
-import Data.Foldable (foldMap')
+import Data.Functor.Contravariant (Contravariant (..))
 import Data.Int (Int16, Int32, Int64)
 import Data.Kind (Type)
 import qualified Data.List as List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
-import Data.Monoid (Sum (..))
 import Data.Proxy (Proxy (..))
 import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
 import qualified Data.Serialize as Cereal
@@ -66,7 +66,6 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, cast
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
-import Hpgsql.Base (StrictTuple (..))
 import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
 import qualified Hpgsql.SimpleParser as Parser
@@ -390,7 +389,7 @@ instance ToPgField (Unbounded ZonedTime) where
 
 instance ToPgField Char where
   toTypeOid _ _ = Just textOid
-  toPgField encCtx t = toPgField encCtx $ Text.singleton t
+  toPgField encCtx = let !toTextField = toPgField encCtx in \t -> toTextField $ Text.singleton t
 
 instance ToPgField ByteString where
   toTypeOid _ _ = Just byteaOid
@@ -458,37 +457,58 @@ instance (ToPgField a) => ToPgField (Vector a) where
         fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
      in NotNull (Builder.toStrictByteString fullBs)
 
-class ToPgRow a where
-  toPgParams :: a -> [EncodingContext -> (Maybe Oid, BinaryField)]
-  default toPgParams :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, BinaryField)]
-  toPgParams = genericToPgRow
+data RowEncoder a = RowEncoder
+  { toPgParams :: !(a -> [EncodingContext -> (Maybe Oid, BinaryField)]),
+    toTypeOids :: !(Proxy a -> [EncodingContext -> Maybe Oid]),
+    -- | This produces bytes for Binary COPY FROM STDIN rows, which can increase performance
+    -- and reduce memory usage comparing to deriving these bytes from `toPgParams`.
+    -- The produced bytes should not contain the total number of fields in the
+    -- beginning.
+    toBinaryCopyBytes :: !(EncodingContext -> a -> Builder.Builder)
+  }
 
-  -- | This additional method has a default implementation and therefore does not need to be overridden,
-  -- but can be overridden for better (10-20% faster in some cases) Binary COPY FROM STDIN performance.
-  -- It's unclear whether this should remain in future versions of the hpgsql.
-  toBinaryCopyBytes :: EncodingContext -> a -> Builder.Builder
-  toBinaryCopyBytes encCtx = \row ->
-    let fields = map (snd . ($ encCtx)) $ toPgParams row
-        StrictTuple (Sum numFields) fieldsBs =
-          foldMap'
-            (\el -> StrictTuple (Sum 1) (Builder.binaryField el))
-            fields
-     in Builder.int16BE numFields <> fieldsBs
+instance Contravariant RowEncoder where
+  contramap f rec = RowEncoder (\v -> rec.toPgParams (f v)) (\_ -> rec.toTypeOids Proxy) (\encCtx -> let !toBytes = rec.toBinaryCopyBytes encCtx in \v -> toBytes (f v))
+
+-- | These are from `Divisible`, but we don't currently pull in the extra dependency that has that.
+divide :: (a -> (b, c)) -> RowEncoder b -> RowEncoder c -> RowEncoder a
+divide d re1 re2 =
+  RowEncoder
+    { toPgParams = \a -> let (b, c) = d a in re1.toPgParams b ++ re2.toPgParams c,
+      toTypeOids = \_ -> re1.toTypeOids Proxy ++ re2.toTypeOids Proxy,
+      toBinaryCopyBytes = \encCtx ->
+        let !toBytes1 = re1.toBinaryCopyBytes encCtx
+            !toBytes2 = re2.toBinaryCopyBytes encCtx
+         in \a -> let (b, c) = d a in toBytes1 b <> toBytes2 c
+    }
+
+class ToPgRow a where
+  toRowEncoder :: RowEncoder a
+  default toRowEncoder :: (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
+  toRowEncoder = genericToPgRow
 
 instance ToPgRow () where
-  toPgParams () = []
+  toRowEncoder = RowEncoder (\_ -> []) (\_ -> []) (\_ -> \_ -> mempty)
+
+singleFieldRowEncoder :: forall a. (ToPgField a) => RowEncoder a
+singleFieldRowEncoder =
+  RowEncoder
+    { toPgParams = \a -> [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a)],
+      toTypeOids = \_ -> [\encodingContext -> toTypeOid (Proxy @a) encodingContext],
+      toBinaryCopyBytes = \encCtx -> let !enc = toPgField encCtx in \a -> Builder.binaryField $ enc a
+    }
 
 instance (ToPgField a) => ToPgRow (Only a) where
-  toPgParams (Only a) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a)]
+  toRowEncoder = contramap fromOnly singleFieldRowEncoder
 
 instance (ToPgField a, ToPgField b) => ToPgRow (a, b) where
-  toPgParams (a, b) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b)]
+  toRowEncoder = divide id singleFieldRowEncoder singleFieldRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
-  toPgParams (a, b, c) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c)]
+  toRowEncoder = divide (\(a, b, c) -> ((a, b), c)) toRowEncoder singleFieldRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
-  toPgParams (a, b, c, d) = [\encCtx -> (toTypeOid (Proxy @a) encCtx, toPgField encCtx a), \encCtx -> (toTypeOid (Proxy @b) encCtx, toPgField encCtx b), \encCtx -> (toTypeOid (Proxy @c) encCtx, toPgField encCtx c), \encCtx -> (toTypeOid (Proxy @d) encCtx, toPgField encCtx d)]
+  toRowEncoder = divide (\(a, b, c, d) -> ((a, b), (c, d))) toRowEncoder toRowEncoder
 
 -- This instance implements toBinaryCopyBytes as well because we did this
 -- to test if this method can help improve performance of COPY in our
@@ -500,36 +520,49 @@ instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, 
 --     toPgFieldWithSize v = Builder.binaryField $ toPgField encCtx v
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
-  toPgParams (a, b, c, d, e) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e)]
+  toRowEncoder = divide (\(a, b, c, d, e) -> ((a, b, c), (d, e))) toRowEncoder toRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f) => ToPgRow (a, b, c, d, e, f) where
-  toPgParams (a, b, c, d, e, f) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f)]
+  toRowEncoder = divide (\(a, b, c, d, e, f) -> ((a, b, c), (d, e, f))) toRowEncoder toRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g) => ToPgRow (a, b, c, d, e, f, g) where
-  toPgParams (a, b, c, d, e, f, g) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g)]
+  toRowEncoder = divide (\(a, b, c, d, e, f, g) -> ((a, b, c), (d, e, f, g))) toRowEncoder toRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h) => ToPgRow (a, b, c, d, e, f, g, h) where
-  toPgParams (a, b, c, d, e, f, g, h) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h)]
+  toRowEncoder = divide (\(a, b, c, d, e, f, g, h) -> ((a, b, c, d), (e, f, g, h))) toRowEncoder toRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i) => ToPgRow (a, b, c, d, e, f, g, h, i) where
-  toPgParams (a, b, c, d, e, f, g, h, i) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h), \encodingContext -> (toTypeOid (Proxy @i) encodingContext, toPgField encodingContext i)]
+  toRowEncoder = divide (\(a, b, c, d, e, f, g, h, i) -> ((a, b, c, d), (e, f, g, h, i))) toRowEncoder toRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j) => ToPgRow (a, b, c, d, e, f, g, h, i, j) where
-  toPgParams (a, b, c, d, e, f, g, h, i, j) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h), \encodingContext -> (toTypeOid (Proxy @i) encodingContext, toPgField encodingContext i), \encodingContext -> (toTypeOid (Proxy @j) encodingContext, toPgField encodingContext j)]
+  toRowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j) -> ((a, b, c, d, e), (f, g, h, i, j))) toRowEncoder toRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  toPgParams (a, b, c, d, e, f, g, h, i, j, k) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a), \encodingContext -> (toTypeOid (Proxy @b) encodingContext, toPgField encodingContext b), \encodingContext -> (toTypeOid (Proxy @c) encodingContext, toPgField encodingContext c), \encodingContext -> (toTypeOid (Proxy @d) encodingContext, toPgField encodingContext d), \encodingContext -> (toTypeOid (Proxy @e) encodingContext, toPgField encodingContext e), \encodingContext -> (toTypeOid (Proxy @f) encodingContext, toPgField encodingContext f), \encodingContext -> (toTypeOid (Proxy @g) encodingContext, toPgField encodingContext g), \encodingContext -> (toTypeOid (Proxy @h) encodingContext, toPgField encodingContext h), \encodingContext -> (toTypeOid (Proxy @i) encodingContext, toPgField encodingContext i), \encodingContext -> (toTypeOid (Proxy @j) encodingContext, toPgField encodingContext j), \encodingContext -> (toTypeOid (Proxy @k) encodingContext, toPgField encodingContext k)]
+  toRowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j, k) -> ((a, b, c, d, e, f), (g, h, i, j, k))) toRowEncoder toRowEncoder
 
-instance (ToPgField a) => ToPgRow [a] where
-  toPgParams = map (\v encodingContext -> let typOid = toTypeOid (Proxy @a) encodingContext in (typOid, toPgField encodingContext v))
+-- instance (ToPgField a) => ToPgRow [a] where
+--   toRowEncoder = RowEncoder {
+--     toPgParams = \xs -> concatMap toPgParams xs
+--     , toTypeOids = \_ -> concatMap (\)
+--   } $ \cols -> map (\v encodingContext -> let typOid = toTypeOid (Proxy @a) encodingContext in (typOid, toPgField encodingContext v)) cols
 
 -- | A way to compose rows.
 data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
 
 infixr 3 :.
 
-instance (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
-  toPgParams (ra :. rb) = toPgParams ra ++ toPgParams rb
+instance forall a b. (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
+  toRowEncoder =
+    let !re1 = toRowEncoder @a
+        !re2 = toRowEncoder @b
+     in RowEncoder
+          { toPgParams = \(a :. b) -> re1.toPgParams a ++ re2.toPgParams b,
+            toTypeOids = \_ -> re1.toTypeOids (Proxy @a) ++ re2.toTypeOids (Proxy @b),
+            toBinaryCopyBytes = \encCtx ->
+              let !toBytes1 = re1.toBinaryCopyBytes encCtx
+                  !toBytes2 = re2.toBinaryCopyBytes encCtx
+               in \(a :. b) -> toBytes1 a <> toBytes2 b
+          }
 
 instance (FromPgRow a, FromPgRow b) => FromPgRow (a :. b) where
   rowParser = (:.) <$> rowParser <*> rowParser
@@ -939,7 +972,6 @@ arrayField !elementParser =
         else do
           !dim_i :: Int <- fromIntegral <$> int32Parser
           !_lb_i <- int32Parser
-          -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
           unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
           Vector.replicateM dim_i $ do
             size :: Int <- fromIntegral <$> int32Parser
@@ -1012,20 +1044,20 @@ instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
 instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
   genRowDecoder = fmap K1 $ singleColRowParser $ fieldParser @a
 
-genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => a -> [EncodingContext -> (Maybe Oid, BinaryField)]
-genericToPgRow = genRowEncoder . from
+genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
+genericToPgRow = contramap from genRowEncoder
 
 class ProductTypeEncoder f where
-  genRowEncoder :: f a -> [EncodingContext -> (Maybe Oid, BinaryField)]
+  genRowEncoder :: RowEncoder (f a)
 
 instance (ProductTypeEncoder a, ProductTypeEncoder b) => ProductTypeEncoder (a :*: b) where
-  genRowEncoder (a :*: b) = genRowEncoder a ++ genRowEncoder b
+  genRowEncoder = divide (\(a :*: b) -> (a, b)) genRowEncoder genRowEncoder
 
 instance (ProductTypeEncoder f) => ProductTypeEncoder (M1 i c f) where
-  genRowEncoder (M1 x) = genRowEncoder x
+  genRowEncoder = contramap unM1 genRowEncoder
 
 instance (ToPgField a) => ProductTypeEncoder (K1 r a) where
-  genRowEncoder (K1 a) = [\encodingContext -> (toTypeOid (Proxy @a) encodingContext, toPgField encodingContext a)]
+  genRowEncoder = contramap unK1 singleFieldRowEncoder
 
 newtype LowerCasedPgEnum a = LowerCasedPgEnum a
 
