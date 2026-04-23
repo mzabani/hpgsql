@@ -20,10 +20,10 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TE
 import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
-import Data.UUID.Types (UUID)
-import qualified Data.UUID.Types as UUID
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (CalendarDiffTime (..))
+import Data.UUID.Types (UUID)
+import qualified Data.UUID.Types as UUID
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import DbUtils
@@ -33,17 +33,17 @@ import DbUtils
   )
 import GHC.Float (float2Double)
 import GHC.Generics (Generic)
+import Hedgehog (PropertyT, annotateShow, (===))
+import qualified Hedgehog as Gen
+import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, singleColRowParser)
 import Hpgsql.Pipeline (pipelineL, runPipeline)
 import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid, TypeInfo (..))
-import Hpgsql.Types (PGArray (..), PgJson, Values (..), valuesToQuery)
-import Hedgehog (PropertyT, annotateShow, (===))
-import qualified Hedgehog as Gen
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Gen
+import Hpgsql.Types (PGArray (..), PgJson, vALUES)
 import Numeric (showHex)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
@@ -112,9 +112,9 @@ spec = parallel $ do
     it
       "Json text decoding"
       jsonTextDecoding
-  -- it
-  --   "Values type round-trip"
-  --   valuesTypeRoundTrip
+    it
+      "Values type round-trip"
+      valuesTypeRoundTrip
   aroundConn $ describe "Custom types" $ do
     it "Composite type" queryCompositeType
     it
@@ -465,8 +465,12 @@ uuidTextDecoding :: HPgConnection -> PropertyT IO ()
 uuidTextDecoding conn = hedgehog $ do
   uuidBytes <- Gen.forAll $ Gen.bytes (Gen.singleton 16)
   let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
-  res <- liftIO $ queryWith rowParser conn
-    (fromString $ "SELECT '" <> UUID.toString uuid <> "'::uuid")
+  res <-
+    liftIO $
+      queryWith
+        rowParser
+        conn
+        (fromString $ "SELECT '" <> UUID.toString uuid <> "'::uuid")
   res === [Only uuid]
 
 queryCompositeType :: HPgConnection -> IO ()
@@ -622,9 +626,8 @@ queryGenericallyDerivedTypesRoundTrip conn = hedgehog $ do
   res1 === [someRec]
   res2 === [somePT]
 
--- valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
--- valuesTypeRoundTrip conn = hedgehog $ do
---   rows <- Gen.forAll $ Gen.list (Gen.linear 1 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
---   let valsQuery = valuesToQuery (Values rows)
---   results <- liftIO $ query conn [sql|WITH t AS (^{valsQuery}) SELECT * FROM t ORDER BY 1, 2|]
---   results === List.sort rows
+valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
+valuesTypeRoundTrip conn = hedgehog $ do
+  rows <- Gen.forAll $ Gen.list (Gen.linear 1 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
+  results <- liftIO $ query conn [sql|WITH t AS (^{vALUES rows}) SELECT * FROM t ORDER BY 1, 2|]
+  results === List.sort rows

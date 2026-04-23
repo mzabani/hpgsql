@@ -5,7 +5,6 @@ module Hpgsql.Query
   ( Query, -- Do not export constructor
     SingleQuery, -- Do not export constructor
     sql,
-    commaSeparatedRowTuples,
     mkQueryInternal,
     breakQueryIntoStatements,
     mkQuery,
@@ -82,21 +81,6 @@ mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarN
               )
               blocks
        in Query {queryString = queryFrags, queryParams = allParams}
-
--- | Meant for internal usage, helps build "VALUES (..), (..)"-like statements.
--- Users of hpgsql should just use the `Values` type instead of this.
-commaSeparatedRowTuples :: [[EncodingContext -> (Maybe Oid, BinaryField)]] -> Query
-commaSeparatedRowTuples rowTuples =
-  let (_, queryFrags) =
-        List.mapAccumR
-          ( \(!maxArgSoFar) singleRow ->
-              let numParams = length singleRow
-                  numberedArgs = map (QueryArgumentPlaceHolder . (+ maxArgSoFar)) [1 .. numParams]
-               in (maxArgSoFar + numParams, FragmentOfStaticSql "(" : (List.intersperse (FragmentOfStaticSql ",") numberedArgs ++ [FragmentOfStaticSql "),"]))
-          )
-          0
-          rowTuples
-   in Query {queryString = mconcat queryFrags, queryParams = mconcat rowTuples}
 
 -- | Takes in a query string with query arguments as question marks (NOT dollar-numbered arguments).
 -- Example:

@@ -4,6 +4,7 @@
 - Add a bunch more types and instances
 - Prepared statements
 - Test `VALUES`
+- Does it make sense to have PGArray if we could just make [a] an instance for vectors?
 - Move RowParserMonadic to a separate module, document why it exists
 - `run format-hs`, check all is formatted in CI as the last step
 - Connecting with a password
