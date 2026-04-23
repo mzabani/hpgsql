@@ -1,4 +1,3 @@
-- Import postgresql-query into repository
 - Write documentation
 - Add a bunch more types and instances
   - LocalTime too
@@ -15,3 +14,4 @@
 ## Less important:
 - Experiment with TCP NoDelay
 - Connecting with TLS encrypted connection (can come later?)
+- Import postgresql-query into repository? Not sure.

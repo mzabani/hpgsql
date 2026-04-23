@@ -49,11 +49,19 @@ library
     Database.PostgreSQL.Simple.TypeInfo.Macro
     Database.PostgreSQL.Simple.TypeInfo.Static
     Database.PostgreSQL.Simple.Types
+    Database.PostgreSQL.Simple.HpgsqlUtils
+    -- The next modules are from postgresql-query
+    Database.PostgreSQL.Query.Functions
+    Database.PostgreSQL.Query.SqlBuilder
+    Database.PostgreSQL.Query.SqlBuilder.Builder
+    Database.PostgreSQL.Query.SqlBuilder.Class
+    Database.PostgreSQL.Query.SqlBuilder.Types
+    Database.PostgreSQL.Query.TH.SqlExp
+    Database.PostgreSQL.Query.Types
 
   -- Other-modules:
   other-modules:
     Database.PostgreSQL.Simple.Compat
-    Database.PostgreSQL.Simple.HpgsqlUtils
     Database.PostgreSQL.Simple.HStore.Implementation
     Database.PostgreSQL.Simple.Internal.PQResultUtils
     Database.PostgreSQL.Simple.Time.Implementation
@@ -73,6 +81,7 @@ library
     , attoparsec
     , hpgsql
     , hashable
+    , mtl
     , streaming
     , time-compat
     , transformers

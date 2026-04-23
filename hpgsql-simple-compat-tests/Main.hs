@@ -37,6 +37,7 @@ import Database.PostgreSQL.Simple.Types (Identifier (..), PGArray (..), Query (.
 import Exception (testExceptions)
 import GHC.Generics (Generic)
 import Notify
+import QuasiQuoters (testQuasiQuoters)
 import Serializable
 import System.Environment (getEnvironment)
 import System.FilePath
@@ -82,7 +83,10 @@ tests env =
         testCase "2-ary generic" . testGeneric2,
         testCase "3-ary generic" . testGeneric3,
         testCase "Timeout" . testTimeout,
-        testCase "Exceptions" . testExceptions
+        testCase "Exceptions" . testExceptions,
+        -- These are tests of our compat layer with postgresql-query,
+        -- and they're new; they don't come from any existing repo
+        testQuasiQuoters
       ]
 
 testBytea :: TestEnv -> TestTree

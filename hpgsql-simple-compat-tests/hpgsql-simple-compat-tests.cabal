@@ -32,6 +32,7 @@ executable hpgsql-simple-compat-tests
       Interval
       Notify
       Serializable
+      QuasiQuoters
       Time
   hs-source-dirs:
       .
@@ -40,9 +41,11 @@ executable hpgsql-simple-compat-tests
       NamedFieldPuns
       OverloadedStrings
       PatternGuards
+      QuasiQuotes
       Rank2Types
       RecordWildCards
       ScopedTypeVariables
+      TemplateHaskell
   ghc-options: -O1 -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind
   if flag(threaded)
     ghc-options: -threaded

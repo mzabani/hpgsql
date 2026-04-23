@@ -77,10 +77,6 @@ import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TransactionStatus (..))
 import Network.Socket (AddrInfo, Socket)
 import System.Mem.Weak (Weak)
 
--- ------------------------------------------------------------------
--- Query types (moved from Hpgsql.Query)
--- ------------------------------------------------------------------
-
 -- | A fragment of a single SQL statement, which is either static SQL or
 -- a placeholder for a query argument.
 data SingleQueryFragment
