@@ -29,7 +29,7 @@ vALUES [] =
   let rowOids = toRowEncoder.toTypeOids (Proxy @a)
       nullParams :: [EncodingContext -> (Maybe Oid, BinaryField)]
       nullParams = map (\f -> \encCtx -> (f encCtx, SqlNull)) rowOids
-   in [sql|(SELECT * FROM (VALUES ^{commaSeparatedRowTuples [nullParams]}) LIMIT 0)|]
+   in [sql|(SELECT * FROM (VALUES ^{commaSeparatedRowTuples [nullParams]}) _subq LIMIT 0)|]
 vALUES rows =
   let allParams = map toRowEncoder.toPgParams rows
    in "VALUES " <> commaSeparatedRowTuples allParams
