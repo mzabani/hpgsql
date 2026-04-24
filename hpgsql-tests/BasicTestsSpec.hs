@@ -12,7 +12,7 @@ import DbUtils
     withRollback,
   )
 import Hpgsql
-import Hpgsql.Encoding (toMonadicRowParser)
+import Hpgsql.Encoding.RowParserMonadic (toMonadicRowParser)
 import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Transaction (transactionStatus)
 import Streaming (Of (..))
@@ -86,13 +86,13 @@ queryingAndReturningAFewRows conn =
       queryWithM ((,) <$> toMonadicRowParser (rowParser @(Only Int)) <*> toMonadicRowParser (rowParser @(Only Int))) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
       queryWithM
         ( do
-            f1 <- toMonadicRowParser (rowParser @(Only Int))
-            f2 <- toMonadicRowParser (rowParser @(Only Int))
-            pure (f1, f2)
+            (f1, f2) <- toMonadicRowParser (rowParser @(Int, Int))
+            Only f3 <- toMonadicRowParser (rowParser @(Only Int))
+            pure (f1, f2, f3)
         )
         conn
-        "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums"
-        `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
+        "with nums(v) as (values (37), (49), (-13)) SELECT v, 10, v FROM nums"
+        `shouldReturn` [(37, 10, 37), (49, 10, 49), ((-13), 10, (-13))]
 
 queryingAndReturningAFewRowsMoreThanOneStatement :: HPgConnection -> IO ()
 queryingAndReturningAFewRowsMoreThanOneStatement conn = do

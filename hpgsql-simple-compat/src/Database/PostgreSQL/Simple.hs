@@ -154,7 +154,7 @@ import Database.PostgreSQL.Simple.Types
     (:.) (..),
   )
 import qualified Hpgsql
-import Hpgsql.Encoding (RowParserMonadic)
+import Hpgsql.Encoding.RowParserMonadic (RowParserMonadic)
 import qualified Hpgsql.Query as Hpgsql
 
 -- | Format a query string with a variable number of rows.

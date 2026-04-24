@@ -31,6 +31,7 @@ library
       Hpgsql.Connection
       Hpgsql.Copy
       Hpgsql.Encoding
+      Hpgsql.Encoding.RowParserMonadic
       Hpgsql.InternalTypes
       Hpgsql.Notification
       Hpgsql.Parsing

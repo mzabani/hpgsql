@@ -33,7 +33,7 @@ import Database.PostgreSQL.Simple.Internal as Base hiding (result, row)
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Hpgsql (Query, execute_, queryWithM)
-import Hpgsql.Encoding (RowParserMonadic)
+import Hpgsql.Encoding.RowParserMonadic (RowParserMonadic)
 import Hpgsql.Query (escapeIdentifier, sql)
 
 -- | Cursor within a transaction.
