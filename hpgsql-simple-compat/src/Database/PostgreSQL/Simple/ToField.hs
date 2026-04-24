@@ -40,6 +40,7 @@ import Data.Text (Text)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
+import Data.Time.LocalTime.Compat (LocalTime)
 import Data.Typeable (Proxy (..), Typeable)
 import Data.CaseInsensitive (CI)
 import Data.UUID.Types (UUID)
@@ -110,6 +111,8 @@ instance ToField NominalDiffTime
 instance ToField UTCTime
 
 instance ToField ZonedTime
+
+instance ToField LocalTime
 
 instance ToField Char
 

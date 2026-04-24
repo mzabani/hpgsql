@@ -54,7 +54,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LT
-import Data.Time (CalendarDiffDays (..), CalendarDiffTime (..), Day, NominalDiffTime, UTCTime (..), ZonedTime, diffDays, diffTimeToPicoseconds, fromGregorian, picosecondsToDiffTime, secondsToNominalDiffTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (CalendarDiffDays (..), CalendarDiffTime (..), Day, LocalTime (..), NominalDiffTime, UTCTime (..), ZonedTime, diffDays, diffTimeToPicoseconds, fromGregorian, picosecondsToDiffTime, secondsToNominalDiffTime, timeOfDayToTime, timeToTimeOfDay, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Calendar.Julian (addJulianDurationClip, fromJulian)
 import Data.Tuple.Only (Only (..))
 import Data.UUID.Types (UUID)
@@ -70,7 +70,7 @@ import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestamptzOid, uuidOid, varcharOid, voidOid)
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
   { typeOid :: !Oid,
@@ -386,6 +386,13 @@ instance ToPgField (Unbounded ZonedTime) where
     NegInfinity -> NotNull $ Cereal.encode @Int64 minBound
     Finite v -> toPgField encCtx v
     PosInfinity -> NotNull $ Cereal.encode @Int64 maxBound
+
+instance ToPgField LocalTime where
+  toTypeOid _ _ = Just timestampOid
+  toPgField _ (LocalTime localDay localTimeOfDay) = NotNull $ Cereal.encode @Int64 totalusecs
+    where
+      day :: Int64 = fromInteger $ localDay `diffDays` fromJulian 1999 12 19
+      totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds (timeOfDayToTime localTimeOfDay) `div` 1_000_000)
 
 instance ToPgField Char where
   toTypeOid _ _ = Just textOid
@@ -897,6 +904,15 @@ instance FromPgField (Unbounded ZonedTime) where
                     parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
                  in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
+
+instance FromPgField LocalTime where
+  fieldParser = parsePgType [timestampOid] $ \case
+    Just bs -> do
+      totalusecs <- Cereal.decode @Int64 bs
+      let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+          parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+      Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    Nothing -> Left "Cannot decode SQL null as the Haskell LocalTime type. Use a `Maybe LocalTime`"
 
 instance FromPgField Day where
   fieldParser = parsePgType [dateOid] $ \case

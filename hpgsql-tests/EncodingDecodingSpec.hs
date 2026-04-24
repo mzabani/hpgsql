@@ -9,6 +9,8 @@ import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
 import Data.Functor ((<&>))
 import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
@@ -20,11 +22,9 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as LT
-import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
+import Data.Time (Day, DiffTime, LocalTime (..), NominalDiffTime, TimeOfDay, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime, timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (CalendarDiffTime (..))
-import Data.CaseInsensitive (CI)
-import qualified Data.CaseInsensitive as CI
 import Data.UUID.Types (UUID)
 import qualified Data.UUID.Types as UUID
 import Data.Vector (Vector)
@@ -118,6 +118,12 @@ spec = parallel $ do
     it
       "CI Text text decoding"
       ciTextTextDecoding
+    it
+      "LocalTime values round-trip"
+      localTimeRoundTrip
+    it
+      "LocalTime text decoding"
+      localTimeTextDecoding
     it
       "Json text decoding"
       jsonTextDecoding
@@ -501,6 +507,43 @@ ciTextTextDecoding conn = hedgehog $ do
         conn
         (fromString $ "SELECT '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text")
   res === [(CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))]
+
+localTimeRoundTrip :: HPgConnection -> PropertyT IO ()
+localTimeRoundTrip conn = hedgehog $ do
+  year :: Integer <- Gen.forAll $ Gen.integral (Gen.linear (-4712) 294275)
+  month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
+  day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 28
+  timeOfDayMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear 0 86_399_999_999
+  let localDay = fromGregorian year month day
+      localTimeOfDay = timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
+      lt = LocalTime localDay localTimeOfDay
+      row = Only lt
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1" row)
+  res === [row]
+
+localTimeTextDecoding :: HPgConnection -> PropertyT IO ()
+localTimeTextDecoding conn = hedgehog $ do
+  year :: Integer <- Gen.forAll $ Gen.integral (Gen.linear 1 9999)
+  month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
+  day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 28
+  timeOfDayMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear 0 86_399_999_999
+  let localDay = fromGregorian year month day
+      localTimeOfDay = timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
+      lt = LocalTime localDay localTimeOfDay
+  res <-
+    liftIO $ withRollback conn $ do
+      -- Doesn't seem like the timezone matters, but we set to
+      -- UTC because this is a textual representation, and the
+      -- test's intention is only to make sure what we don't have
+      -- FromPgField and ToPgField instances for `LocalTime` that
+      -- are the inverse of each other but produce bogus values
+      -- nonetheless.
+      execute conn "SET LOCAL timezone = 'UTC'"
+      queryWith
+        rowParser
+        conn
+        (fromString $ "SELECT '" <> iso8601Show lt <> "'::timestamp")
+  res === [Only lt]
 
 queryCompositeType :: HPgConnection -> IO ()
 queryCompositeType conn = withRollback conn $ do

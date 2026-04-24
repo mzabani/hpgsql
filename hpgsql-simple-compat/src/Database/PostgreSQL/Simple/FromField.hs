@@ -115,7 +115,7 @@ import Data.Text (Text)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (UTCTime)
-import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
+import Data.Time.LocalTime.Compat (CalendarDiffTime, LocalTime, ZonedTime)
 import Data.Typeable (Typeable, typeOf)
 import Data.CaseInsensitive (CI)
 import Data.UUID.Types (UUID)
@@ -215,6 +215,8 @@ instance FromField String
 instance FromField UTCTime
 
 instance FromField ZonedTime
+
+instance FromField LocalTime
 
 instance FromField Day
 
