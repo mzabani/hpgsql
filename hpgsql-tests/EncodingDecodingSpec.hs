@@ -159,10 +159,10 @@ valuesRoundTrip conn = do
 
 byteaValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 byteaValuesRoundTrip conn = hedgehog $ do
-  someBs :: ByteString <- Gen.forAll $ Gen.bytes (Gen.linear 0 50)
-  let lazyBs :: LBS.ByteString = LBS.fromStrict someBs
-      row = (someBs, lazyBs)
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2" row)
+  let genBs = Gen.bytes (Gen.linear 0 50)
+  (b1, b2, b3, b4, b5) <- Gen.forAll $ (,,,,) <$> genBs <*> genBs <*> genBs <*> genBs <*> genBs
+  let row = (b1, LBS.fromStrict b1, b2, LBS.fromStrict b2, b3, LBS.fromStrict b3, b4, LBS.fromStrict b4, b5, LBS.fromStrict b5)
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 dateAndTimestampTzRoundTrip :: HPgConnection -> PropertyT IO ()
@@ -470,10 +470,12 @@ jsonTextDecoding conn = hedgehog $ do
 
 uuidRoundTrip :: HPgConnection -> PropertyT IO ()
 uuidRoundTrip conn = hedgehog $ do
-  uuidBytes <- Gen.forAll $ Gen.bytes (Gen.singleton 16)
-  let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
-      row = Only uuid
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1" row)
+  let genUuid = do
+        uuidBytes <- Gen.bytes (Gen.singleton 16)
+        let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
+        pure uuid
+  row <- Gen.forAll $ (,,,,,,,,,) <$> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 uuidTextDecoding :: HPgConnection -> PropertyT IO ()
@@ -490,11 +492,14 @@ uuidTextDecoding conn = hedgehog $ do
 
 ciTextRoundTrip :: HPgConnection -> PropertyT IO ()
 ciTextRoundTrip conn = hedgehog $ do
-  someText :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
-  someLazyText :: LT.Text <- Gen.forAll $ LT.fromStrict <$> Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
-  someString :: String <- Gen.forAll $ Gen.string (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
-  let row = (CI.mk someText, CI.mk someLazyText, CI.mk someString)
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3" row)
+  let genCIText = CI.mk <$> Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
+      genCILazyText = CI.mk . LT.fromStrict <$> Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
+      genCIString = CI.mk <$> Gen.string (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
+  row <- Gen.forAll $ (,,,,,,,,,)
+    <$> genCIText <*> genCIText <*> genCIText <*> genCIText
+    <*> genCILazyText <*> genCILazyText <*> genCILazyText
+    <*> genCIString <*> genCIString <*> genCIString
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 ciTextTextDecoding :: HPgConnection -> PropertyT IO ()
@@ -510,26 +515,30 @@ ciTextTextDecoding conn = hedgehog $ do
 
 localTimeRoundTrip :: HPgConnection -> PropertyT IO ()
 localTimeRoundTrip conn = hedgehog $ do
-  year :: Integer <- Gen.forAll $ Gen.integral (Gen.linear (-4712) 294275)
-  month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
-  day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 28
-  timeOfDayMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear 0 86_399_999_999
-  let localDay = fromGregorian year month day
-      localTimeOfDay = timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
-      lt = LocalTime localDay localTimeOfDay
-      row = Only lt
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1" row)
+  let genLocalTime = do
+        year <- Gen.integral (Gen.linear (-4712) 294275)
+        month <- Gen.int $ Gen.linear 1 12
+        day <- Gen.int $ Gen.linear 1 28
+        timeOfDayMicros <- Gen.integral $ Gen.linear 0 86_399_999_999
+        let localDay = fromGregorian year month day
+            localTimeOfDay = timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
+        pure $ LocalTime localDay localTimeOfDay
+  row <- Gen.forAll $ (,,,,,,,,,) <$> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 localTimeTextDecoding :: HPgConnection -> PropertyT IO ()
 localTimeTextDecoding conn = hedgehog $ do
-  year :: Integer <- Gen.forAll $ Gen.integral (Gen.linear 1 9999)
-  month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
-  day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 28
-  timeOfDayMicros :: Integer <- Gen.forAll $ Gen.integral $ Gen.linear 0 86_399_999_999
-  let localDay = fromGregorian year month day
-      localTimeOfDay = timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
-      lt = LocalTime localDay localTimeOfDay
+  let genLocalTime = do
+        year <- Gen.integral (Gen.linear 1 9999)
+        month <- Gen.int $ Gen.linear 1 12
+        day <- Gen.int $ Gen.linear 1 28
+        timeOfDayMicros <- Gen.integral $ Gen.linear 0 86_399_999_999
+        let localDay = fromGregorian year month day
+            localTimeOfDay = timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
+        pure $ LocalTime localDay localTimeOfDay
+  row <- Gen.forAll $ (,,,,,,,,,) <$> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime
+  let (lt1, lt2, lt3, lt4, lt5, lt6, lt7, lt8, lt9, lt10) = row
   res <-
     liftIO $ withRollback conn $ do
       -- Doesn't seem like the timezone matters, but we set to
@@ -542,8 +551,19 @@ localTimeTextDecoding conn = hedgehog $ do
       queryWith
         rowParser
         conn
-        (fromString $ "SELECT '" <> iso8601Show lt <> "'::timestamp")
-  res === [Only lt]
+        ( fromString $
+            "SELECT '" <> iso8601Show lt1 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt2 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt3 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt4 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt5 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt6 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt7 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt8 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt9 <> "'::timestamp"
+              <> ", '" <> iso8601Show lt10 <> "'::timestamp"
+        )
+  res === [row]
 
 queryCompositeType :: HPgConnection -> IO ()
 queryCompositeType conn = withRollback conn $ do
