@@ -96,6 +96,8 @@ instance ToField Oid
 
 instance ToField Scientific
 
+instance ToField Rational
+
 instance ToField Float
 
 instance ToField Double

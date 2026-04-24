@@ -13,6 +13,7 @@ import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
+import Data.Ratio ((%))
 import Data.Scientific (Scientific)
 import Data.String (fromString)
 import Data.Text (Text)
@@ -70,6 +71,9 @@ spec = parallel $ do
     it
       "Numeric extreme values round-trip"
       numericExtremeValuesRoundTrip
+    it
+      "Rational values round-trip"
+      rationalValuesRoundTrip
     it
       "Json values round-trip"
       jsonValuesRoundTrip
@@ -237,6 +241,16 @@ numericExtremeValuesRoundTrip conn = do
     negInfFloat = ((-1) / 0) :: Float
     posInfDouble = (1 / 0) :: Double
     negInfDouble = ((-1) / 0) :: Double
+
+rationalValuesRoundTrip :: HPgConnection -> IO ()
+rationalValuesRoundTrip conn = do
+  -- Rationals with terminating decimal representations round-trip exactly
+  let row = (1 % 2 :: Rational, 3 % 4 :: Rational, 7 % 8 :: Rational, 1 % 5 :: Rational, (-3) % 20 :: Rational, 0 % 1 :: Rational, 123456789 % 1000 :: Rational)
+  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7" row) `shouldReturn` [row]
+  -- Decoding from integer types
+  let intRow = (42 :: Int32, (-7) :: Int16)
+      ratRes = (42 % 1 :: Rational, (-7) % 1 :: Rational)
+  queryWith rowParser conn (mkQuery "SELECT $1, $2" intRow) `shouldReturn` [ratRes]
 
 jsonValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 jsonValuesRoundTrip conn = hedgehog $ do

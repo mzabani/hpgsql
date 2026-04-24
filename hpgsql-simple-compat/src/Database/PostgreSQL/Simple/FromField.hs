@@ -195,6 +195,8 @@ instance FromField Oid
 
 instance FromField Scientific
 
+instance FromField Rational
+
 instance FromField Float
 
 instance FromField Double

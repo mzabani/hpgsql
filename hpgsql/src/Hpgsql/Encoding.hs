@@ -45,6 +45,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.Monoid (Sum (..))
 import Data.Proxy (Proxy (..))
+import Data.Ratio (Ratio)
 import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
 import qualified Data.Serialize as Cereal
 import Data.Text (Text)
@@ -244,6 +245,10 @@ instance ToPgField Int64 where
 instance ToPgField Integer where
   toTypeOid _ _ = Just numericOid
   toPgField encCtx = \n -> toPgField @Scientific encCtx (fromIntegral n)
+
+instance ToPgField (Ratio Integer) where
+  toTypeOid _ _ = Just numericOid
+  toPgField encCtx = \r -> toPgField @Scientific encCtx (fromRational r)
 
 instance ToPgField Oid where
   toTypeOid _ _ = Just oidOid
@@ -751,6 +756,9 @@ instance FromPgField Scientific where
                 Nothing -> Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`",
         allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . typeOid
       }
+
+instance FromPgField (Ratio Integer) where
+  fieldParser = toRational <$> fieldParser @Scientific
 
 binaryTrue :: ByteString
 binaryTrue = Cereal.encode True
