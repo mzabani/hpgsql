@@ -54,11 +54,7 @@ tests env =
       -- Some files for the tests below have been removed
       -- to make hpgsql-simple-compat simply compile.
       -- We should bring them back little by little.
-      [ -- This first test is added to test hpgsql query generation
-        -- with Identifiers, since they're not truly query arguments and
-        -- so complicate query generation code a bit.
-        testCase "Query generation with identifiers" . testQueryGenWithIdents,
-        testBytea,
+      [ testBytea,
         testCase "ExecuteMany" . testExecuteMany,
         testCase "Fold" . testFold,
         testCase "Notify" . testNotify,
@@ -86,7 +82,11 @@ tests env =
         testCase "Exceptions" . testExceptions,
         -- These are tests of our compat layer with postgresql-query,
         -- and they're new; they don't come from any existing repo
-        testQuasiQuoters
+        testQuasiQuoters,
+        -- These are tests that didn't exist in postgresql-simple's test suite,
+        -- added here to better test hpgsql-simple-compat
+        testCase "Generic record with custom types" . testGenericRecWithCustomTypes,
+        testCase "Query generation with identifiers" . testQueryGenWithIdents
       ]
 
 testBytea :: TestEnv -> TestTree
@@ -721,3 +721,33 @@ withConnstring kont = do
 
 newtype SomeText = SomeText Text
   deriving newtype (FromField)
+
+-- Tests added for hpgsql-simple-compat. These types should compile.
+newtype SomeInt = SomeInt Int
+  deriving newtype (FromField, ToField, Show, Eq)
+
+newtype SomeBool = SomeBool Bool
+  deriving newtype (FromField, ToField, Show, Eq)
+
+data GenericRecWithCustomTypes = GenericRecWithCustomTypes
+  { boolField :: SomeBool,
+    intField :: SomeInt,
+    otherInt :: Int,
+    someJson :: Value,
+    otherBool :: SomeBool
+  }
+  deriving stock (Generic, Show, Eq)
+  deriving anyclass (FromRow, ToRow)
+
+testGenericRecWithCustomTypes :: TestEnv -> Assertion
+testGenericRecWithCustomTypes TestEnv {..} = do
+  let x0 =
+        GenericRecWithCustomTypes
+          { boolField = SomeBool True,
+            intField = SomeInt 42,
+            otherInt = 7,
+            someJson = object ["key" .= ("value" :: Text)],
+            otherBool = SomeBool False
+          }
+  r <- query conn "SELECT ?::bool, ?::int, ?::int, ?::jsonb, ?::bool" x0
+  r @?= [x0]

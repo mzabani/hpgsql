@@ -16,8 +16,6 @@ module Hpgsql.Encoding
     AllowNull (..),
     LowerCasedPgEnum (..),
     (:.) (..),
-    ProductTypeDecoder (..),
-    ProductTypeEncoder (..),
     anyTypeDecoder,
     singleColRowParser,
     arrayField,

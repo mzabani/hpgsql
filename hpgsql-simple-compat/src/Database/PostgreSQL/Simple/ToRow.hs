@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------
@@ -27,9 +28,10 @@ module Database.PostgreSQL.Simple.ToRow
   )
 where
 
+import Data.Functor.Contravariant (Contravariant (..))
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
-import GHC.Generics (Generic (..))
-import Hpgsql.Encoding (Only (..), ProductTypeEncoder, RowEncoder (..), ToPgRow (..), genericToPgRow, (:.) (..))
+import GHC.Generics (Generic (..), K1 (..), M1 (..), type (:*:) (..))
+import Hpgsql.Encoding (Only (..), ToPgRow (..), (:.) (..))
 
 -- | A collection type that can be turned into a list of rendering
 -- 'Action's.
@@ -55,7 +57,7 @@ import Hpgsql.Encoding (Only (..), ProductTypeEncoder, RowEncoder (..), ToPgRow 
 class ToRow a where
   toRow :: a -> [Action]
   default toRow :: (Generic a, ProductTypeEncoder (Rep a)) => a -> [Action]
-  toRow = map QueryArgument . toPgParams genericToPgRow
+  toRow = toPgParams genericToPgRow
   -- ^ ToField a collection of values.
 
 instance ToRow () where
@@ -99,3 +101,32 @@ instance (ToField a) => ToRow [a] where
 
 instance (ToRow a, ToRow b) => ToRow (a :. b) where
   toRow (a :. b) = toRow a ++ toRow b
+
+-- | This is a simplified version of hpgsql's RowEncoder; it contains just as much as necessary
+-- for this module.
+newtype RowEncoder a = RowEncoder {toPgParams :: a -> [Action]}
+
+instance Contravariant RowEncoder where
+  contramap f rec = RowEncoder (\v -> (toPgParams rec) (f v))
+
+-- | These are from `Divisible`, but we don't currently pull in the extra dependency that has that.
+divide :: (a -> (b, c)) -> RowEncoder b -> RowEncoder c -> RowEncoder a
+divide d re1 re2 =
+  RowEncoder
+    { toPgParams = \a -> let (b, c) = d a in (toPgParams re1) b ++ (toPgParams re2) c
+    }
+
+genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
+genericToPgRow = contramap from genRowEncoder
+
+class ProductTypeEncoder f where
+  genRowEncoder :: RowEncoder (f a)
+
+instance (ProductTypeEncoder a, ProductTypeEncoder b) => ProductTypeEncoder (a :*: b) where
+  genRowEncoder = divide (\(a :*: b) -> (a, b)) genRowEncoder genRowEncoder
+
+instance (ProductTypeEncoder f) => ProductTypeEncoder (M1 i c f) where
+  genRowEncoder = contramap unM1 genRowEncoder
+
+instance (ToField a) => ProductTypeEncoder (K1 r a) where
+  genRowEncoder = contramap unK1 (RowEncoder $ (: []) . toField)

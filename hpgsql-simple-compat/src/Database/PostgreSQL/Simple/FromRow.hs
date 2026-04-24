@@ -34,8 +34,8 @@ module Database.PostgreSQL.Simple.FromRow
 where
 
 import Database.PostgreSQL.Simple.FromField (FromField (..))
-import GHC.Generics (Generic (..))
-import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), ProductTypeDecoder (..), RowParserMonadic, singleColRowParser, toMonadicRowParser, (:.) (..))
+import GHC.Generics (Generic (..), K1 (..), M1 (..), (:*:) (..))
+import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), RowParserMonadic, singleColRowParser, toMonadicRowParser, (:.) (..))
 import Prelude hiding (null)
 
 type RowParser = RowParserMonadic
@@ -81,8 +81,20 @@ instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromF
 instance (FromRow a, FromRow b) => FromRow (a :. b) where
   fromRow = (:.) <$> fromRow <*> fromRow
 
-field :: (FromPgField a) => RowParser a
+field :: (FromPgField a) => RowParserMonadic a
 field = toMonadicRowParser $ singleColRowParser fieldParser
 
+class ProductTypeDecoder f where
+  genRowDecoder :: RowParserMonadic (f a)
+
+instance (ProductTypeDecoder a, ProductTypeDecoder b) => ProductTypeDecoder (a :*: b) where
+  genRowDecoder = (:*:) <$> genRowDecoder <*> genRowDecoder
+
+instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
+  genRowDecoder = M1 <$> genRowDecoder
+
+instance (FromField a) => ProductTypeDecoder (K1 r a) where
+  genRowDecoder = fmap K1 $ toMonadicRowParser $ singleColRowParser $ fromField @a
+
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
-genericFromPgRow = toMonadicRowParser $ to <$> genRowDecoder @(Rep a)
+genericFromPgRow = to <$> genRowDecoder @(Rep a)
