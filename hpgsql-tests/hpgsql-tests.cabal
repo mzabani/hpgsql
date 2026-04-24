@@ -78,6 +78,7 @@ executable hpgsql-tests
     , async
     , base
     , bytestring
+    , case-insensitive
     , containers
     , hedgehog
     , hpgsql

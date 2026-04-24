@@ -19,9 +19,12 @@ import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TE
+import qualified Data.Text.Lazy as LT
 import Data.Time (Day, DiffTime, NominalDiffTime, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (CalendarDiffTime (..))
+import Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
 import Data.UUID.Types (UUID)
 import qualified Data.UUID.Types as UUID
 import Data.Vector (Vector)
@@ -109,6 +112,12 @@ spec = parallel $ do
     it
       "UUID text decoding"
       uuidTextDecoding
+    it
+      "CI Text values round-trip"
+      ciTextRoundTrip
+    it
+      "CI Text text decoding"
+      ciTextTextDecoding
     it
       "Json text decoding"
       jsonTextDecoding
@@ -472,6 +481,26 @@ uuidTextDecoding conn = hedgehog $ do
         conn
         (fromString $ "SELECT '" <> UUID.toString uuid <> "'::uuid")
   res === [Only uuid]
+
+ciTextRoundTrip :: HPgConnection -> PropertyT IO ()
+ciTextRoundTrip conn = hedgehog $ do
+  someText :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
+  someLazyText :: LT.Text <- Gen.forAll $ LT.fromStrict <$> Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
+  someString :: String <- Gen.forAll $ Gen.string (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
+  let row = (CI.mk someText, CI.mk someLazyText, CI.mk someString)
+  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3" row)
+  res === [row]
+
+ciTextTextDecoding :: HPgConnection -> PropertyT IO ()
+ciTextTextDecoding conn = hedgehog $ do
+  someText :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 50) (Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.unicode)
+  res <-
+    liftIO $
+      queryWith
+        rowParser
+        conn
+        (fromString $ "SELECT '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text")
+  res === [(CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))]
 
 queryCompositeType :: HPgConnection -> IO ()
 queryCompositeType conn = withRollback conn $ do

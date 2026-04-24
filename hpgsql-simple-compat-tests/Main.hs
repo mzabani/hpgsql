@@ -15,6 +15,8 @@ import Control.Exception as E
 import Control.Monad
 import Data.Aeson
 import Data.ByteString (ByteString)
+import Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy.Char8 as BL
@@ -64,7 +66,7 @@ tests env =
         testCase "Array" . testArray,
         testCase "Array of nullables" . testNullableArray,
         -- , testCase "HStore"               . testHStore
-        -- , testCase "citext"               . testCIText
+        testCase "citext" . testCIText,
         testCase "JSON" . testJSON,
         testCase "Aeson newtype" . testAeson,
         testCase "DerivingVia" . testDerivingVia,
@@ -268,18 +270,18 @@ testNullableArray TestEnv {..} = do
 --       m' <- query conn "SELECT ?::hstore" m
 --       [m] @?= m'
 
--- testCIText :: TestEnv -> Assertion
--- testCIText TestEnv {..} = do
---   execute_ conn "CREATE EXTENSION IF NOT EXISTS citext"
---   roundTrip (CI.mk "")
---   roundTrip (CI.mk "UPPERCASE")
---   roundTrip (CI.mk "lowercase")
---   where
---     roundTrip :: (CI Text) -> Assertion
---     roundTrip cit = do
---       let toPostgres = Only cit
---       fromPostgres <- query conn "SELECT ?::citext" toPostgres
---       [toPostgres] @?= fromPostgres
+testCIText :: TestEnv -> Assertion
+testCIText TestEnv {..} = do
+  execute_ conn "CREATE EXTENSION IF NOT EXISTS citext"
+  roundTrip (CI.mk "")
+  roundTrip (CI.mk "UPPERCASE")
+  roundTrip (CI.mk "lowercase")
+  where
+    roundTrip :: (CI Text) -> Assertion
+    roundTrip cit = do
+      let toPostgres = Only cit
+      fromPostgres <- query conn "SELECT ?::citext" toPostgres
+      [toPostgres] @?= fromPostgres
 
 testJSON :: TestEnv -> Assertion
 testJSON TestEnv {..} = do

@@ -117,6 +117,7 @@ import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (UTCTime)
 import Data.Time.LocalTime.Compat (CalendarDiffTime, ZonedTime)
 import Data.Typeable (Typeable, typeOf)
+import Data.CaseInsensitive (CI)
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
@@ -222,6 +223,12 @@ instance FromField CalendarDiffTime
 instance FromField Aeson.Value
 
 instance FromField UUID
+
+instance FromField (CI Text)
+
+instance FromField (CI LT.Text)
+
+instance FromField (CI String)
 
 instance FromField (Unbounded Day)
 

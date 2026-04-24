@@ -92,6 +92,7 @@ library
       aeson >= 2
     , attoparsec
     , base
+    , case-insensitive
     , cereal
     , bytestring
     , containers

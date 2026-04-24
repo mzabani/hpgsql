@@ -36,6 +36,8 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
+import Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
 import Data.Fixed (divMod')
 import Data.Functor.Contravariant (Contravariant (..))
 import Data.Int (Int16, Int32, Int64)
@@ -418,6 +420,22 @@ instance ToPgField String where
 
   -- TODO: What about client_encoding?
   toPgField encCtx = toPgField encCtx . Text.pack
+
+-- From https://hackage.haskell.org/package/case-insensitive-1.2.1.0/docs/Data-CaseInsensitive.html,
+-- "Note that the FoldCase instance for ByteStrings is only guaranteed to be correct for ISO-8859-1 encoded strings!".
+-- So we don't have those instances.
+
+instance ToPgField (CI Text) where
+  toTypeOid _ _ = Just textOid
+  toPgField encCtx = toPgField encCtx . CI.original
+
+instance ToPgField (CI LT.Text) where
+  toTypeOid _ _ = Just textOid
+  toPgField encCtx = toPgField encCtx . CI.original
+
+instance ToPgField (CI String) where
+  toTypeOid _ _ = Just textOid
+  toPgField encCtx = toPgField encCtx . CI.original
 
 instance ToPgField UUID where
   toTypeOid _ _ = Just uuidOid
@@ -816,6 +834,15 @@ instance FromPgField String where
     Just bs -> Right $ Text.unpack $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
+
+instance FromPgField (CI Text) where
+  fieldParser = CI.mk <$> fieldParser
+
+instance FromPgField (CI LT.Text) where
+  fieldParser = CI.mk <$> fieldParser
+
+instance FromPgField (CI String) where
+  fieldParser = CI.mk <$> fieldParser
 
 instance FromPgField UTCTime where
   fieldParser = parsePgType [timestamptzOid] $ \case
