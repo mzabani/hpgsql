@@ -262,7 +262,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
           -- We _must_ wait until the socket is closed _by the other end_ (PostgreSQL-the-server),
           -- because otherwise this cancellation request might be processed while the client sends
           -- another query. See https://www.postgresql.org/message-id/flat/27126.1126649920%40sss.pgh.pa.us#75364d0966758fccad56cd6c71547771
-          void $ tryJust (\err -> if isResourceVanishedError err then Just () else Nothing) $ Socket.waitReadSocketSTM (socket hpgConnPartialDoNotReturn) >>= STM.atomically
+          void $ tryJust (\err -> if isResourceVanishedError err then Just () else Nothing) $ socketWaitRead (socket hpgConnPartialDoNotReturn)
           Socket.close sock
         Connect -> do
           -- TODO: Send encoding and other things with "options"?
