@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module EncodingDecodingSpec where
 
 import Control.Monad (join, void)

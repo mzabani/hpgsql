@@ -47,6 +47,7 @@ executable hpgsql-tests
       DeriveGeneric
       DerivingStrategies
       DerivingVia
+      DuplicateRecordFields
       LambdaCase
       FlexibleContexts
       FlexibleInstances
@@ -57,10 +58,12 @@ executable hpgsql-tests
       NumericUnderscores
       OverloadedRecordDot
       OverloadedStrings
+      QuasiQuotes
       RankNTypes
       RecordWildCards
       ScopedTypeVariables
       StandaloneDeriving
+      TemplateHaskell
       TupleSections
       TypeApplications
       TypeFamilies

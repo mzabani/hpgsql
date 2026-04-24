@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 -- | Tests the examples written in INTERRUPTION-SAFETY.md for both
 -- hpgsql and postgresql-simple.
 module DocumentationExamplesSpec where

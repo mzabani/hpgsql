@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module Hpgsql.QueryInternal
   ( Query (..),
     SingleQuery (..),

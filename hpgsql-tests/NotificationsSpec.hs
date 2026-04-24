@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module NotificationsSpec where
 
 import Control.Concurrent (myThreadId, threadDelay)

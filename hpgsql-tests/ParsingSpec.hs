@@ -1,7 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module ParsingSpec where
 
 import Control.Exception (SomeException, evaluate, try)
@@ -34,8 +30,8 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Hpgsql (Only (..))
 import Hpgsql.Encoding (ToPgRow (..))
-import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockListText, flattenBlocks, parseSql)
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
+import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockListText, flattenBlocks, parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
 import Streaming (Of (..), Stream)
 import qualified Streaming.Internal as S

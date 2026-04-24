@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module PipelineSpec where
 
 import Control.Concurrent.Async (forConcurrently_)
@@ -12,12 +9,12 @@ import DbUtils
     pgErrorMustContain,
     withRollback,
   )
-import Hpgsql
-import Hpgsql.Pipeline (pipelineCmd, pipelineCmd_, pipelineL, pipelineS, runPipeline)
-import Hpgsql.Query (sql)
 import Hedgehog
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
+import Hpgsql
+import Hpgsql.Pipeline (pipelineCmd, pipelineCmd_, pipelineL, pipelineS, runPipeline)
+import Hpgsql.Query (sql)
 import qualified Streaming.Prelude as S
 import qualified Streaming.Prelude as Streaming
 import Test.Hspec

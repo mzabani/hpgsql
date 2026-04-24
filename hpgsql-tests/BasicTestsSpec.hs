@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module BasicTestsSpec where
 
 import Control.Monad (forM_, void)

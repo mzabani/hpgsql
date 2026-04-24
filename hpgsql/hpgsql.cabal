@@ -86,6 +86,8 @@ library
       TypeFamilies
       TypeFamilyDependencies
       TypeOperators
+      QuasiQuotes
+      TemplateHaskell
       ViewPatterns
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
   ghc-options: -O1 -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path

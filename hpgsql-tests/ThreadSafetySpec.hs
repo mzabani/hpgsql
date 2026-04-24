@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module ThreadSafetySpec where
 
 import Control.Concurrent (modifyMVar_, myThreadId, threadDelay)

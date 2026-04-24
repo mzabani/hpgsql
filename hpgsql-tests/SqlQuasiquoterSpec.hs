@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module SqlQuasiquoterSpec where
 
 import Control.Monad (forM_)

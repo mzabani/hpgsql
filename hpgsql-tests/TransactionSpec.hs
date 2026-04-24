@@ -1,6 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE TemplateHaskell #-}
-
 module TransactionSpec where
 
 import Control.Concurrent (threadDelay)

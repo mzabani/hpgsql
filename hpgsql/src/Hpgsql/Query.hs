@@ -1,5 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
-
 module Hpgsql.Query
   ( Query, -- Do not export constructor
     SingleQuery, -- Do not export constructor
