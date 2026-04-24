@@ -127,6 +127,7 @@ import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
 import Database.PostgreSQL.Simple.Types (Binary (..))
+import Control.Monad (replicateM)
 import Hpgsql.Encoding (FieldParser (..), FromPgField (..), arrayField, nullableField)
 import qualified Hpgsql.Encoding as Hpgsql
 import Hpgsql.Time (Unbounded (..))
@@ -242,10 +243,10 @@ instance (FromField a) => FromField (Maybe a) where
   fromField = nullableField fromField
 
 instance (FromField a) => FromField (Vector a) where
-  fromField = arrayField fromField
+  fromField = arrayField Vector.replicateM fromField
 
 instance (FromField a) => FromField (PGArray a) where
-  fromField = PGArray . Vector.toList <$> arrayField fromField
+  fromField = PGArray <$> arrayField replicateM fromField
 
 instance {-# OVERLAPPING #-} (Hpgsql.FromPgField a) => FromField (Vector (Vector a))
 

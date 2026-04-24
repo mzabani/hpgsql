@@ -495,10 +495,19 @@ ciTextRoundTrip conn = hedgehog $ do
   let genCIText = CI.mk <$> Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
       genCILazyText = CI.mk . LT.fromStrict <$> Gen.text (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
       genCIString = CI.mk <$> Gen.string (Gen.linear 0 50) (Gen.filter (/= '\0') Gen.unicode)
-  row <- Gen.forAll $ (,,,,,,,,,)
-    <$> genCIText <*> genCIText <*> genCIText <*> genCIText
-    <*> genCILazyText <*> genCILazyText <*> genCILazyText
-    <*> genCIString <*> genCIString <*> genCIString
+  row <-
+    Gen.forAll $
+      (,,,,,,,,,)
+        <$> genCIText
+        <*> genCIText
+        <*> genCIText
+        <*> genCIText
+        <*> genCILazyText
+        <*> genCILazyText
+        <*> genCILazyText
+        <*> genCIString
+        <*> genCIString
+        <*> genCIString
   res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
@@ -552,16 +561,36 @@ localTimeTextDecoding conn = hedgehog $ do
         rowParser
         conn
         ( fromString $
-            "SELECT '" <> iso8601Show lt1 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt2 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt3 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt4 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt5 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt6 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt7 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt8 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt9 <> "'::timestamp"
-              <> ", '" <> iso8601Show lt10 <> "'::timestamp"
+            "SELECT '"
+              <> iso8601Show lt1
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt2
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt3
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt4
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt5
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt6
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt7
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt8
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt9
+              <> "'::timestamp"
+              <> ", '"
+              <> iso8601Show lt10
+              <> "'::timestamp"
         )
   res === [row]
 
@@ -588,8 +617,9 @@ queryArrayTypes :: HPgConnection -> PropertyT IO ()
 queryArrayTypes conn = hedgehog $ do
   -- TODO: hedgehog gen arrays with varying lengths, NULLs, etc.
   intArrDim1 <- fmap Vector.fromList $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
+  nullIntArrDim1 <- fmap PGArray $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.maybe $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
   liftIO $ do
-    queryWith rowParser conn (mkQuery "SELECT $1, $1" (Only intArrDim1)) `shouldReturn` [(intArrDim1, intArrDim1)]
+    queryWith rowParser conn (mkQuery "SELECT $1, $1, $2" (intArrDim1, nullIntArrDim1)) `shouldReturn` [(intArrDim1, intArrDim1, nullIntArrDim1)]
     queryWith (rowParser @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
     queryWith (rowParser @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
     queryWith (rowParser @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]

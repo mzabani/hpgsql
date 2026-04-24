@@ -2,6 +2,7 @@
 - Add a bunch more types and instances
   - hstore
 - Prepared statements
+- Make ToPgField return a FieldEncoder instead of a two-class method?
 - Does it make sense to have PGArray if we could just make [a] an instance for vectors?
 - `run format-hs`, check all is formatted in CI as the last step
 - Connecting with a password

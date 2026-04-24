@@ -5,6 +5,7 @@ module Hpgsql.Types
   )
 where
 
+import Control.Monad (replicateM)
 import Data.Aeson (FromJSON, ToJSON)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Encoding as AesonInternal
@@ -12,23 +13,27 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Map.Strict as Map
 import Data.Typeable (Proxy (..), Typeable)
-import Data.Vector (Vector)
-import qualified Data.Vector as Vector
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..))
-import Hpgsql.TypeInfo (jsonOid, jsonbOid)
+import Hpgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
+import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
+-- The reason for this type instead of allowing @[a]@ to be a field is that an instance
+-- for @[a]@ would require an overlappable instance for @String@, and that is not ideal.
 newtype PGArray a = PGArray {fromPGArray :: [a]}
   deriving (Eq, Ord, Read, Show, Functor)
 
 instance forall a. (ToPgField a) => ToPgField (PGArray a) where
-  toTypeOid _ = toTypeOid (Proxy @(Vector a))
-  toPgField encCtx = toPgField encCtx . Vector.fromList . fromPGArray
+  toTypeOid _ encodingContext = do
+    elOid <- toTypeOid (Proxy @a) encodingContext
+    arrayTypInfo <- Map.lookup elOid encodingContext.typeInfoCache
+    arrayTypInfo.oidOfArrayType
+  toPgField encCtx = toPgVectorField encCtx . fromPGArray
 
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
-  fieldParser = PGArray . Vector.toList <$> fieldParser
+  fieldParser = PGArray <$> arrayField replicateM fieldParser
 
 -- | A JSON type that does not incur the costs of deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates

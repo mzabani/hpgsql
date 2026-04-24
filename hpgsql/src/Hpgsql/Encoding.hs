@@ -17,6 +17,7 @@ module Hpgsql.Encoding
     anyTypeDecoder,
     singleColRowParser,
     arrayField,
+    toPgVectorField,
     genericFromPgRow,
     genericToPgRow,
     nullableField,
@@ -42,6 +43,7 @@ import qualified Data.List as List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import Data.Monoid (Sum (..))
 import Data.Proxy (Proxy (..))
 import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
 import qualified Data.Serialize as Cereal
@@ -96,7 +98,6 @@ instance Applicative RowParser where
 instance (TypeError (TypeLits.Text "RowParser does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowParser where
   (>>=) = error "inaccessible bind in Monad RowParser instance"
 
--- | TODO: I think this can actually be exported. Maybe it helps users avoid `Only` if they prefer?
 singleColRowParser :: FieldParser a -> RowParser a
 singleColRowParser (FieldParser {..}) =
   RowParser
@@ -420,25 +421,30 @@ instance (ToPgField a) => ToPgField (Maybe a) where
     Nothing -> SqlNull
     (Just n) -> toPgField encCtx n
 
+-- | Returns a field-encoding function for a vector-like Foldable (e.g. Lists and Vector itself).
+toPgVectorField :: forall f a. (Foldable f, ToPgField a) => EncodingContext -> f a -> BinaryField
+toPgVectorField encCtx =
+  let encodeElement el = Builder.binaryField $ toPgField encCtx el
+      Oid elemOid = fromMaybe (Oid 0) (toTypeOid (Proxy @a) encCtx)
+   in \vec ->
+        let ndim = Builder.byteString $ Cereal.encode @Int32 1
+            -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
+            hasNull = Builder.byteString $ Cereal.encode @Int32 0
+            -- hasNull = Builder.byteString $ Cereal.encode @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
+            elemOidBs = Builder.byteString $ Cereal.encode @Int32 elemOid
+            lb1 = Builder.byteString $ Cereal.encode @Int32 1
+            (Sum len, encodedElements) = foldMap (\el -> (Sum 1, encodeElement el)) vec
+            dim1 = Builder.byteString $ Cereal.encode @Int32 len
+            fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
+         in NotNull (Builder.toStrictByteString fullBs)
+
 instance (ToPgField a) => ToPgField (Vector a) where
   toTypeOid _ encodingContext = do
     -- Maybe monad
     elOid <- toTypeOid (Proxy @a) encodingContext
     arrayTypInfo <- Map.lookup elOid encodingContext.typeInfoCache
     arrayTypInfo.oidOfArrayType
-  toPgField encodingContext vec =
-    let Oid elemOid = fromMaybe (Oid 0) (toTypeOid (Proxy @a) encodingContext)
-        ndim = Builder.byteString $ Cereal.encode @Int32 1
-        -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
-        hasNull = Builder.byteString $ Cereal.encode @Int32 0
-        -- hasNull = Builder.byteString $ Cereal.encode @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
-        elemOidBs = Builder.byteString $ Cereal.encode @Int32 elemOid
-        dim1 = Builder.byteString $ Cereal.encode @Int32 (fromIntegral $ Vector.length vec)
-        lb1 = Builder.byteString $ Cereal.encode @Int32 1
-        encodeElement el = Builder.binaryField $ toPgField encodingContext el
-        encodedElements = Vector.foldl' (\acc el -> acc <> encodeElement el) mempty vec
-        fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
-     in NotNull (Builder.toStrictByteString fullBs)
+  toPgField = toPgVectorField
 
 data RowEncoder a = RowEncoder
   { toPgParams :: !(a -> [EncodingContext -> (Maybe Oid, BinaryField)]),
@@ -947,8 +953,8 @@ instance (FromPgField a) => FromPgField (Maybe a) where
   fieldParser = nullableField fieldParser
 
 -- | A FieldParser that accepts and decodes Postgres arrays.
-arrayField :: forall a. FieldParser a -> FieldParser (Vector a)
-arrayField !elementParser =
+arrayField :: forall a f. (Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> FieldParser a -> FieldParser (f a)
+arrayField !replicateFunction !elementParser =
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   FieldParser
     { fieldValueParser = \colInfo ->
@@ -961,7 +967,7 @@ arrayField !elementParser =
       allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
     }
   where
-    arrayParser :: EncodingContext -> Parser.Parser (Vector a)
+    arrayParser :: EncodingContext -> Parser.Parser (f a)
     arrayParser encodingContext = do
       !ndim <- int32Parser
       !_hasNull <- int32Parser
@@ -974,7 +980,7 @@ arrayField !elementParser =
           !dim_i :: Int <- fromIntegral <$> int32Parser
           !_lb_i <- int32Parser
           unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
-          Vector.replicateM dim_i $ do
+          replicateFunction dim_i $ do
             size :: Int <- fromIntegral <$> int32Parser
             elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
             case elementParser.fieldValueParser elementColInfo elementBs of
@@ -982,7 +988,7 @@ arrayField !elementParser =
               Right el -> pure el
 
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
-  fieldParser = arrayField fieldParser
+  fieldParser = arrayField Vector.replicateM fieldParser
 
 instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
