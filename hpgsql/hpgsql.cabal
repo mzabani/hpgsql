@@ -1,7 +1,7 @@
 cabal-version: 2.0
 
 name:           hpgsql
-version:        0.1.6
+version:        0.1.0.0
 description:    hpgsql is a pure Haskell implementation of a PostgreSQL driver
 homepage:       https://github.com/mzabani/hpgsql#readme
 bug-reports:    https://github.com/mzabani/hpgsql/issues

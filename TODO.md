@@ -9,7 +9,6 @@
 - Write a FromRow instance in hpgsql-simple-compat that checks number of fields and decodes a row of arbitrary length
   - Can the Applicative RowParser also know about remaining fields? Ordering is fine in Applicative, it's just sequencing that isn't.
 - Connecting with a password
-- Change version to 0.1 everywhere
 - Double-check licensing
 
 
