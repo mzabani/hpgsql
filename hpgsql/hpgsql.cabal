@@ -99,6 +99,7 @@ library
     , cereal
     , bytestring
     , containers
+    , hashable
     , haskell-src-meta
     , network
     , network-uri

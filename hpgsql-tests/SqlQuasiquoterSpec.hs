@@ -56,7 +56,7 @@ checkQueryConcatenation gen = hedgehog $ do
   length singleQueries === length queries
 
   -- Each SingleQuery must be independently valid
-  forM_ (zip queries singleQueries) $ \((_, expectedParams), SingleQuery qStr qParams) -> do
+  forM_ (zip queries singleQueries) $ \((_, expectedParams), SingleQuery qStr qParams _isPrepared) -> do
     let qText = decodeUtf8 qStr
     annotateShow qText
 

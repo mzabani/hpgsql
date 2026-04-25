@@ -70,6 +70,8 @@ import Data.Word (Word16)
 
 #endif
 import qualified Control.Concurrent.STM as STM
+import Data.Hashable (hash)
+import Data.Set (Set)
 import Hpgsql.Base (lastTwoAndInit, maximumOnOrDef, minimumOnOrDef)
 import Hpgsql.Builder (BinaryField)
 import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), parseSql)
@@ -87,20 +89,21 @@ data SingleQueryFragment
     QueryArgumentPlaceHolder !Int
   deriving stock (Eq, Show)
 
--- | Zero, one, or more SQL statements. The query parameters and query fragments continue to go up in number across different
--- statements, e.g. "SELECT $1; SELECT $2; SELECT $3; ...".
-data Query = Query {queryString :: ![SingleQueryFragment], queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)]}
-
--- | A single statement, not multiple, with dollar-numbered query arguments
--- starting from $1.
-data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)]}
+-- | `Query` is some SQL with values of query arguments inside and also whether it's a prepared statement.
+-- It can be concatenated to other `Query` objects freely, and concatenating chains of Queries with
+-- at least one prepared statement among them makes the final `Query` object a prepared statement, too.
+-- You can build this with the `sql` and `sqlPrep` quasiquoters, the former for unprepared statements,
+-- and you can use `preparedStatement` and `nonPreparedStatement` to convert between them.
+data Query = Query
+  { --  The query parameters and query fragments continue to go up in number across different
+    -- statements, e.g. "SELECT $1; SELECT $2; SELECT $3; ...".
+    queryString :: ![SingleQueryFragment],
+    queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)],
+    isPrepared :: !Bool
+  }
 
 instance Show Query where
   show = show . NE.toList . breakQueryIntoStatements
-
-instance Show SingleQuery where
-  -- Careful not exposing query arguments
-  show (SingleQuery {queryString}) = show queryString
 
 instance Semigroup Query where
   q1 <> q2 =
@@ -116,7 +119,28 @@ instance Semigroup Query where
           renumberParamsFrom
             q2.queryString
             (maxArgQ1 + 1)
-     in Query {queryString = q1.queryString <> remappedQ2, queryParams = q1.queryParams <> q2.queryParams}
+     in -- Semigroup concatenation must be associative, and for isPrepared
+        -- both || and && are associative, but what would the user expect?
+        -- For typical query concatenation, I *think* of some examples:
+        -- - [sqlPrep|SELECT ^{columnsQry} FROM some_table ^{whereConditions}|]
+        -- - [sqlPrep|INSERT INTO x ^{vALUES rows}|]
+        -- In both cases above, we want `isPrepared = True` to be "infectious", so
+        -- we want to use ||
+        -- Are there counter examples? Yes, if users build "smaller" embeddable Queries
+        -- with `sqlPrep`, e.g. if `columnsQry` or `whereConditions` were built with `sqlPrep`.
+        -- That feels unlikely.. so we go with ||
+        Query {queryString = q1.queryString <> remappedQ2, queryParams = q1.queryParams <> q2.queryParams, isPrepared = q1.isPrepared || q2.isPrepared}
+
+-- | A single statement, not multiple, with dollar-numbered query arguments
+-- starting from $1.
+data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)], preparedStmtHash :: !(Maybe String)}
+
+mkSingleQuery :: ByteString -> [EncodingContext -> (Maybe Oid, BinaryField)] -> Bool -> SingleQuery
+mkSingleQuery queryString queryParams isPrepared = SingleQuery {queryString, queryParams, preparedStmtHash = if isPrepared then Just (show $ hash queryString) else Nothing}
+
+instance Show SingleQuery where
+  -- Careful not exposing query arguments
+  show (SingleQuery {queryString}) = show queryString
 
 instance IsString Query where
   fromString s =
@@ -135,12 +159,12 @@ instance IsString Query where
                   error "Bug in Hpgsql: parseSql AcceptOnlyDollarNumberedArgs returned quasiquoter expression."
             )
             blocks
-     in Query {queryString = queryFrags, queryParams = []}
+     in Query {queryString = queryFrags, queryParams = [], isPrepared = False}
 
 -- | For internal usage only. Takes a `Query` and breaks it up into
 -- individual SQL statements that can be sent to a postgres backend.
 breakQueryIntoStatements :: Query -> NonEmpty SingleQuery
-breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams = allQueryParams} =
+breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams = allQueryParams, isPrepared} =
   -- If a user insists in trying to run an empty query, or if
   -- they mistakenly concatenate empty statements, we let them
   toEmptyQueryIfNecessary $
@@ -150,9 +174,9 @@ breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams =
       fixLastEmptyStatement $
         go fullQueryString allQueryParams
   where
-    toEmptyQueryIfNecessary [] = NE.singleton $ SingleQuery {queryString = "", queryParams = allQueryParams}
+    toEmptyQueryIfNecessary [] = NE.singleton $ mkSingleQuery "" allQueryParams isPrepared
     toEmptyQueryIfNecessary (x : xs) = x :| xs
-    toSingleQuery (blks, prms) = SingleQuery {queryString = mconcat $ map fragToBytestring blks, queryParams = prms}
+    toSingleQuery (blks, prms) = let queryString = mconcat $ map fragToBytestring blks in mkSingleQuery queryString prms isPrepared
     allWhitespaceOrComments =
       all
         ( \case
@@ -386,6 +410,7 @@ data QueryState = QueryState
   { queryIdentifier :: !QueryId,
     queryText :: !ByteString,
     queryProtocol :: !QueryProtocol,
+    queryPrepStmtName :: !(Maybe String),
     queryOwner :: !WeakThreadId,
     -- | Storing every single "control" (i.e. not `DataRow`) message received for each query
     -- means we can continue to drain its results from another thread at anytime, which is
@@ -405,6 +430,7 @@ data InternalConnectionState = InternalConnectionState
     -- When such a thing happens, this field is True.
     mustIssueRollbackBeforeNextCommand :: Bool,
     notificationsReceived :: !(TQueue NotificationResponse),
+    preparedStatementNames :: Set String,
     transactionStatusBeforeCurrentPipeline :: !TransactionStatus
   }
 

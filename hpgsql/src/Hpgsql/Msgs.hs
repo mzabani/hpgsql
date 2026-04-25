@@ -17,7 +17,7 @@ import Data.Functor (void)
 import Data.Int (Int16, Int32)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
@@ -77,7 +77,7 @@ data AuthenticationOk = AuthenticationOk
 data BackendKeyData = BackendKeyData {backendPid :: Int32, backendSecretKey :: Int32}
   deriving stock (Show)
 
-data Bind = Bind {paramsValuesInOrder :: ![BinaryField], resultColumnFmts :: !Int}
+data Bind = Bind {paramsValuesInOrder :: ![BinaryField], resultColumnFmts :: !Int, preparedStmtHash :: !(Maybe String)}
   deriving stock (Show)
 
 -- | PId first, secret key second
@@ -112,7 +112,7 @@ newtype Query = Query ByteString
 instance Show Query where
   show _ = "Query"
 
-data Parse = Parse {queryString :: ByteString, specifiedParameterTypes :: [Maybe Oid]}
+data Parse = Parse {queryString :: !ByteString, specifiedParameterTypes :: ![Maybe Oid], preparedStmtHash :: !(Maybe String)}
 
 instance Show Parse where
   show Parse {..} = "Parse (" ++ show (length specifiedParameterTypes) ++ " params specified) - " ++ show queryString
@@ -245,7 +245,7 @@ nulTermCString s = Builder.string7 s <> Builder.word8 0
 instance ToPgMessage Bind where
   toPgMessage Bind {..} =
     let unnamedDestPortal = nulTermCString ""
-        unnamedSourcePreparedStmt = nulTermCString ""
+        preparedStmtName = nulTermCString $ fromMaybe "" preparedStmtHash
         numParamFmtCodesAllBinary :: Int16 = 1
         fmtCodesBinary :: Int16 = 1
         numQryParams :: Int16 = fromIntegral $ length paramsValuesInOrder
@@ -262,17 +262,17 @@ instance ToPgMessage Bind where
             map
               (const $ Builder.int16BE 1)
               [1 .. resultColumnFmts]
-        contents = unnamedDestPortal <> unnamedSourcePreparedStmt <> Builder.int16BE numParamFmtCodesAllBinary <> Builder.int16BE fmtCodesBinary <> Builder.int16BE numQryParams <> paramsLenAndVals <> Builder.int16BE numResultColumnsFmtCodes <> resultColumnsFmtCodes
+        contents = unnamedDestPortal <> preparedStmtName <> Builder.int16BE numParamFmtCodesAllBinary <> Builder.int16BE fmtCodesBinary <> Builder.int16BE numQryParams <> paramsLenAndVals <> Builder.int16BE numResultColumnsFmtCodes <> resultColumnsFmtCodes
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
      in Builder.char7 'B' <> Builder.int32BE (4 + contentsLen) <> contents
 
 instance ToPgMessage Parse where
   toPgMessage Parse {..} =
-    let unnamedStatement = nulTermCString ""
+    let preparedStmtName = nulTermCString $ fromMaybe "" preparedStmtHash
         numParamsSpecified :: Int16 = fromIntegral $ length specifiedParameterTypes
-        -- A 0 for an OID means "type unspecified", and is what we do for custom user types
+        -- A 0 for an OID means "type unspecified", and is what we use when we don't know the type
         paramOids = mconcat $ map (Builder.int32BE . maybe 0 fromIntegral) specifiedParameterTypes
-        contents = unnamedStatement <> Builder.byteString queryString <> Builder.word8 0 <> Builder.int16BE numParamsSpecified <> paramOids
+        contents = preparedStmtName <> Builder.byteString queryString <> Builder.word8 0 <> Builder.int16BE numParamsSpecified <> paramOids
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
      in Builder.char7 'P' <> Builder.int32BE (4 + contentsLen) <> contents
 

@@ -118,8 +118,9 @@ import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import qualified Data.Serialize as Cereal
+import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
@@ -251,14 +252,12 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
               currentPipeline = [],
               notificationsReceived = notifQueue,
               mustIssueRollbackBeforeNextCommand = False,
+              preparedStatementNames = mempty,
               transactionStatusBeforeCurrentPipeline = TransIdle
             }
       let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer socketMutex originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
       case connectOrCancel of
         CancelNotConnect cancelRequest _ -> do
-          -- TODO: We need to store the IP address of the server and reuse that,
-          -- because name resolution might give us a different IP address and thus
-          -- a different server!
           nonAtomicSendMsg hpgConnPartialDoNotReturn cancelRequest
           -- We _must_ wait until the socket is closed _by the other end_ (PostgreSQL-the-server),
           -- because otherwise this cancellation request might be processed while the client sends
@@ -325,8 +324,6 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
 -- See `ConnectOpts` and `resetTypeInfoCache` for more.
 refreshTypeInfoCache :: HPgConnection -> Pipeline (IO ())
 refreshTypeInfoCache conn =
-  -- TODO: Expose as a Pipeline so users can batch it with other typical
-  -- connection-setup statements?
   -- https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
   -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
   let fetchPipeline = pipelineL rowParser "select oid, typname, typarray from pg_catalog.pg_type WHERE oid >= 16384"
@@ -377,7 +374,7 @@ beforeReturningToPool conn@HPgConnection {internalConnectionState} mCleanOpts = 
 -- | Closes the connection with postgres. Do not use this in exception handlers; use `closeForcefully`
 -- instead.
 closeGracefully :: HPgConnection -> IO ()
-closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finally (Socket.close socket >> (modifyMVar_ conn.socketClosed $ const $ pure True)) $ do
+closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finally (Socket.close socket >> modifyMVar_ conn.socketClosed (const $ pure True)) $ do
   withControlMsgsLock
     conn
     (const $ pure ())
@@ -624,7 +621,7 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
     (const $ pure ())
     $ \qryState -> do
       case responseMsgsState qryState of
-        NoMsgsReceived -> receiveParseCompleteAtomically
+        NoMsgsReceived -> receiveParseOrBindCompleteAtomically
         ParseCompleteReceived _ -> receiveBindCompleteAtomically
         BindCompleteReceived _ -> receiveNoDataOrRowDescriptionOrCopyInResponseAtomically
         RowDescriptionOrNoDataOrCopyInResponseReceived _ -> receiveDataRowOrCommandCompleteAtomically
@@ -632,10 +629,15 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
         state@(CommandCompleteReceived _ _) -> ifM (isLastInPipeline conn qryId) receiveReadyForQueryAtomically (pure (Nothing, state)) -- Nothing more to receive after CommandComplete unless it's the last query in the pipeline
         state@(ReadyForQueryReceived _ _) -> pure (Nothing, state) -- Definitely nothing to receive if we're here
   where
-    receiveParseCompleteAtomically = receiveNextMsgWithMaskedContinuation conn (Right <$> msgParser @ParseComplete <|> Left <$> msgParser @ErrorResponse) $ \msgE -> do
+    -- \| We don't send a `Parse` msg for already-prepared statements, and so for those
+    -- we don't even get a `ParseComplete`.
+    -- We do have an assertion in `updateQueryStateIfFirstOrThrow` to ensure we aren't
+    -- dismissive of messages arriving in unexpected order.
+    receiveParseOrBindCompleteAtomically = receiveNextMsgWithMaskedContinuation conn (Right3 <$> msgParser @ParseComplete <|> Left3 <$> msgParser @ErrorResponse <|> Middle3 <$> msgParser @BindComplete) $ \msgE -> do
       STM.atomically $ updateQueryStateIfFirstOrThrow $ case msgE of
-        Right msg -> RespParseComplete msg
-        Left err -> RespErrorResponse err
+        Right3 msg -> RespParseComplete msg
+        Middle3 msg -> RespBindComplete msg
+        Left3 err -> RespErrorResponse err
     receiveBindCompleteAtomically = receiveNextMsgWithMaskedContinuation conn (Right <$> msgParser @BindComplete <|> Left <$> msgParser @ErrorResponse) $ \msgE -> do
       STM.atomically $ updateQueryStateIfFirstOrThrow $ case msgE of
         Right msg -> RespBindComplete msg
@@ -688,19 +690,25 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
       -- IMPORTANT: No `STM.retry` here as this is called unmasked and must terminate promptly!
       st <- STM.readTVar sttv
       firstPendingQry <- getQueryStateIfFirstOrThrow
-      let newState = case (respMsg, responseMsgsState firstPendingQry) of
-            (RespParseComplete msg, NoMsgsReceived) -> ParseCompleteReceived msg
-            (RespBindComplete msg, ParseCompleteReceived _) -> BindCompleteReceived msg
-            (RespNoData msg, BindCompleteReceived _) -> RowDescriptionOrNoDataOrCopyInResponseReceived $ Left3 msg
-            (RespRowDescription msg, BindCompleteReceived _) -> RowDescriptionOrNoDataOrCopyInResponseReceived $ Middle3 msg
-            (RespCopyInResponse msg, BindCompleteReceived _) -> RowDescriptionOrNoDataOrCopyInResponseReceived $ Right3 msg
-            (RespDataRow _, RowDescriptionOrNoDataOrCopyInResponseReceived prev) -> RowDescriptionOrNoDataOrCopyInResponseReceived prev -- When draining a query that was already fetching rows, this can happen
-            (RespErrorResponse msg, _) -> ErrorResponseReceived Nothing msg
-            (RespCommandComplete msg, RowDescriptionOrNoDataOrCopyInResponseReceived noDataRowDesc) -> CommandCompleteReceived noDataRowDesc msg
-            (RespReadyForQuery rq, ErrorResponseReceived _ err) -> ReadyForQueryReceived (Left err) rq
-            (RespReadyForQuery rq, CommandCompleteReceived _ cmd) -> ReadyForQueryReceived (Right cmd) rq
-            (_, before) -> error $ "Bug in Hpgsql. Response messages in invalid order. Had " ++ show before ++ " and received " ++ show respMsg
-          allQueries = currentPipeline st
+      (newState, newPrepStmtNames) <- case (respMsg, firstPendingQry.responseMsgsState) of
+        (RespParseComplete msg, NoMsgsReceived) ->
+          -- Add the parsed statement name to internal state if there is one
+          pure (ParseCompleteReceived msg, maybe st.preparedStatementNames (`Set.insert` st.preparedStatementNames) firstPendingQry.queryPrepStmtName)
+        (RespBindComplete msg, ParseCompleteReceived _) -> pure (BindCompleteReceived msg, st.preparedStatementNames)
+        (RespBindComplete msg, NoMsgsReceived) -> do
+          -- This transition should only happen for already-prepared statements.
+          when (isNothing firstPendingQry.queryPrepStmtName) $ throwIrrecoverableErrorWithStatement firstPendingQry.queryText "Bug in Hpgsql. Received a BindComplete without a ParseComplete but SQL statement wasn't prepared"
+          pure (BindCompleteReceived msg, st.preparedStatementNames)
+        (RespNoData msg, BindCompleteReceived _) -> pure (RowDescriptionOrNoDataOrCopyInResponseReceived $ Left3 msg, st.preparedStatementNames)
+        (RespRowDescription msg, BindCompleteReceived _) -> pure (RowDescriptionOrNoDataOrCopyInResponseReceived $ Middle3 msg, st.preparedStatementNames)
+        (RespCopyInResponse msg, BindCompleteReceived _) -> pure (RowDescriptionOrNoDataOrCopyInResponseReceived $ Right3 msg, st.preparedStatementNames)
+        (RespDataRow _, RowDescriptionOrNoDataOrCopyInResponseReceived prev) -> pure (RowDescriptionOrNoDataOrCopyInResponseReceived prev, st.preparedStatementNames) -- When draining a query that was already fetching rows, this can happen
+        (RespErrorResponse msg, _) -> pure (ErrorResponseReceived Nothing msg, st.preparedStatementNames)
+        (RespCommandComplete msg, RowDescriptionOrNoDataOrCopyInResponseReceived noDataRowDesc) -> pure (CommandCompleteReceived noDataRowDesc msg, st.preparedStatementNames)
+        (RespReadyForQuery rq, ErrorResponseReceived _ err) -> pure (ReadyForQueryReceived (Left err) rq, st.preparedStatementNames)
+        (RespReadyForQuery rq, CommandCompleteReceived _ cmd) -> pure (ReadyForQueryReceived (Right cmd) rq, st.preparedStatementNames)
+        (_, before) -> throwIrrecoverableErrorWithStatement firstPendingQry.queryText $ "Bug in Hpgsql. Response messages in invalid order. Had " ++ show before ++ " and received " ++ show respMsg
+      let allQueries = currentPipeline st
       STM.writeTVar sttv $
         st
           { currentPipeline =
@@ -718,7 +726,8 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
                           }
                       else qs
                 )
-                allQueries
+                allQueries,
+            preparedStatementNames = newPrepStmtNames
           }
       pure (Just respMsg, newState)
 
@@ -862,20 +871,23 @@ queryStreaming = queryWithStreaming rowParser
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
 -- if it can't do that. Then runs the continuation.
-sendPipeline :: HPgConnection -> NonEmpty (ByteString, QueryProtocol) -> [SomeMessage] -> STM () -> (NonEmpty QueryId -> IO a) -> IO a
+-- DO NOT CALL THIS FUNCTION WHILE HOLDING THE CONTROL-MSGS-LOCK, because it needs to wait/block
+-- until the pipeline is ready, which won't happen if we're holding the control-msgs-lock.
+sendPipeline :: HPgConnection -> NonEmpty (ByteString, QueryProtocol, Maybe String) -> (InternalConnectionState -> [SomeMessage]) -> STM () -> (NonEmpty QueryId -> IO a) -> IO a
 sendPipeline conn queriesBeingSent allMsgs onMsgsSentTxn continuation = do
   thisWeakThreadId <- getMyWeakThreadId
   qryIds <- waitUntilPipelineIsReadyForNewQuery conn (getUniqueQueryStatesForNewPipeline queriesBeingSent) $ \(nextId, lastId) -> do
     -- If this thread is interrupted now, it is ok: only `totalQueriesSent` was bumped, but `currentPipeline`
     -- is still empty (it will be modified once we send all control messages to postgres).
     -- This is Note [Only modify totalQueriesSent]
-    let newPipelineList = zipWith (\queryIdentifier (queryText, queryProtocol) -> QueryState {queryIdentifier, queryText, queryOwner = thisWeakThreadId, queryProtocol, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
+    let newPipelineList = zipWith (\queryIdentifier (queryText, queryProtocol, queryPrepStmtName) -> QueryState {queryIdentifier, queryText, queryOwner = thisWeakThreadId, queryProtocol, queryPrepStmtName, responseMsgsState = NoMsgsReceived}) [nextId .. lastId] (NE.toList queriesBeingSent)
     case NE.nonEmpty newPipelineList of
       Nothing -> throwIrrecoverableError "Bug in Hpgsql: empty newPipeline to be sent"
       Just newPipeline -> do
+        sttv <- STM.atomically $ STM.readTVar conn.internalConnectionState
         atomicallySendControlMsgs_
           conn
-          ( allMsgs,
+          ( allMsgs sttv,
             do
               st <- STM.readTVar (internalConnectionState conn)
               (_, txnStatusRightBeforeSendingPipeline) <- fullTransactionStatus (internalConnectionState conn)
@@ -886,8 +898,8 @@ sendPipeline conn queriesBeingSent allMsgs onMsgsSentTxn continuation = do
         pure $ fmap queryIdentifier newPipeline
   continuation qryIds
   where
-    getUniqueQueryStatesForNewPipeline :: NonEmpty (ByteString, QueryProtocol) -> STM (QueryId, QueryId)
-    getUniqueQueryStatesForNewPipeline (fmap snd -> qryprotos) = do
+    getUniqueQueryStatesForNewPipeline :: NonEmpty (ByteString, QueryProtocol, Maybe String) -> STM (QueryId, QueryId)
+    getUniqueQueryStatesForNewPipeline (fmap (\(_, proto, _) -> proto) -> qryprotos) = do
       let sttv = internalConnectionState conn
       st <- STM.readTVar sttv
       when (isLeft $ connectionReadyForNewPipeline st) $ throwIrrecoverableError "Bug in Hpgsql: the connection should be ready for a new pipeline due to loopUntilNoPipeline"
@@ -1145,37 +1157,55 @@ pipelineCmdInternal qs =
 -- | Runs a pipeline of statements, that is, sends multiple SQL statements in a single round-trip
 -- to the server.
 -- Note that the thread that runs this must be the thread that consumes the
--- results of every query in the supplied pipeline, and in order.
+-- results of every query in the supplied pipeline, and in order, until all
+-- query results are consumed or an error occurs.
 -- Anything else is not officially supported by Hpgsql and may result in deadlocks or undefined behaviour.
 runPipeline :: HPgConnection -> Pipeline a -> IO a
 runPipeline conn pipeline = runPipelineInternal conn pipeline (pure ())
 
--- | Sends either a Pipeline or a ROLLBACK coupled with an STM transaction.
--- The former use case is obviously useful and used widely, the second is
--- super specific and exists only to avoid asynchronous exceptions from interrupting
--- the "ROLLBACK" sent when a `withTransaction` section is itself interrupted.
--- Check the caller for more info.
+-- | Sends a Pipeline coupled with an STM transaction that runs when
+-- the messages cross the userspace/kernel frontier (aka "are sent").
 runPipelineInternal :: HPgConnection -> Pipeline a -> STM () -> IO a
 runPipelineInternal conn (Pipeline (NE.nonEmpty -> mQueries) run) onMsgsSentTxn =
   case mQueries of
     Nothing -> pure $ run conn []
     Just queries -> do
+      -- TODO: Reading the encodingContext should only happen when holding
+      -- the control-msgs lock!
       encodingContext <- readMVar conn.encodingContext
-      let toMessages (SingleQuery qryString qryParams, mExpectedResultColFmts) =
-            let paramOidsAndValues = map ($ encodingContext) qryParams
-             in [ SomeMessage $ Parse qryString (map fst paramOidsAndValues),
-                  SomeMessage $
-                    Bind
-                      { paramsValuesInOrder = map snd paramOidsAndValues,
-                        resultColumnFmts = fromMaybe 1 mExpectedResultColFmts
-                      },
-                  SomeMessage Describe,
-                  SomeMessage Execute
-                ]
       sendPipeline
         conn
-        (fmap (\(SingleQuery {queryString}, _) -> (queryString, ExtendedQuery)) queries)
-        (concatMap toMessages queries ++ [SomeMessage Sync])
+        (fmap (\(SingleQuery {queryString, preparedStmtHash}, _) -> (queryString, ExtendedQuery, preparedStmtHash)) queries)
+        ( \st ->
+            let toMessages alreadyParsed (SingleQuery qryString qryParams preparedStmtHash, mExpectedResultColFmts) =
+                  let paramOidsAndValues = map ($ encodingContext) qryParams
+                   in ( if not alreadyParsed
+                          then
+                            [SomeMessage $ Parse qryString (map fst paramOidsAndValues) preparedStmtHash]
+                          else []
+                      )
+                        ++ [ SomeMessage $
+                               Bind
+                                 { paramsValuesInOrder = map snd paramOidsAndValues,
+                                   resultColumnFmts = fromMaybe 1 mExpectedResultColFmts,
+                                   preparedStmtHash
+                                 },
+                             SomeMessage Describe,
+                             SomeMessage Execute
+                           ]
+                queryMsgs =
+                  mconcat $
+                    snd $
+                      List.mapAccumL
+                        ( \pnames qry ->
+                            case (fst qry).preparedStmtHash of
+                              Nothing -> (pnames, toMessages False qry)
+                              Just psh -> (Set.insert psh pnames, toMessages (psh `Set.member` pnames) qry)
+                        )
+                        st.preparedStatementNames
+                        (NE.toList queries)
+             in queryMsgs ++ [SomeMessage Sync] -- concatMap toMessages queries ++ [SomeMessage Sync])
+        )
         onMsgsSentTxn
         $ \qryIds -> pure $ run conn (NE.toList qryIds)
 
@@ -1250,13 +1280,15 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
   let paramOidsAndValues = map ($ encodingContext) queryParams
   sendPipeline
     conn
-    ((queryString, CopyQuery StillCopying) :| [])
-    [ SomeMessage $ Parse queryString (map fst paramOidsAndValues),
-      SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0},
-      -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
-      SomeMessage Execute,
-      SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
-    ]
+    ((queryString, CopyQuery StillCopying, Nothing) :| [])
+    ( \_st ->
+        [ SomeMessage $ Parse queryString (map fst paramOidsAndValues) Nothing,
+          SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0, preparedStmtHash = Nothing},
+          -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
+          SomeMessage Execute,
+          SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
+        ]
+    )
     (pure ())
     $ \(qryId :| _) -> do
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId

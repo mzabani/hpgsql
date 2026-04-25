@@ -9,7 +9,7 @@ Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API la
 - [Interruption safety](/INTERRUPTION-SAFETY.md), except for very specific (and documented) edge cases.
 - Thread safety, unless specific (and documented) instructions say otherwise.
 - A SQL quasiquoter like the one in [postgresql-query](https://hackage.haskell.org/package/postgresql-query) and [hasql-interpolate](https://hackage-content.haskell.org/package/hasql-interpolate-1.0.1.0/docs/Hasql-Interpolate.html)
-- Prepared statements (TODO, actually)
+- Prepared statements
 
 ### Migrating from postgresql-simple
 

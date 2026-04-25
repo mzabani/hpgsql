@@ -2,11 +2,14 @@ module Hpgsql.Query
   ( Query, -- Do not export constructor
     SingleQuery, -- Do not export constructor
     sql,
+    sqlPrep,
     mkQueryInternal,
     breakQueryIntoStatements,
     mkQuery,
     escapeIdentifier,
     vALUES,
+    preparedStatement,
+    nonPreparedStatement,
   )
 where
 
@@ -17,7 +20,7 @@ import Data.Proxy (Proxy (..))
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements)
-import Hpgsql.QueryInternal (mkQuery, mkQueryInternal, sql)
+import Hpgsql.QueryInternal (mkQuery, mkQueryInternal, sql, sqlPrep)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
 
 -- | Escapes a database object identifier like a table name or a column name,
@@ -25,7 +28,7 @@ import Hpgsql.TypeInfo (EncodingContext, Oid)
 --
 -- > [sql| SELECT ^{escapeIdentifier "çolumñ"} FROM ^{escapeIdentifier "sChEmA"}.some_table |]
 escapeIdentifier :: ByteString -> Query
-escapeIdentifier v = Query {queryString = [FragmentOfStaticSql "\"", FragmentOfStaticSql (doubleQuotes v), FragmentOfStaticSql "\""], queryParams = []}
+escapeIdentifier v = Query {queryString = [FragmentOfStaticSql "\"", FragmentOfStaticSql (doubleQuotes v), FragmentOfStaticSql "\""], queryParams = [], isPrepared = False}
   where
     doubleQuotes = BS.intercalate "\"\"" . BS.split 0x22 {- '"' -}
 
@@ -54,4 +57,10 @@ commaSeparatedRowTuples rowTuples =
           )
           0
           rowTuples
-   in Query {queryString = mconcat $ List.intersperse [FragmentOfStaticSql ","] queryFragsPerRow, queryParams = mconcat rowTuples}
+   in Query {queryString = mconcat $ List.intersperse [FragmentOfStaticSql ","] queryFragsPerRow, queryParams = mconcat rowTuples, isPrepared = False}
+
+preparedStatement :: Query -> Query
+preparedStatement Query {..} = Query {isPrepared = True, ..}
+
+nonPreparedStatement :: Query -> Query
+nonPreparedStatement Query {..} = Query {isPrepared = False, ..}

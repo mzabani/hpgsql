@@ -14,7 +14,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import Hpgsql
 import Hpgsql.Pipeline (pipelineCmd, pipelineCmd_, pipelineL, pipelineS, runPipeline)
-import Hpgsql.Query (sql)
+import Hpgsql.Query (nonPreparedStatement, preparedStatement, sql)
 import qualified Streaming.Prelude as S
 import qualified Streaming.Prelude as Streaming
 import Test.Hspec
@@ -103,24 +103,26 @@ runVariedPipelines conn = hedgehog $ do
   CountReturningStatement (countQry1, countExpectedLen1) <- Gen.forAll $ Gen.element countReturningStmts
   CountReturningStatement (countQry2, countExpectedLen2) <- Gen.forAll $ Gen.element countReturningStmts
   CountReturningStatement (countQry3, countExpectedLen3) <- Gen.forAll $ Gen.element countReturningStmts
+  (prep1, prep2, prep3) <- Gen.forAll $ (,,) <$> Gen.bool <*> Gen.bool <*> Gen.bool
+  let prepFn p = if p then preparedStatement else nonPreparedStatement
   liftIO $ withRollback conn $ do
     execute_ conn "CREATE TEMPORARY TABLE some_data ON COMMIT DROP AS SELECT generate_series AS i FROM generate_series(1,100)"
     forConcurrently_ [(1 :: Int) .. 10] $ const $ do
       (listRes1, listRes2, listRes3, streamRes1, streamRes2, streamRes3, countRes1, countRes2, countRes3, countStmtCountRes1, countStmtCountRes2, countStmtCountRes3) <-
         runPipeline conn $
           (,,,,,,,,,,,)
-            <$> pipelineL rp1 qry1
+            <$> pipelineL rp1 (prepFn prep1 qry1)
             <*> pipelineL rp2 qry2
             <*> pipelineL rp3 qry3
             <*> pipelineS rp1 qry1
-            <*> pipelineS rp2 qry2
+            <*> pipelineS rp2 (prepFn prep2 qry2)
             <*> pipelineS rp3 qry3
             <*> pipelineCmd qry1
             <*> pipelineCmd qry2
-            <*> pipelineCmd qry3
-            <*> pipelineCmd countQry1
-            <*> pipelineCmd countQry2
-            <*> pipelineCmd countQry3
+            <*> pipelineCmd (prepFn prep3 qry3)
+            <*> pipelineCmd (prepFn prep1 countQry1)
+            <*> pipelineCmd (prepFn prep2 countQry2)
+            <*> pipelineCmd (prepFn prep3 countQry3)
       listRes1 >>= check1
       listRes2 >>= check2
       listRes3 >>= check3

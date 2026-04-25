@@ -2,6 +2,7 @@ module Hpgsql.QueryInternal
   ( Query (..),
     SingleQuery (..),
     sql,
+    sqlPrep,
     mkQueryInternal,
     breakQueryIntoStatements,
     mkQuery,
@@ -70,7 +71,7 @@ mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarN
                     error $ "Bug in Hpgsql: parseSql AcceptOnlyDollarNumberedArgs returned quasiquoter expression. Query: " ++ qryTextForError
               )
               blocks
-       in Query {queryString = queryFrags, queryParams = allParams}
+       in Query {queryString = queryFrags, queryParams = allParams, isPrepared = False}
 
 -- | Takes in a query string with query arguments as question marks (NOT dollar-numbered arguments).
 -- Example:
@@ -110,41 +111,50 @@ mkQueryInternal queryTemplate allParams =
           )
           (0, 0)
           statements
-   in Query {queryString = mconcat queryFrags, queryParams = concatMap rights allParams}
+   in Query {queryString = mconcat queryFrags, queryParams = concatMap rights allParams, isPrepared = False}
 
 sql :: QuasiQuoter
 sql =
   QuasiQuoter
-    { quoteExp = liftQuery . parseSql AcceptQuasiQuoterExpressions . Text.pack,
+    { quoteExp = liftQuery False . parseSql AcceptQuasiQuoterExpressions . Text.pack,
       quotePat = error "Hpgsql's sql quasiquoter does not implement quotePat",
       quoteType = error "Hpgsql's sql quasiquoter does not implement quoteType",
       quoteDec = error "Hpgsql's sql quasiquoter does not implement quoteDec"
     }
 
-liftQuery :: [BlockOrNotBlock] -> Q Exp
-liftQuery stmt = do
+sqlPrep :: QuasiQuoter
+sqlPrep =
+  QuasiQuoter
+    { quoteExp = liftQuery True . parseSql AcceptQuasiQuoterExpressions . Text.pack,
+      quotePat = error "Hpgsql's sql quasiquoter does not implement quotePat",
+      quoteType = error "Hpgsql's sql quasiquoter does not implement quoteType",
+      quoteDec = error "Hpgsql's sql quasiquoter does not implement quoteDec"
+    }
+
+liftQuery :: Bool -> [BlockOrNotBlock] -> Q Exp
+liftQuery isPrepared stmt = do
   let allFragments = concatMap parseBlockQuasiQuoter stmt
       hasEmbedded = any isEmbedded allFragments
   if hasEmbedded
-    then liftQueryDynamic allFragments
-    else liftQueryStatic allFragments
+    then liftQueryDynamic isPrepared allFragments
+    else liftQueryStatic isPrepared allFragments
   where
     isEmbedded (EmbeddedQueryExpr _) = True
     isEmbedded _ = False
 
 -- | Static path: no ^{} expressions, SQL string is a compile-time literal.
-liftQueryStatic :: [SqlFragment] -> Q Exp
-liftQueryStatic allFragments = do
+liftQueryStatic :: Bool -> [SqlFragment] -> Q Exp
+liftQueryStatic isPrepared allFragments = do
   let (fragQExps, varNames) = buildQueryFragsAndVars allFragments 1
   fragExps <- sequence fragQExps
   paramExps <- mapM generateParamExp varNames
-  [|Query $(pure $ ListE fragExps) $(pure $ ListE paramExps)|]
+  [|Query $(pure $ ListE fragExps) $(pure $ ListE paramExps) isPrepared|]
 
 -- | Dynamic path: has ^{} expressions, build query at runtime via buildQueryQQ.
-liftQueryDynamic :: [SqlFragment] -> Q Exp
-liftQueryDynamic allFragments = do
+liftQueryDynamic :: Bool -> [SqlFragment] -> Q Exp
+liftQueryDynamic isPrepared allFragments = do
   partExps <- mapM fragmentToPartExp allFragments
-  [|buildQueryQQ $(pure $ ListE partExps)|]
+  [|buildQueryQQ isPrepared $(pure $ ListE partExps)|]
 
 -- | Convert a SqlFragment into a TH expression producing a QueryBuildPart.
 fragmentToPartExp :: SqlFragment -> Q Exp
@@ -190,10 +200,10 @@ data QueryBuildPartQQ
   | SemiColonPart
   | WhitespaceOrCommenstPart !ByteString
 
-buildQueryQQ :: [QueryBuildPartQQ] -> Query
-buildQueryQQ parts =
+buildQueryQQ :: Bool -> [QueryBuildPartQQ] -> Query
+buildQueryQQ isPrepared parts =
   let (queryFrags, allParams) = go parts 1
-   in Query {queryString = queryFrags, queryParams = allParams}
+   in Query {queryString = queryFrags, queryParams = allParams, isPrepared}
   where
     go [] _ = ([], [])
     go (part : rest) argNum = case part of
