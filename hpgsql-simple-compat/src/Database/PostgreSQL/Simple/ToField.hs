@@ -34,19 +34,21 @@ where
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LB
+import Data.CaseInsensitive (CI)
 import Data.Int (Int16, Int32, Int64)
+import Data.Proxy (Proxy (..))
 import Data.Scientific (Scientific)
 import Data.Text (Text)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Time.LocalTime.Compat (LocalTime)
-import Data.Typeable (Proxy (..), Typeable)
-import Data.CaseInsensitive (CI)
+import Data.Typeable (Typeable)
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (EncodingContext, ToPgField (..))
+import Hpgsql.Encoding (EncodingContext, FieldEncoder (toTypeOid), ToPgField (..))
+import Hpgsql.QueryInternal (encodeParam)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid)
 import Hpgsql.Types (Aeson, PGArray)
@@ -70,14 +72,11 @@ instance Show Action where
   show (Many b) = "Many " ++ show b
   show (Plain b) = "Plain " ++ show b
 
-proxyOf :: a -> Proxy a
-proxyOf _ = Proxy
-
 -- | A type that may be used as a single parameter to a SQL query.
 class ToField a where
   toField :: a -> Action
   default toField :: (ToPgField a) => a -> Action
-  toField v = QueryArgument $ \encCtx -> (toTypeOid (proxyOf v) encCtx, toPgField encCtx v)
+  toField v = QueryArgument $ encodeParam v
 
 instance ToField Action where
   toField v = v
@@ -145,14 +144,14 @@ instance ToField (Unbounded UTCTime)
 instance ToField (Unbounded ZonedTime)
 
 class HasFieldType a where
-  typeOid :: Proxy a -> EncodingContext -> Maybe Oid
+  fieldTypeOid :: Proxy a -> EncodingContext -> Maybe Oid
 
 instance (ToPgField a) => HasFieldType a where
-  typeOid = toTypeOid
+  fieldTypeOid _ = toTypeOid (fieldEncoder @a)
 
 instance forall a. (ToField a, HasFieldType a) => ToField (Maybe a) where
   toField = \case
-    Nothing -> QueryArgument $ \encCtx -> (typeOid (Proxy @a) encCtx, SqlNull)
+    Nothing -> QueryArgument $ \encCtx -> (fieldTypeOid (Proxy @a) encCtx, SqlNull)
     Just v -> case toField v of
       QueryArgument enc -> QueryArgument enc
       _ -> error "hpgsql-simple-compat does not support (ToField (Maybe a)) instances that aren't simple query arguments"

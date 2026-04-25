@@ -6,6 +6,7 @@ module Hpgsql.QueryInternal
     breakQueryIntoStatements,
     mkQuery,
     escapeIdentifier,
+    encodeParam,
   )
 where
 
@@ -14,12 +15,11 @@ import qualified Data.ByteString as BS
 import Data.Either (rights)
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
-import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Hpgsql.Builder (BinaryField)
-import Hpgsql.Encoding (RowEncoder (..), ToPgField (..), ToPgRow (..))
+import Hpgsql.Encoding (FieldEncoder (..), RowEncoder (..), ToPgField (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements, renumberParamsFrom)
 import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, parseSql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
@@ -160,7 +160,7 @@ fragmentToPartExp (NonInterpolatedSqlFragment t) =
 fragmentToPartExp (InterpolatedHaskellExpr haskellExpr) =
   case parseExp (Text.unpack haskellExpr) of
     Left err -> error $ "Could not parse Haskell expression '" ++ Text.unpack haskellExpr ++ "': " ++ err
-    Right expr -> [|ParamPart (\encCtx -> (toTypeOid (proxyOf $(pure expr)) encCtx, toPgField encCtx $(pure expr)))|]
+    Right expr -> [|ParamPart (encodeParam $(pure expr))|]
 fragmentToPartExp SemiColonFragment =
   [|SemiColonPart|]
 fragmentToPartExp (WhitespaceOrCommentsFragment t) =
@@ -230,13 +230,15 @@ parseBlockQuasiQuoter QuestionMarkArg = [NonInterpolatedSqlFragment "?"] -- If s
 parseBlockQuasiQuoter (QuasiQuoterExpression QQInterpolation expr) = [InterpolatedHaskellExpr expr]
 parseBlockQuasiQuoter (QuasiQuoterExpression QQEmbeddedQuery expr) = [EmbeddedQueryExpr expr]
 
-proxyOf :: a -> Proxy a
-proxyOf _ = Proxy
-
 -- | Generate a parameter expression for a captured variable
 generateParamExp :: Text -> Q Exp
 generateParamExp (Text.unpack -> haskellExpr) =
   case parseExp haskellExpr of
     Left err -> error $ "Could not parse Haskell expression '" ++ haskellExpr ++ "': " ++ err
     Right expr ->
-      [|\encCtx -> (toTypeOid (proxyOf $(pure expr)) encCtx, toPgField encCtx $(pure expr))|]
+      [|encodeParam $(pure expr)|]
+
+encodeParam :: (ToPgField a) => a -> EncodingContext -> (Maybe Oid, BinaryField)
+encodeParam v =
+  let fe = fieldEncoder
+   in \encCtx -> (fe.toTypeOid encCtx, fe.toPgField encCtx v)

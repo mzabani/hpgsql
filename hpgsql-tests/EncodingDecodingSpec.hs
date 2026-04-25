@@ -39,7 +39,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, singleColRowParser)
+import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldEncoder (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, mkUntypedFieldEncoder, singleColRowParser)
 import Hpgsql.Pipeline (pipelineL, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -667,8 +667,8 @@ myEnumFieldParserWithTypeInfoCheck =
         }
 
 instance ToPgField MyEnum where
-  toPgField encCtx =
-    toPgField encCtx . \case
+  fieldEncoder = mkUntypedFieldEncoder $ \encCtx ->
+    (fieldEncoder @Text).toPgField encCtx . \case
       Val1 -> "val1" :: Text
       Val2 -> "val2"
       Val3 -> "val3"

@@ -14,9 +14,9 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
-import Data.Typeable (Proxy (..), Typeable)
+import Data.Typeable (Typeable)
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (ColumnInfo (..), FieldParser (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
+import Hpgsql.Encoding (ColumnInfo (..), FieldEncoder (..), FieldParser (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
@@ -26,11 +26,15 @@ newtype PGArray a = PGArray {fromPGArray :: [a]}
   deriving (Eq, Ord, Read, Show, Functor)
 
 instance forall a. (ToPgField a) => ToPgField (PGArray a) where
-  toTypeOid _ encodingContext = do
-    elOid <- toTypeOid (Proxy @a) encodingContext
-    arrayTypInfo <- Map.lookup elOid encodingContext.typeInfoCache
-    arrayTypInfo.oidOfArrayType
-  toPgField encCtx = toPgVectorField encCtx . fromPGArray
+  fieldEncoder =
+    let fe = fieldEncoder @a
+    in FieldEncoder
+      { toTypeOid = \encodingContext -> do
+          elOid <- fe.toTypeOid encodingContext
+          arrayTypInfo <- Map.lookup elOid encodingContext.typeInfoCache
+          arrayTypInfo.oidOfArrayType
+      , toPgField = \encCtx -> toPgVectorField encCtx . fromPGArray
+      }
 
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
   fieldParser = PGArray <$> arrayField replicateM fieldParser
@@ -85,6 +89,8 @@ instance (FromJSON a) => FromPgField (Aeson a) where
       }
 
 instance (ToJSON a) => ToPgField (Aeson a) where
-  toTypeOid _ _ = Just jsonbOid
-  toPgField _ (Aeson v) =
-    NotNull $ BS.cons 1 (LBS.toStrict $ Aeson.encode v)
+  fieldEncoder = FieldEncoder
+    { toTypeOid = \_ -> Just jsonbOid
+    , toPgField = \_ (Aeson v) ->
+        NotNull $ BS.cons 1 (LBS.toStrict $ Aeson.encode v)
+    }

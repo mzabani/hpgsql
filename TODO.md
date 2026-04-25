@@ -4,8 +4,7 @@
   - hstore
   - PGRange?
 - Prepared statements
-- Make ToPgField return a FieldEncoder instead of a two-class method?
-  - Make that type implement `Alternative`, add `FromPgField (Either a b)` instance.
+- Make FieldParser implement `Alternative`, add `FromPgField (Either a b)` instance.
 - `run format-hs`, check all is formatted in CI as the last step
 - Write a FromRow instance in hpgsql-simple-compat that checks number of fields and decodes a row of arbitrary length
   - Can the Applicative RowParser also know about remaining fields? Ordering is fine in Applicative, it's just sequencing that isn't.

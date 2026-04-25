@@ -41,9 +41,9 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.ByteString.Builder (stringUtf8)
 import Data.Foldable (toList)
+import Data.Functor.Contravariant (contramap)
 import Data.Hashable (Hashable (hashWithSalt))
 import qualified Data.List as List
-import Data.Proxy (Proxy (..))
 import Data.Semigroup
 import Data.String (IsString (..))
 import Data.Text (Text)
@@ -169,8 +169,7 @@ instance Hpgsql.FromPgField (Binary ByteString) where
   fieldParser = Binary <$> Hpgsql.fieldParser
 
 instance ToPgField (Binary ByteString) where
-  toTypeOid _ tyiCache = toTypeOid (Proxy @ByteString) tyiCache
-  toPgField tyiCache (Binary v) = toPgField tyiCache v
+  fieldEncoder = contramap fromBinary fieldEncoder
 
 -- | Wrap text for use as sql identifier, i.e. a table or column name.
 newtype Identifier = Identifier {fromIdentifier :: Text}
