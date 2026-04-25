@@ -10,13 +10,24 @@ module Hpgsql.Query
   )
 where
 
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.List as List
 import Data.Proxy (Proxy (..))
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements)
-import Hpgsql.QueryInternal (escapeIdentifier, mkQuery, mkQueryInternal, sql)
+import Hpgsql.QueryInternal (mkQuery, mkQueryInternal, sql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
+
+-- | Escapes a database object identifier like a table name or a column name,
+-- so it can be embedded  inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:
+--
+-- > [sql| SELECT ^{escapeIdentifier "çolumñ"} FROM ^{escapeIdentifier "sChEmA"}.some_table |]
+escapeIdentifier :: ByteString -> Query
+escapeIdentifier v = Query {queryString = [FragmentOfStaticSql "\"", FragmentOfStaticSql (doubleQuotes v), FragmentOfStaticSql "\""], queryParams = []}
+  where
+    doubleQuotes = BS.intercalate "\"\"" . BS.split 0x22 {- '"' -}
 
 -- | Generates a query like @VALUES ($1,$2), ($3,$4)@ from a list of rows.
 -- Can be embedded inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:

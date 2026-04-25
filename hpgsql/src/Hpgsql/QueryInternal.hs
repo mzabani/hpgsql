@@ -5,13 +5,11 @@ module Hpgsql.QueryInternal
     mkQueryInternal,
     breakQueryIntoStatements,
     mkQuery,
-    escapeIdentifier,
     encodeParam,
   )
 where
 
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
 import Data.Either (rights)
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
@@ -26,11 +24,6 @@ import Hpgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
-
-escapeIdentifier :: ByteString -> Query
-escapeIdentifier v = Query {queryString = [FragmentOfStaticSql "\"", FragmentOfStaticSql (doubleQuotes v), FragmentOfStaticSql "\""], queryParams = []}
-  where
-    doubleQuotes = BS.intercalate "\"\"" . BS.split 0x22 {- '"' -}
 
 -- | A useful representation for our quasiquoter parsing.
 data SqlFragment
