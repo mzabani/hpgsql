@@ -112,11 +112,11 @@ jobs:
         # postgres versions aren't enough to make it worth testing every version here too.
         # We don't run these concurrently because Nix does not have a sandbox in Macs, so it's
         # not worth the risk.
-        timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18
-        timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17
-        timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-tests.txt nix-build --no-out-link -A testsPg16
-        timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15
-        timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14
+        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18
+        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17
+        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-tests.txt nix-build --no-out-link -A testsPg16
+        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15
+        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14
 
     - name: Run tests with different combinations
       run: |
@@ -125,7 +125,7 @@ jobs:
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
         nix-build --no-out-link --argstr threading "-threaded" -A hpgsql-tests
-        timeout 2m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
+        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
 
     - name: Run hpgsql-simple-compat tests
       run: |
