@@ -282,7 +282,7 @@ timestampDecoding conn = do
 timestampEncoding :: HPgConnection -> IO ()
 timestampEncoding conn = do
   let row = (UTCTime (fromGregorian 1999 12 31) 0, UTCTime (fromGregorian 2010 01 01) 0, UTCTime (fromGregorian 2011 07 04) (secondsToDiffTime 1), UTCTime (fromGregorian 1981 03 17) 0, UTCTime (fromGregorian 1981 03 17) 43200)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5" row) `shouldReturn` [row]
+  query1 conn (mkQuery "SELECT $1, $2, $3, $4, $5" row) `shouldReturn` row
 
 lessUsualTypes :: HPgConnection -> IO ()
 lessUsualTypes conn = do
@@ -295,8 +295,8 @@ byteaTextDecoding conn = hedgehog $ do
   someBs :: ByteString <- Gen.forAll $ Gen.bytes (Gen.linear 0 50)
   let lazyBs :: LBS.ByteString = LBS.fromStrict someBs
       hexStr = concatMap (\w -> let s = showHex w "" in if length s < 2 then '0' : s else s) (BS.unpack someBs)
-  res <- liftIO $ queryWith rowParser conn (fromString $ "SELECT '\\x" <> hexStr <> "'::bytea, '\\x" <> hexStr <> "'::bytea")
-  res === [(someBs, lazyBs)]
+  res <- liftIO $ queryMay conn (fromString $ "SELECT '\\x" <> hexStr <> "'::bytea, '\\x" <> hexStr <> "'::bytea")
+  res === Just (someBs, lazyBs)
 
 dateAndTimestampTextDecoding :: HPgConnection -> PropertyT IO ()
 dateAndTimestampTextDecoding conn = hedgehog $ do
