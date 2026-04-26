@@ -3,6 +3,7 @@ module PipelineSpec where
 import Control.Concurrent.Async (forConcurrently_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Int (Int64)
+import Data.String (fromString)
 import DbUtils
   ( aroundConn,
     irrecoverableErrorWithMsg,
@@ -13,7 +14,7 @@ import Hedgehog
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import Hpgsql
-import Hpgsql.Pipeline (pipelineCmd, pipelineCmd_, pipeline, pipelineWith, pipelineS, pipelineSWith, runPipeline)
+import Hpgsql.Pipeline (pipeline, pipeline1, pipelineCmd, pipelineCmd_, pipelineS, pipelineSWith, pipelineWith, runPipeline)
 import Hpgsql.Query (nonPreparedStatement, preparedStatement, sql)
 import qualified Streaming.Prelude as S
 import qualified Streaming.Prelude as Streaming
@@ -43,6 +44,7 @@ spec = do
       multiStatementQueryIsImplicitPipeline
     it "Run varied pipelines" runVariedPipelines
     it "Run varied pipelines with error statement" runVariedPipelinesWithError
+    it "Massive pipeline" massivePipeline
 
 data SomeRowReturningStatementTest = forall a. SomeRowReturningStatementTest (RowReturningStatementTest a)
 
@@ -221,3 +223,12 @@ multiStatementQueryIsImplicitPipeline conn = do
       SELECT i FROM x ORDER BY i;
    |]
     `shouldReturn` map Only [2, 3, 4, 5 :: Int]
+
+-- | Sends a pipeline with lots of statements. This is a sort of
+-- stress test that I won't vouch to have much value, but why not keep it for now.
+massivePipeline :: HPgConnection -> IO ()
+massivePipeline conn = do
+  let singleQuery :: Int -> Query
+      singleQuery n = [sql|SELECT #{n}|]
+  results :: [IO (Only Int)] <- runPipeline conn $ traverse pipeline1 (map singleQuery [1 .. 3_000])
+  sequenceA results `shouldReturn` map Only [1 :: Int .. 3_000]
