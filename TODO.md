@@ -12,7 +12,6 @@
 - Do we need to depend on `transformers`?
 - Do we need both liftQueryStatic and liftQueryDynamic?
 - Add test that sends a pipeline with a massive number of queries (does postgres keep receiving if we're not consuming results?)
-- Add pipelineMay and queryMay
 - Connecting with a password
 - Double-check licensing
 

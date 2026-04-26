@@ -17,6 +17,8 @@ module Hpgsql
     querySMWith,
     query1,
     query1With,
+    queryMay,
+    queryMayWith,
 
     -- * Execute
     execute,

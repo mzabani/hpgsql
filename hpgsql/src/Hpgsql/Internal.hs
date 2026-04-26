@@ -17,6 +17,8 @@ module Hpgsql.Internal
     querySMWith,
     query1,
     query1With,
+    queryMay,
+    queryMayWith,
 
     -- * Execute
     execute,
@@ -36,6 +38,8 @@ module Hpgsql.Internal
     pipelineCmd_,
     pipeline1,
     pipeline1With,
+    pipelineMay,
+    pipelineMayWith,
 
     -- * Copy
     copyStart,
@@ -1160,9 +1164,22 @@ pipeline1With rowparser q = (toSingleRow =<<) <$> pipelineWith rowparser q
     toSingleRow res = do
       let queryBs = queryToByteString q
       case res of
-        [] -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query1 call, but got none."
+        [] -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query/pipeline1 call, but got none."
         [singleRow] -> pure singleRow
-        _ -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query1 call, but got more than one."
+        _ -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query/pipeline1 call, but got more than one."
+
+pipelineMay :: (FromPgRow a) => Query -> Pipeline (IO (Maybe a))
+pipelineMay = pipelineMayWith rowParser
+
+pipelineMayWith :: RowParser a -> Query -> Pipeline (IO (Maybe a))
+pipelineMayWith rowparser q = (toMaybeRow =<<) <$> pipelineWith rowparser q
+  where
+    toMaybeRow res = do
+      let queryBs = queryToByteString q
+      case res of
+        [] -> pure Nothing
+        [singleRow] -> pure $ Just singleRow
+        _ -> throwIrrecoverableErrorWithStatement queryBs "Expected zero or one row in query/pipelineMay call, but got more than one."
 
 pipelineCmd :: Query -> Pipeline (IO Int64)
 pipelineCmd = pipelineCmdInternal . breakQueryIntoStatements
@@ -1289,6 +1306,12 @@ query1 = query1With rowParser
 
 query1With :: RowParser a -> HPgConnection -> Query -> IO a
 query1With rparser conn q = join $ runPipeline conn $ pipeline1With rparser q
+
+queryMay :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO (Maybe a)
+queryMay = queryMayWith rowParser
+
+queryMayWith :: RowParser a -> HPgConnection -> Query -> IO (Maybe a)
+queryMayWith rparser conn q = join $ runPipeline conn $ pipelineMayWith rparser q
 
 withCopy_ :: HPgConnection -> Query -> IO a -> IO Int64
 withCopy_ conn copyQ copyFn = fst <$> withCopy conn copyQ copyFn
