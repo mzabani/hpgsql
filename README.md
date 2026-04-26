@@ -11,13 +11,31 @@ Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API la
 - A SQL quasiquoter like the one in [postgresql-query](https://hackage.haskell.org/package/postgresql-query) and [hasql-interpolate](https://hackage-content.haskell.org/package/hasql-interpolate-1.0.1.0/docs/Hasql-Interpolate.html)
 - Prepared statements
 
+Here's an example of a pipeline mixing streams, prepared and non prepared results:
+
+```haskell
+f :: Int -> IO (Stream (Of Aeson.Value) IO ())
+f val = do
+  (updateTbl :: IO (), aggRes :: IO (Only Int), largeResults) <-
+    runPipeline conn $
+      (,,)
+        <$> pipelineCmd_ [sql|UPDATE tbl SET val=#{val}|]
+        <*> pipeline1 [sql|SELECT SUM(val) FROM tbl|]
+        <*> pipelineSWith
+          (rowParser @(Vector Int, Vector Text))
+          -- We use a prepared statement for the query below
+          [sqlPrep|SELECT x, y FROM tbl|]
+  updateTbl
+  Only total <- aggRes
+  Streaming.map Aeson.toJSON <$> largeResults
+```
 ### Migrating from postgresql-simple
 
 This repository contains [a fork of postgresql-simple](https://github.com/mzabani/hpgsql/tree/master/hpgsql-simple-compat) that preserves as much as possible** the names of modules, functions, types, classes, exceptions, etc. Its purpose is to ease migrating to hpgsql, and I intend to fully support its development to make it and keep it as similar to postgresql-simple as it can be.
 
 It is called hpgsql-simple-compat, and its implementation uses hpgsql. You can get a `HPgConnection` out of it so you can gradually migrate your queries to hpgsql.
 
-It also contains parts of [postgresql-libpq](https://hackage.haskell.org/package/postgresql-libpq) and [postgresql-query](https://hackage.haskell.org/package/postgresql-query), also implemented on top of hpgsql.
+It also contains parts of [postgresql-libpq](https://hackage.haskell.org/package/postgresql-libpq) and [postgresql-query](https://hackage.haskell.org/package/postgresql-query), all implemented on top of hpgsql.
 
 - <sub>I haven't been able to preserve _everything_, so some differences do exist. Also the library is not feature complete yet.</sub>
 - <sub>There may be small intentional differences added to help the transition, like a `sqlStatement` field in the `SqlError` exception so it's easier to know which queries are failing.</sub>

@@ -1,35 +1,44 @@
--- | Tests the examples written in INTERRUPTION-SAFETY.md for both
--- hpgsql and postgresql-simple.
+-- | Tests the examples written in our documentation to make sure we're
+-- not announcing features we don't really support.
 module DocumentationExamplesSpec where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (Concurrently (..), runConcurrently)
 import Control.Exception.Safe (SomeException, bracket, fromException, onException, throwString, try, tryAny)
 import Control.Monad (forM_, void)
+import qualified Data.Aeson as Aeson
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.List as List
+import Data.Text (Text)
+import Data.Vector (Vector)
 import qualified Database.PostgreSQL.Simple as PGSimple
-import DbUtils (aroundConn, testConnInfo)
+import DbUtils (aroundConn, testConnInfo, withRollback)
 import Hpgsql
 import Hpgsql.Connection (libpqConnString)
-import Hpgsql.Query (sql)
+import Hpgsql.Pipeline (pipeline1, pipelineCmd_, pipelineSWith, runPipeline)
+import Hpgsql.Query (sql, sqlPrep)
 import Hpgsql.Transaction (transactionStatus, withTransaction)
+import Streaming (Of, Stream)
+import qualified Streaming.Prelude as Streaming
 import Test.Hspec
 
 spec :: Spec
-spec = describe "INTERRUPTION-SAFETY.md examples" $ parallel $ do
+spec = describe "Documentation examples" $ parallel $ do
   aroundConn $ do
     it
-      "Hpgsql: try + logErrorToDatabase runs the handler and rethrows the original exception"
+      "INTERRUPTION-SAFETY.md - Hpgsql: try + logErrorToDatabase runs the handler and rethrows the original exception"
       onExceptionLogsErrorToDatabaseExample
     it
-      "Hpgsql: withTransaction rolls back cleanly when an async exception interrupts a query"
+      "INTERRUPTION-SAFETY.md - Hpgsql: withTransaction rolls back cleanly when an async exception interrupts a query"
       withTransactionExample
+    it
+      "README.md - Hpgsql: pipeline with mixed prepared statements and streams"
+      veryMixedPipeline
   it
-    "postgresql-simple: try + logErrorToDatabase fails with \"another command is already in progress\""
+    "INTERRUPTION-SAFETY.md - postgresql-simple: try + logErrorToDatabase fails with \"another command is already in progress\""
     postgresqlSimpleOnExceptionLogsErrorToDatabaseExample
   it
-    "postgresql-simple: withTransaction leaves the connection in a bad state (\"another command is already in progress\")"
+    "INTERRUPTION-SAFETY.md - postgresql-simple: withTransaction leaves the connection in a bad state (\"another command is already in progress\")"
     postgresqlSimpleWithTransactionExample
 
 onExceptionLogsErrorToDatabaseExample :: HPgConnection -> IO ()
@@ -112,6 +121,26 @@ withTransactionExample conn = do
   -- Run any other query and verify the transaction was rolled back
   execute_ conn "SELECT 1"
   transactionStatus conn `shouldReturn` TransIdle
+
+veryMixedPipeline :: HPgConnection -> IO ()
+veryMixedPipeline conn = withRollback conn $ do
+  execute_ conn [sql|CREATE UNLOGGED TABLE tbl AS SELECT n AS val, ARRAY[n, n, n] AS x, ARRAY[n || 'a', n || 'b'] AS y FROM generate_series(1,100) q(n)|]
+  let f :: Int -> IO (Stream (Of Aeson.Value) IO ())
+      f val = do
+        (updateTbl :: IO (), aggRes :: IO (Only Int), largeResults) <-
+          runPipeline conn $
+            (,,)
+              <$> pipelineCmd_ [sql|UPDATE tbl SET val=#{val}|]
+              <*> pipeline1 [sql|SELECT SUM(val) FROM tbl|]
+              <*> pipelineSWith
+                (rowParser @(Vector Int, Vector Text))
+                -- We use a prepared statement for the query below
+                [sqlPrep|SELECT x, y FROM tbl|]
+        updateTbl
+        Only total <- aggRes
+        Streaming.map Aeson.toJSON <$> largeResults
+  jsonResults <- f 5
+  Streaming.effects jsonResults -- Just consume them for testing purposes
 
 -- | The exact same scenario as 'withTransactionExample', but for postgresql-simple.
 postgresqlSimpleWithTransactionExample :: IO ()
