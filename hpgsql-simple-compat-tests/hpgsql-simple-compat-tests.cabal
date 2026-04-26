@@ -55,7 +55,6 @@ executable hpgsql-simple-compat-tests
     , bytestring
     , case-insensitive
     , containers
-    , cryptohash-md5
     , filepath
     , hpgsql
     , hpgsql-simple-compat

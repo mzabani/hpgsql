@@ -1,41 +1,40 @@
 module Notify (testNotify) where
 
 import Common
-
-import Control.Applicative
 import Control.Concurrent
 import Control.Monad
+import qualified Data.ByteString as B
 import Data.Function
 import Data.List
 import Database.PostgreSQL.Simple.Notification
-
-import qualified Data.ByteString as B
 
 -- TODO: Test with payload, but only for PostgreSQL >= 9.0
 -- (when that feature was introduced).
 
 testNotify :: TestEnv -> Assertion
-testNotify TestEnv{..} =
-    withConn $ \conn2 -> do
-        execute_ conn "LISTEN foo"
-        execute_ conn "LISTEN bar"
+testNotify TestEnv {..} =
+  withConn $ \conn2 -> do
+    execute_ conn "LISTEN foo"
+    execute_ conn "LISTEN bar"
 
-        results_mv <- newEmptyMVar
-        forkIO $ replicateM 2 (getNotification conn)
-             >>= putMVar results_mv
+    results_mv <- newEmptyMVar
+    forkIO $
+      replicateM 2 (getNotification conn)
+        >>= putMVar results_mv
 
-        threadDelay 100000
+    threadDelay 100000
 
-        execute_ conn2 "NOTIFY foo"
-        execute_ conn2 "NOTIFY bar"
+    execute_ conn2 "NOTIFY foo"
+    execute_ conn2 "NOTIFY bar"
 
-        [n1, n2] <- sortBy (compare `on` notificationChannel)
-                <$> takeMVar results_mv
+    [n1, n2] <-
+      sortBy (compare `on` notificationChannel)
+        <$> takeMVar results_mv
 
-        assertEqual "n1" "bar" (notificationChannel n1)
-        assertEqual "n2" "foo" (notificationChannel n2)
+    assertEqual "n1" "bar" (notificationChannel n1)
+    assertEqual "n2" "foo" (notificationChannel n2)
 
-        -- Other sanity checks
-        assertEqual "Server PIDs match" (notificationPid n1) (notificationPid n2)
-        assertBool "notificationData is empty" $
-            all (B.null . notificationData) [n1, n2]
+    -- Other sanity checks
+    assertEqual "Server PIDs match" (notificationPid n1) (notificationPid n2)
+    assertBool "notificationData is empty" $
+      all (B.null . notificationData) [n1, n2]

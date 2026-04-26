@@ -15,11 +15,11 @@ import Control.Exception as E
 import Control.Monad
 import Data.Aeson
 import Data.ByteString (ByteString)
-import Data.CaseInsensitive (CI)
-import qualified Data.CaseInsensitive as CI
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy.Char8 as BL
+import Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
 import Data.Char
 import Data.IORef
 import Data.List (sort)
@@ -661,17 +661,17 @@ isUniqueViolation SqlError {..} = sqlState == "23505"
 isSyntaxError :: SqlError -> Bool
 isSyntaxError SqlError {..} = sqlState == "42601"
 
-isFormatError :: Int -> FormatError -> Bool
-isFormatError i FormatError {..}
-  | null fmtMessage = False
-  | otherwise =
-      fmtMessage
-        == concat
-          [ show i,
-            " single '?' characters, but ",
-            show (length fmtParams),
-            " parameters"
-          ]
+-- isFormatError :: Int -> FormatError -> Bool
+-- isFormatError i FormatError {..}
+--   | null fmtMessage = False
+--   | otherwise =
+--       fmtMessage
+--         == concat
+--           [ show i,
+--             " single '?' characters, but ",
+--             show (length fmtParams),
+--             " parameters"
+--           ]
 
 ------------------------------------------------------------------------
 
