@@ -11,10 +11,12 @@ module Hpgsql.Internal
     -- * Query
     query,
     queryWith,
-    queryWithM,
-    queryStreaming,
-    queryWithStreaming,
-    queryWithStreamingM,
+    queryMWith,
+    queryS,
+    querySWith,
+    querySMWith,
+    query1,
+    query1With,
 
     -- * Execute
     execute,
@@ -26,10 +28,14 @@ module Hpgsql.Internal
     Pipeline,
     runPipeline,
     pipelineS,
-    pipelineSM,
-    pipelineL,
+    pipelineSWith,
+    pipelineSMWith,
+    pipeline,
+    pipelineWith,
     pipelineCmd,
     pipelineCmd_,
+    pipeline1,
+    pipeline1With,
 
     -- * Copy
     copyStart,
@@ -94,7 +100,7 @@ module Hpgsql.Internal
     whenNotClosed,
     chunkBuildersBySize,
     pipelineCmdInternal,
-    pipelineLM,
+    pipelineM,
     withCopyInternal,
     copyEndInternal,
     putCopyError,
@@ -131,7 +137,7 @@ import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnString (..))
 import Hpgsql.Encoding (ColumnInfo (..), FromPgRow (..), RowEncoder (..), RowParser (..), ToPgRow (..))
 import Hpgsql.Encoding.RowParserMonadic (ConversionState (..), RowParserMonadic (..))
-import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, throwIrrecoverableError)
+import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
@@ -156,7 +162,7 @@ import System.Timeout (timeout)
 -- | Returns a Left with the current pipeline if connection is not ready for a new pipeline, a Right
 -- with the current transaction status otherwise.
 connectionReadyForNewPipeline :: InternalConnectionState -> Either (NonEmpty QueryState) TransactionStatus
-connectionReadyForNewPipeline (currentPipeline -> pipeline) =
+connectionReadyForNewPipeline (currentPipeline -> pip) =
   -- You can tell there are two ways to represent no active pipeline, aka being ready
   -- to send a new query: and empty pipeline and a pipeline with a ReadyForQuery received.
   -- This might seem silly, but it really helps resuming interrupted execution from a point
@@ -164,7 +170,7 @@ connectionReadyForNewPipeline (currentPipeline -> pipeline) =
   -- with a QueryId.
   -- The empty list should only exist immediately after connecting and before the very first
   -- query is sent. After that it's never empty again as new pipelines replace old ones.
-  case pipeline of
+  case pip of
     [] -> Right TransIdle
     (q1 : qs) -> case headMaybe $
       mapMaybe
@@ -172,7 +178,7 @@ connectionReadyForNewPipeline (currentPipeline -> pipeline) =
             ReadyForQueryReceived _ (ReadyForQuery s) -> Just s
             _ -> Nothing
         )
-        pipeline of
+        pip of
       Nothing -> Left (q1 :| qs)
       Just st -> Right st
 
@@ -185,7 +191,7 @@ fullTransactionStatus sttv = do
   st <- STM.readTVar sttv
   (st.transactionStatusBeforeCurrentPipeline,) <$> case connectionReadyForNewPipeline st of
     Right s -> pure s
-    Left pipeline ->
+    Left pip ->
       pure $
         if any
           ( ( \case
@@ -194,7 +200,7 @@ fullTransactionStatus sttv = do
             )
               . responseMsgsState
           )
-          pipeline
+          pip
           then
             TransInError
           else TransActive
@@ -326,7 +332,7 @@ refreshTypeInfoCache :: HPgConnection -> Pipeline (IO ())
 refreshTypeInfoCache conn =
   -- https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
   -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
-  let fetchPipeline = pipelineL rowParser "select oid, typname, typarray from pg_catalog.pg_type WHERE oid >= 16384"
+  let fetchPipeline = pipeline "select oid, typname, typarray from pg_catalog.pg_type WHERE oid >= 16384"
    in fillTypeInfoCache <$> fetchPipeline
   where
     fillTypeInfoCache queryResultsIO = do
@@ -852,28 +858,28 @@ executeMany_ conn qry = void $ executeMany conn qry
 -- It is important to note the same thread that runs this must be the thread that
 -- consumes the returned Stream, and the returned Stream must be consumed completely
 -- (up to the last row or a postgres error) before you are able to run other queries.
-queryWithStreaming :: RowParser a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
-queryWithStreaming rparser conn qry = join $ runPipeline conn $ pipelineS rparser qry
+queryS :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
+queryS = querySWith rowParser
 
 -- | Streams results directly from the connection's socket, i.e. without using cursors.
 -- It is important to note the same thread that runs this must be the thread that
 -- consumes the returned Stream, and the returned Stream must be consumed completely
 -- (up to the last row or a postgres error) before you are able to run other queries.
-queryWithStreamingM :: RowParserMonadic a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
-queryWithStreamingM rparser conn qry = join $ runPipeline conn $ pipelineSM rparser qry
+querySWith :: RowParser a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
+querySWith rparser conn qry = join $ runPipeline conn $ pipelineSWith rparser qry
 
 -- | Streams results directly from the connection's socket, i.e. without using cursors.
 -- It is important to note the same thread that runs this must be the thread that
 -- consumes the returned Stream, and the returned Stream must be consumed completely
 -- (up to the last row or a postgres error) before you are able to run other queries.
-queryStreaming :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
-queryStreaming = queryWithStreaming rowParser
+querySMWith :: RowParserMonadic a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
+querySMWith rparser conn qry = join $ runPipeline conn $ pipelineSMWith rparser qry
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
 -- if it can't do that. Then runs the continuation.
 -- DO NOT CALL THIS FUNCTION WHILE HOLDING THE CONTROL-MSGS-LOCK, because it needs to wait/block
 -- until the pipeline is ready, which won't happen if we're holding the control-msgs-lock.
-sendPipeline :: HPgConnection -> NonEmpty (ByteString, QueryProtocol, Maybe String) -> (InternalConnectionState -> [SomeMessage]) -> STM () -> (NonEmpty QueryId -> IO a) -> IO a
+sendPipeline :: HPgConnection -> NonEmpty (ByteString, QueryProtocol, Maybe String) -> (InternalConnectionState -> EncodingContext -> [SomeMessage]) -> STM () -> (NonEmpty QueryId -> IO a) -> IO a
 sendPipeline conn queriesBeingSent allMsgs onMsgsSentTxn continuation = do
   thisWeakThreadId <- getMyWeakThreadId
   qryIds <- waitUntilPipelineIsReadyForNewQuery conn (getUniqueQueryStatesForNewPipeline queriesBeingSent) $ \(nextId, lastId) -> do
@@ -884,10 +890,14 @@ sendPipeline conn queriesBeingSent allMsgs onMsgsSentTxn continuation = do
     case NE.nonEmpty newPipelineList of
       Nothing -> throwIrrecoverableError "Bug in Hpgsql: empty newPipeline to be sent"
       Just newPipeline -> do
+        -- The encodingContext could live within internalConnectionState or be a TVar. It gets read
+        -- from and update very infrequently, so no big reason for it to be its own MVar.
+        -- Although, in the end, it probably doesn't matter much
         sttv <- STM.atomically $ STM.readTVar conn.internalConnectionState
+        encCtx <- readMVar conn.encodingContext
         atomicallySendControlMsgs_
           conn
-          ( allMsgs sttv,
+          ( allMsgs sttv encCtx,
             do
               st <- STM.readTVar (internalConnectionState conn)
               (_, txnStatusRightBeforeSendingPipeline) <- fullTransactionStatus (internalConnectionState conn)
@@ -1046,7 +1056,6 @@ cancelAnyRunningStatement conn@HPgConnection {connOpts} onlyDrainNotCancel = do
       -- for that.
       debugPrint "Cancelling active pipeline to drain."
       unless onlyDrainNotCancel $ sendCancellationRequest conn
-      -- putStrLn $ "Draining " ++ show queriesToDrain
       -- debugPrint $ "Draining " ++ show queriesToDrain
       let drainUntilError [] = pure ()
           drainUntilError (q : qs) = do
@@ -1099,7 +1108,6 @@ acquireOwnershipOfOrphanedQueries conn = do
               STM.atomically $ STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = map (\qs -> qs {queryOwner = thisThreadId}) $ currentPipeline st}
               let owner = map queryOwner activeQueries
               debugPrint $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
-              -- putStrLn $ "We (" ++ show thisThreadId ++ ") took ownership of the pipeline orphaned by " ++ show owner
               pure $ map queryIdentifier activeQueries
             else pure []
   where
@@ -1109,8 +1117,11 @@ acquireOwnershipOfOrphanedQueries conn = do
         Nothing -> pure True
         Just tid -> (`elem` [ThreadDied, ThreadFinished]) <$> threadStatus tid
 
-pipelineS :: RowParser a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineS rowparser@(RowParser _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
+pipelineS :: (FromPgRow a) => Query -> Pipeline (IO (Stream (Of a) IO ()))
+pipelineS = pipelineSWith rowParser
+
+pipelineSWith :: RowParser a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
+pipelineSWith rowparser@(RowParser _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
     (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just expectedColFmts)])
     ( \conn qryIds -> do
@@ -1120,22 +1131,38 @@ pipelineS rowparser@(RowParser _ _ expectedColFmts) (lastAndInitNE . breakQueryI
             pure $ consumeStreamingResults (ApplicativeRowParser rowparser) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
     )
 
-pipelineSM :: RowParserMonadic a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineSM rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
+pipelineSMWith :: RowParserMonadic a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
+pipelineSMWith rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
     (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Nothing)])
     ( \conn qryIds -> do
         case lastAndInit qryIds of
           (firstQueries, mLastQry) -> do
             forM_ firstQueries $ consumeResultsIgnoreRows conn
-            pure $ consumeStreamingResults (MonadicRowParser rowparser) conn (fromMaybe (error "pipelineSM internal bug: no mLastQry") mLastQry)
+            pure $ consumeStreamingResults (MonadicRowParser rowparser) conn (fromMaybe (error "pipelineSMWith internal bug: no mLastQry") mLastQry)
     )
 
-pipelineL :: RowParser a -> Query -> Pipeline (IO [a])
-pipelineL rowparser q = (S.toList_ =<<) <$> pipelineS rowparser q
+pipeline :: (FromPgRow a) => Query -> Pipeline (IO [a])
+pipeline = pipelineWith rowParser
 
-pipelineLM :: RowParserMonadic a -> Query -> Pipeline (IO [a])
-pipelineLM rowparser q = (S.toList_ =<<) <$> pipelineSM rowparser q
+pipelineWith :: RowParser a -> Query -> Pipeline (IO [a])
+pipelineWith rowparser q = (S.toList_ =<<) <$> pipelineSWith rowparser q
+
+pipelineM :: RowParserMonadic a -> Query -> Pipeline (IO [a])
+pipelineM rowparser q = (S.toList_ =<<) <$> pipelineSMWith rowparser q
+
+pipeline1 :: (FromPgRow a) => Query -> Pipeline (IO a)
+pipeline1 = pipeline1With rowParser
+
+pipeline1With :: RowParser a -> Query -> Pipeline (IO a)
+pipeline1With rowparser q = (toSingleRow =<<) <$> pipelineWith rowparser q
+  where
+    toSingleRow res = do
+      let queryBs = queryToByteString q
+      case res of
+        [] -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query1 call, but got none."
+        [singleRow] -> pure singleRow
+        _ -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query1 call, but got more than one."
 
 pipelineCmd :: Query -> Pipeline (IO Int64)
 pipelineCmd = pipelineCmdInternal . breakQueryIntoStatements
@@ -1161,7 +1188,7 @@ pipelineCmdInternal qs =
 -- query results are consumed or an error occurs.
 -- Anything else is not officially supported by Hpgsql and may result in deadlocks or undefined behaviour.
 runPipeline :: HPgConnection -> Pipeline a -> IO a
-runPipeline conn pipeline = runPipelineInternal conn pipeline (pure ())
+runPipeline conn pip = runPipelineInternal conn pip (pure ())
 
 -- | Sends a Pipeline coupled with an STM transaction that runs when
 -- the messages cross the userspace/kernel frontier (aka "are sent").
@@ -1170,15 +1197,12 @@ runPipelineInternal conn (Pipeline (NE.nonEmpty -> mQueries) run) onMsgsSentTxn 
   case mQueries of
     Nothing -> pure $ run conn []
     Just queries -> do
-      -- TODO: Reading the encodingContext should only happen when holding
-      -- the control-msgs lock!
-      encodingContext <- readMVar conn.encodingContext
       sendPipeline
         conn
         (fmap (\(SingleQuery {queryString, preparedStmtHash}, _) -> (queryString, ExtendedQuery, preparedStmtHash)) queries)
-        ( \st ->
+        ( \st encCtx ->
             let toMessages alreadyParsed (SingleQuery qryString qryParams preparedStmtHash, mExpectedResultColFmts) =
-                  let paramOidsAndValues = map ($ encodingContext) qryParams
+                  let paramOidsAndValues = map ($ encCtx) qryParams
                    in ( if not alreadyParsed
                           then
                             [SomeMessage $ Parse qryString (map fst paramOidsAndValues) preparedStmtHash]
@@ -1255,10 +1279,16 @@ query :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO [a]
 query = queryWith (rowParser @a)
 
 queryWith :: RowParser a -> HPgConnection -> Query -> IO [a]
-queryWith rparser conn qry = join $ runPipeline conn $ pipelineL rparser qry
+queryWith rparser conn qry = join $ runPipeline conn $ pipelineWith rparser qry
 
-queryWithM :: RowParserMonadic a -> HPgConnection -> Query -> IO [a]
-queryWithM rparser conn qry = join $ runPipeline conn $ pipelineLM rparser qry
+queryMWith :: RowParserMonadic a -> HPgConnection -> Query -> IO [a]
+queryMWith rparser conn qry = join $ runPipeline conn $ pipelineM rparser qry
+
+query1 :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO a
+query1 = query1With rowParser
+
+query1With :: RowParser a -> HPgConnection -> Query -> IO a
+query1With rparser conn q = join $ runPipeline conn $ pipeline1With rparser q
 
 withCopy_ :: HPgConnection -> Query -> IO a -> IO Int64
 withCopy_ conn copyQ copyFn = fst <$> withCopy conn copyQ copyFn
@@ -1276,18 +1306,17 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
   -- run in a different implicit transaction, which could be unexpected.
   whenNonEmpty firstQueries $ const $ throwIrrecoverableError "Query for COPY must not have other SQL statements"
   thisThreadId <- getMyWeakThreadId
-  encodingContext <- readMVar conn.encodingContext
-  let paramOidsAndValues = map ($ encodingContext) queryParams
   sendPipeline
     conn
     ((queryString, CopyQuery StillCopying, Nothing) :| [])
-    ( \_st ->
-        [ SomeMessage $ Parse queryString (map fst paramOidsAndValues) Nothing,
-          SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0, preparedStmtHash = Nothing},
-          -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
-          SomeMessage Execute,
-          SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
-        ]
+    ( \_st encCtx ->
+        let paramOidsAndValues = map ($ encCtx) queryParams
+         in [ SomeMessage $ Parse queryString (map fst paramOidsAndValues) Nothing,
+              SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0, preparedStmtHash = Nothing},
+              -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
+              SomeMessage Execute,
+              SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
+            ]
     )
     (pure ())
     $ \(qryId :| _) -> do

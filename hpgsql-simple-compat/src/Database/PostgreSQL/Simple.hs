@@ -389,7 +389,7 @@ query_ conn q = query conn q ()
 queryWith :: (ToRow q) => RowParserMonadic r -> Connection -> Query -> q -> IO [r]
 queryWith parser conn template qs =
   mapHpgsqlErrors $
-    Hpgsql.queryWithM parser (hpgConn conn) (toHpgsqlQuery template qs)
+    Hpgsql.queryMWith parser (hpgConn conn) (toHpgsqlQuery template qs)
 
 -- | A version of 'query_' taking parser as argument
 queryWith_ :: RowParserMonadic r -> Connection -> Query -> IO [r]

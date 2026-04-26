@@ -7,7 +7,7 @@ import DbUtils (aroundConn, withRollback)
 import Hpgsql (HPgConnection, Only (..), query)
 import Hpgsql.Encoding (rowParser)
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
-import Hpgsql.Pipeline (pipelineL, runPipeline)
+import Hpgsql.Pipeline (pipeline, runPipeline)
 import Hpgsql.Query (breakQueryIntoStatements, escapeIdentifier, nonPreparedStatement, preparedStatement, sql, sqlPrep, vALUES)
 import Test.Hspec
 
@@ -47,7 +47,7 @@ spec = do
   aroundConn $ describe "Running prepared queries" $ do
     -- TODO: Run tests more than once in the same connection
     it "Prepared query without arguments running twice in the same pipeline for the first time" $ \conn -> forM_ [1, 2 :: Int] $ const $ do
-      (l1, l2) <- runPipeline conn $ (,) <$> pipelineL rowParser [sqlPrep|SELECT 42|] <*> pipelineL rowParser [sqlPrep|SELECT 42|]
+      (l1, l2) <- runPipeline conn $ (,) <$> pipeline [sqlPrep|SELECT 42|] <*> pipeline [sqlPrep|SELECT 42|]
       l1 `shouldReturn` [Only (42 :: Int)]
       l2 `shouldReturn` [Only (42 :: Int)]
 

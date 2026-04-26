@@ -32,7 +32,7 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Internal as Base hiding (result, row)
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types (Query (..))
-import Hpgsql (Query, execute_, queryWithM)
+import Hpgsql (Query, execute_, queryMWith)
 import Hpgsql.Encoding.RowParserMonadic (RowParserMonadic)
 import Hpgsql.Query (escapeIdentifier, sql)
 
@@ -63,7 +63,7 @@ foldForwardWithParser :: Cursor -> RowParserMonadic r -> Int -> (a -> r -> IO a)
 foldForwardWithParser (Cursor name conn) parser chunkSize f a0 = mapHpgsqlErrors $ do
   let q =
         [sql|FETCH FORWARD ^{fromString (show chunkSize)} FROM ^{escapeIdentifier (fromQuery name)}|]
-  rows <- queryWithM parser (hpgConn conn) q
+  rows <- queryMWith parser (hpgConn conn) q
   case rows of
     [] -> pure $ Left a0
     _ -> Right <$> foldM f a0 rows

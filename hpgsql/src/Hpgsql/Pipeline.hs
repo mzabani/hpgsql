@@ -1,12 +1,16 @@
 module Hpgsql.Pipeline
-  ( Pipeline, -- No constructor
+  ( Pipeline, -- Don't export constructor
     runPipeline,
     pipelineS,
-    pipelineSM,
-    pipelineL,
+    pipelineSWith,
+    pipelineSMWith,
+    pipeline,
+    pipelineWith,
     pipelineCmd,
     pipelineCmd_,
+    pipeline1,
+    pipeline1With,
   )
 where
 
-import Hpgsql.Internal (Pipeline, pipelineCmd, pipelineCmd_, pipelineL, pipelineS, pipelineSM, runPipeline)
+import Hpgsql.Internal (Pipeline, pipeline, pipeline1, pipeline1With, pipelineCmd, pipelineCmd_, pipelineS, pipelineSMWith, pipelineSWith, pipelineWith, runPipeline)

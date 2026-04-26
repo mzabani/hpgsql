@@ -15,6 +15,7 @@ module Hpgsql.InternalTypes
     SingleQueryFragment (..),
     Query (..),
     SingleQuery (..),
+    queryToByteString,
     breakQueryIntoStatements,
     renumberParamsFrom,
 
@@ -104,6 +105,9 @@ data Query = Query
 
 instance Show Query where
   show = show . NE.toList . breakQueryIntoStatements
+
+queryToByteString :: Query -> ByteString
+queryToByteString = mconcat . map (\SingleQuery {queryString} -> queryString) . NE.toList . breakQueryIntoStatements
 
 instance Semigroup Query where
   q1 <> q2 =

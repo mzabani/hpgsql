@@ -40,7 +40,7 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldEncoder (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, mkUntypedFieldEncoder, singleColRowParser)
-import Hpgsql.Pipeline (pipelineL, runPipeline)
+import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid, TypeInfo (..))
@@ -688,7 +688,7 @@ queryEnumTypes conn = withRollback conn $ do
     runPipeline conn $
       (,)
         <$> refreshTypeInfoCache conn
-        <*> pipelineL (singleColRowParser myEnumFieldParserWithTypeInfoCheck) "SELECT 'val2'::myenum"
+        <*> pipelineWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) "SELECT 'val2'::myenum"
   refreshTyiCacheAction
   queryRes `shouldReturn` [Val2]
   query conn "SELECT ARRAY['val2'::myenum]" `shouldReturn` [Only (PGArray [Val2])]

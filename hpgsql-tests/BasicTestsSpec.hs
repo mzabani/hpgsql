@@ -39,10 +39,10 @@ spec = do
       executingMixedRowsAndCountReturningStatements
     it
       "Mismatch in number of columns"
-      queryWithMismatchInNumberOfColumns
+      queryMWithismatchInNumberOfColumns
     it
       "Mismatch in column types"
-      queryWithMismatchInTypesOfColumns
+      queryMWithismatchInTypesOfColumns
     it
       "Query that errors and another successful query after that"
       queryThatErrorsFollowedBySuccessfulQuery
@@ -80,8 +80,8 @@ queryingAndReturningAFewRows conn =
     const $ do
       queryWith (rowParser @(Int, Int)) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
       -- Test the Aplicative and Monad instances of RowParserMonadic
-      queryWithM ((,) <$> toMonadicRowParser (rowParser @(Only Int)) <*> toMonadicRowParser (rowParser @(Only Int))) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
-      queryWithM
+      queryMWith ((,) <$> toMonadicRowParser (rowParser @(Only Int)) <*> toMonadicRowParser (rowParser @(Only Int))) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
+      queryMWith
         ( do
             (f1, f2) <- toMonadicRowParser (rowParser @(Int, Int))
             Only f3 <- toMonadicRowParser (rowParser @(Only Int))
@@ -103,7 +103,7 @@ queryingAndReturningZeroRows conn =
 
 queryingStreamingSum :: HPgConnection -> IO ()
 queryingStreamingSum conn = do
-  res <- queryWithStreaming (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10000)"
+  res <- querySWith (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10000)"
   S.sum_ (S.map fromOnly res) `shouldReturn` ((1 + 10000) * 5000)
 
 executingCountReturningStatements :: HPgConnection -> IO ()
@@ -116,13 +116,13 @@ executingMixedRowsAndCountReturningStatements conn = withRollback conn $ do
   executeMany conn ["SELECT 1", "CREATE TABLE xyz();", "DELETE FROM xyz;"] `shouldReturn` [1, 0, 0]
   execute_ conn "DROP TABLE xyz;"
 
-queryWithMismatchInNumberOfColumns :: HPgConnection -> IO ()
-queryWithMismatchInNumberOfColumns conn = do
+queryMWithismatchInNumberOfColumns :: HPgConnection -> IO ()
+queryMWithismatchInNumberOfColumns conn = do
   queryWith (rowParser @(Bool, Bool)) conn "select 1, 2, 3"
     `shouldThrow` pgErrorMustContain "select 1, 2, 3" [(ErrorCode, "08P01"), (ErrorHumanReadableMsg, "bind message has 2 result formats but query has 3 columns")]
 
-queryWithMismatchInTypesOfColumns :: HPgConnection -> IO ()
-queryWithMismatchInTypesOfColumns conn = do
+queryMWithismatchInTypesOfColumns :: HPgConnection -> IO ()
+queryMWithismatchInTypesOfColumns conn = do
   queryWith (rowParser @(Bool, Bool)) conn "select 1, 2"
     `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
 

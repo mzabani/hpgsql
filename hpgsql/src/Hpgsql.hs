@@ -11,10 +11,12 @@ module Hpgsql
     -- * Query
     query,
     queryWith,
-    queryWithM,
-    queryStreaming,
-    queryWithStreaming,
-    queryWithStreamingM,
+    queryMWith,
+    queryS,
+    querySWith,
+    querySMWith,
+    query1,
+    query1With,
 
     -- * Execute
     execute,

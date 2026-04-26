@@ -19,7 +19,7 @@ import DbUtils
 import Hpgsql
 import Hpgsql.Cancellation (cancelAnyRunningStatement)
 import Hpgsql.Copy (copyFromS, putCopyData, withCopy)
-import Hpgsql.Pipeline (pipelineCmd, pipelineL, runPipeline)
+import Hpgsql.Pipeline (pipelineCmd, pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
 import Hpgsql.Transaction (transactionStatus)
 import Streaming (Of (..))
@@ -103,7 +103,7 @@ sendQueryAfterThreadKilled useTimeout conn = do
   -- Give enough time to be certain the query was sent to postgres
   -- See Note [`timeout` uses the same ThreadId] for why we need to test both
   -- `timeout` and `withAsync`
-  let firstQuery = queryWithStreaming (rowParser @(Only ())) conn [sql|SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x)|]
+  let firstQuery = querySWith (rowParser @(Only ())) conn [sql|SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x)|]
   didNotFinish <- emulatedTimeout 300_000 $ firstQuery >>= S.effects
   didNotFinish `shouldBe` Nothing
   didNotFinish2 <- emulatedTimeout 300_000 $ queryWith (rowParser @(Only ())) conn [sql|SELECT pg_sleep(999)|]
@@ -113,7 +113,7 @@ sendQueryAfterThreadKilled useTimeout conn = do
     Just _ -> expectationFailure "didNotFinish3 was supposed to have been killed before finishing"
     Nothing -> pure ()
   didNotFinish4 <- emulatedTimeout 300_000 $ do
-    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineL (rowParser @(Only ())) [sql|SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout|] <*> pipelineCmd [sql|SELECT pg_sleep(5)|]
+    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineWith (rowParser @(Only ())) [sql|SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout|] <*> pipelineCmd [sql|SELECT pg_sleep(5)|]
     void firstCmd
     secondCmd
   case didNotFinish4 of
@@ -203,7 +203,7 @@ sendQueriesConcurrently conn = forConcurrently_ [1 .. 10] $ const $ do
 
 cancelStreamingQueryThenTryToConsumeResults :: HPgConnection -> IO ()
 cancelStreamingQueryThenTryToConsumeResults conn = do
-  res <- queryWithStreaming (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,100000000)"
+  res <- querySWith (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,100000000)"
   firstTwoElems <- S.toList_ $ S.take 2 res
   thirdAndFourthElems :> restOfStream <- S.toList $ S.splitAt 2 res
   fifthAndSixthElems <- S.toList_ $ S.take 2 restOfStream
@@ -218,7 +218,7 @@ cancelStreamingQueryThenTryToConsumeResults conn = do
 
 threadThatSendsPipelinMustBeThreadThatConsumesResults :: HPgConnection -> IO ()
 threadThatSendsPipelinMustBeThreadThatConsumesResults conn = do
-  res <- queryWithStreaming (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10)"
+  res <- querySWith (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10)"
   withAsync (S.effects res) $ \otherThreadResults ->
     wait otherThreadResults `shouldThrow` irrecoverableErrorWithMsg "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
 
@@ -321,7 +321,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = d
 queryThatErrorsDueToBadFromPgFieldImplementation2 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = do
   -- A streaming variant that only throws in later elements of the stream, since that can render internal and naive exception-catching moot
-  res <- queryWithStreaming (rowParser @(Only Bool)) conn "SELECT CASE WHEN x >= 300 THEN NULL::boolean ELSE TRUE END FROM generate_series(1,10000000) q(x)"
+  res <- querySWith (rowParser @(Only Bool)) conn "SELECT CASE WHEN x >= 300 THEN NULL::boolean ELSE TRUE END FROM generate_series(1,10000000) q(x)"
   S.effects res `shouldThrow` irrecoverableErrorWithMsg "Failed parsing a row"
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,

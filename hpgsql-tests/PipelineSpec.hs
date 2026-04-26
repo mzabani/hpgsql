@@ -13,7 +13,7 @@ import Hedgehog
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import Hpgsql
-import Hpgsql.Pipeline (pipelineCmd, pipelineCmd_, pipelineL, pipelineS, runPipeline)
+import Hpgsql.Pipeline (pipelineCmd, pipelineCmd_, pipeline, pipelineWith, pipelineS, pipelineSWith, runPipeline)
 import Hpgsql.Query (nonPreparedStatement, preparedStatement, sql)
 import qualified Streaming.Prelude as S
 import qualified Streaming.Prelude as Streaming
@@ -111,12 +111,12 @@ runVariedPipelines conn = hedgehog $ do
       (listRes1, listRes2, listRes3, streamRes1, streamRes2, streamRes3, countRes1, countRes2, countRes3, countStmtCountRes1, countStmtCountRes2, countStmtCountRes3) <-
         runPipeline conn $
           (,,,,,,,,,,,)
-            <$> pipelineL rp1 (prepFn prep1 qry1)
-            <*> pipelineL rp2 qry2
-            <*> pipelineL rp3 qry3
-            <*> pipelineS rp1 qry1
-            <*> pipelineS rp2 (prepFn prep2 qry2)
-            <*> pipelineS rp3 qry3
+            <$> pipelineWith rp1 (prepFn prep1 qry1)
+            <*> pipelineWith rp2 qry2
+            <*> pipelineWith rp3 qry3
+            <*> pipelineSWith rp1 qry1
+            <*> pipelineSWith rp2 (prepFn prep2 qry2)
+            <*> pipelineSWith rp3 qry3
             <*> pipelineCmd qry1
             <*> pipelineCmd qry2
             <*> pipelineCmd (prepFn prep3 qry3)
@@ -146,13 +146,13 @@ runVariedPipelinesWithError conn = hedgehog $ do
     (listRes1, streamRes1, countRes1, countStmtCountRes1, errStmtRes, willFailListRes1, willFailStreamRes1, willFailCountRes1, willFailStmtCountRes1) <-
       runPipeline conn $
         (,,,,,,,,)
-          <$> pipelineL rp1 qry1
-          <*> pipelineS rp1 qry1
+          <$> pipelineWith rp1 qry1
+          <*> pipelineSWith rp1 qry1
           <*> pipelineCmd qry1
           <*> pipelineCmd countQry1
           <*> pipelineCmd errStmt
-          <*> pipelineL rp1 qry1
-          <*> pipelineS rp1 qry1
+          <*> pipelineWith rp1 qry1
+          <*> pipelineSWith rp1 qry1
           <*> pipelineCmd qry1
           <*> pipelineCmd countQry1
     listRes1 >>= check1
@@ -168,7 +168,7 @@ runVariedPipelinesWithError conn = hedgehog $ do
 
 runPipelineWithMultipleStatements :: HPgConnection -> IO ()
 runPipelineWithMultipleStatements conn = do
-  (resultsOfFirstStmt, resultsOfSecondStmt, resultsOfLastStmt, createTbl) <- runPipeline conn $ (,,,) <$> pipelineL (rowParser @(Int, Int)) "SELECT 1, 2 WHERE FALSE" <*> pipelineS (rowParser @(Int, Int)) "SELECT 3, 4 FROM generate_series(1,2)" <*> pipelineS (rowParser @(Int64, Bool)) "SELECT x, FALSE FROM generate_series(1,3) subq(x)" <*> pipelineCmd "CREATE table test_table()"
+  (resultsOfFirstStmt, resultsOfSecondStmt, resultsOfLastStmt, createTbl) <- runPipeline conn $ (,,,) <$> pipelineWith (rowParser @(Int, Int)) "SELECT 1, 2 WHERE FALSE" <*> pipelineSWith (rowParser @(Int, Int)) "SELECT 3, 4 FROM generate_series(1,2)" <*> pipelineSWith (rowParser @(Int64, Bool)) "SELECT x, FALSE FROM generate_series(1,3) subq(x)" <*> pipelineCmd "CREATE table test_table()"
   resultsOfFirstStmt `shouldReturn` []
   (resultsOfSecondStmt >>= S.toList_) `shouldReturn` [(3, 4), (3, 4)]
   (resultsOfLastStmt >>= S.toList_) `shouldReturn` [(1, False), (2, False), (3, False)]
@@ -189,14 +189,14 @@ runPipelineErrorSemanticsUnsupportedCaseStillBehavesWell conn = do
   -- In case it's not a postgres error in a pipelined statement and rather a user error,
   -- we don't promise anything to users, but we test that Hpgsql at least won't deadlock
   -- or do something gnarly, and preferrably we throw an informative exception.
-  (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineL (rowParser @(Only Bool)) "SELECT 1" <*> pipelineL (rowParser @(Int, Int)) "SELECT 3, 4"
+  (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowParser @(Only Bool)) "SELECT 1" <*> pipelineWith (rowParser @(Int, Int)) "SELECT 3, 4"
   goodCmd `shouldReturn` 1
   parserErrCmd `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
   otherCmd `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that."
 
 runPipelineErrorSemanticsQueriesConsumedOutOfOrder :: HPgConnection -> IO ()
 runPipelineErrorSemanticsQueriesConsumedOutOfOrder conn = do
-  (cmd1, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineL (rowParser @(Only Bool)) "SELECT TRUE" <*> pipelineL (rowParser @(Int, Int)) "SELECT 3, 4"
+  (cmd1, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowParser @(Only Bool)) "SELECT TRUE" <*> pipelineWith (rowParser @(Int, Int)) "SELECT 3, 4"
   cmd1 `shouldReturn` 1
   cmd3 `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that."
   -- We don't promise users that they can consume a statement at
