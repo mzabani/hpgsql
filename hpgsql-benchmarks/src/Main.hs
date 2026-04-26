@@ -30,6 +30,7 @@ import qualified Database.PostgreSQL.Simple as PGSimple
 import qualified Database.PostgreSQL.Simple.Copy as PGSimple
 import qualified Database.PostgreSQL.Simple.Streaming as StreamingPostgresSimple
 import GHC.Generics (Generic)
+import GHC.Stats (getRTSStats, max_live_bytes, max_mem_in_use_bytes)
 import qualified Hasql.Connection as HasqlConn
 import qualified Hasql.Connection.Setting as HasqlSetting
 import qualified Hasql.Connection.Setting.Connection as HasqlConnSetting
@@ -148,6 +149,8 @@ main = do
 
   putStrLn "IMPORTANT: all measurements collected over 10 runs of each benchmark"
   when (numConcurrentConnections > 1) $ putStrLn $ "IMPORTANT: all benchmarks except COPY involve running the benchmarked query in " ++ show numConcurrentConnections ++ " connections in parallel"
+  performBlockingMajorGC
+  statsBefore <- getRTSStats
   hspecWith defaultConfig {configFormat = Just (formatterToFormat silent)} $ do
     describe "Parsing 13-column rows into a List" $ do
       let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
@@ -300,6 +303,15 @@ main = do
                   BS8.pack (show g) <> "," <> encodeUtf8 t1 <> "," <> encodeUtf8 t2 <> "," <> BS8.pack (show g2) <> "\n"
               void $ PGSimple.putCopyEnd pgSimpleConn
               void $ PGSimple.execute_ pgSimpleConn "ROLLBACK"
+  performBlockingMajorGC
+  statsAfter <- getRTSStats
+  let peakBefore = max_mem_in_use_bytes statsBefore
+      peakAfter = max_mem_in_use_bytes statsAfter
+      liveBefore = max_live_bytes statsBefore
+      liveAfter = max_live_bytes statsAfter
+      toMB n = showFFloat (Just 1) (fromIntegral n / (1024 * 1024) :: Double) ""
+  putStrLn $ "--- Peak memory (max_mem_in_use_bytes): " ++ toMB (peakAfter - peakBefore) ++ " M"
+  putStrLn $ "--- Peak live data (max_live_bytes): " ++ toMB (liveAfter - liveBefore) ++ " M"
 
 withMultipleConnections :: Int -> IO conn -> (conn -> IO ()) -> (conn -> IO a) -> IO [a]
 withMultipleConnections n acquireConn closeConn f = do

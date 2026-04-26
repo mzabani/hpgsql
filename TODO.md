@@ -11,9 +11,9 @@
     - Otherwise we might accidentally not be exposing functions in public modules
 - Do we need to depend on `transformers`?
 - Do we need both liftQueryStatic and liftQueryDynamic?
-- Add test that sends a pipeline with a massive number of queries (does postgres keep receiving if we're not consuming results?)
+- Read https://www.iankduncan.com/engineering/2024-01-26-records-of-effects, think about it.
 - Connecting with a password
-- Double-check licensing
+- Double-check licensing and authorship in cabal files and READMEs
 
 
 ## Less important:
