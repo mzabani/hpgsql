@@ -6,8 +6,8 @@ Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API la
 - Query arguments passed via the protocol instead of being escaped into the query string
 - Pipeline support
 - Capable of streaming query results directly from the socket (not with cursors), and ability to use Streams in pipelines
-- [Interruption safety](/INTERRUPTION-SAFETY.md), except for very specific (and documented) edge cases.
-- Thread safety, unless specific (and documented) instructions say otherwise.
+- [Interruption safety](/INTERRUPTION-SAFETY.md), except for very specific (and documented) edge cases
+- Thread safety, unless specific (and documented) instructions say otherwise
 - A SQL quasiquoter like the one in [postgresql-query](https://hackage.haskell.org/package/postgresql-query) and [hasql-interpolate](https://hackage-content.haskell.org/package/hasql-interpolate-1.0.1.0/docs/Hasql-Interpolate.html)
 - Prepared statements
 
@@ -29,6 +29,11 @@ f val = do
   Only total <- aggRes
   Streaming.map Aeson.toJSON <$> largeResults
 ```
+
+### Current status
+
+Hpgsql is in active development, is new and has not been used in Production yet. Compared to postgresql-simple, it lacks a lot of the connection methods that libpq provides out of the box, including using encrypted connections and at the moment even password-protected connections.
+
 ### Migrating from postgresql-simple
 
 This repository contains [a fork of postgresql-simple](https://github.com/mzabani/hpgsql/tree/master/hpgsql-simple-compat) that preserves as much as possible** the names of modules, functions, types, classes, exceptions, etc. Its purpose is to ease migrating to hpgsql, and I intend to fully support its development to make it and keep it as similar to postgresql-simple as it can be.
@@ -44,7 +49,7 @@ It also contains parts of [postgresql-libpq](https://hackage.haskell.org/package
 
 Some benchmarks show materializing large query results with hpgsql takes \~38% the time postgresql-simple takes, and \~70% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
 
-When comparing hpgsql's Stream querying, hpgsql takes \~13% the time of [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and of postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
+When comparing hpgsql's Stream querying, hpgsql takes \~13% the time of both [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
 
 hpgsql's binary COPY runs in about the same time as postgresql-simple's textual COPY.
 
