@@ -2,12 +2,14 @@
 # and the output of `nix-build` commands to build executables like hpgsql-tests
 # and hpgsql-benchmarks with the single or multi-threaded GHC RTS
 let threading = "+threaded";
+    ghc = "ghc9103";
 in
 { pkgs ? import ./nix/nixpkgs.nix { inherit threading; } }:
 let
   postgres = pkgs.postgresql_16.withPackages (ps: with ps; [ /* pg_cron */ ]);
+  haskellPackages = builtins.getAttr ghc pkgs.haskell.packages;
 in
-  pkgs.haskellPackages.shellFor {
+  haskellPackages.shellFor {
     packages = p: with p; [ hpgsql hpgsql-tests hpgsql-benchmarks hpgsql-simple-compat hpgsql-simple-compat-tests ];
     withHoogle = true;
     buildInputs = with pkgs; [

@@ -9,7 +9,6 @@
   - Can the Applicative RowParser also know about remaining fields? Ordering is fine in Applicative, it's just sequencing that isn't.- Review all exposed functions per module, move more to Internal modules
 - Double-check our tests don't import Internal modules except for very specific things
     - Otherwise we might accidentally not be exposing functions in public modules
-- Do we need to depend on `transformers`?
 - Do we need both liftQueryStatic and liftQueryDynamic?
 - Read https://www.iankduncan.com/engineering/2024-01-26-records-of-effects, think about it.
 - Connecting with a password
