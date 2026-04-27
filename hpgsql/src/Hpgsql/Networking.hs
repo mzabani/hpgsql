@@ -1,3 +1,13 @@
+-- |
+-- This module contains code largely copied from the @network@ library
+-- (BSD-3-Clause), with modifications to remove blocking calls
+-- (threadWaitWrite, threadWaitRead).
+--
+-- Original copyright:
+--   Copyright (c) 2002-2010, The University Court of the University of Glasgow
+--   Copyright (c) 2007-2010, Johan Tibell
+--
+-- See: https://github.com/haskell/network/blob/master/LICENSE
 module Hpgsql.Networking
   ( recvNonBlocking,
     socketWaitRead,
@@ -5,13 +15,6 @@ module Hpgsql.Networking
     sendNonBlocking,
   )
 where
-
--- \|
--- The code in this module is 99.9% a copy from the `network` library, with all the small
--- occurrences of blocking code found there removed (mostly threadWaitWrite and threadWaitRead,
--- directly or indirectly called by other functions).
--- Ideally we would ask the developer of `network` to expose these functions: it seems like it might be
--- possible without much hassle.
 
 import Control.Concurrent (threadWaitRead, threadWaitWrite)
 import Control.Exception.Safe (throw)
