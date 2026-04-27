@@ -7,12 +7,16 @@ description:
 
 license:            BSD3
 license-file:       LICENSE
-author:             Bryan O'Sullivan, Leon P Smith
-maintainer:         Oleg Grenrus <oleg.grenrus@iki.fi>
+-- Authors of postgresql-simple, postgresql-libpq, and postgresql-query, plus myself
+author:             Bryan O'Sullivan, Leon P Smith, Aleksey Uimanov, Grant Monroe, Marcelo Zabani
+maintainer:         Marcelo Zabani
 copyright:
+  (c) 2026 Marcelo Zabani
   (c) 2011 MailRank, Inc.
   (c) 2011-2018 Leon P Smith
   (c) 2018-2020 Oleg Grenrus
+  (c) 2014 Aleksey Uimanov
+  (c) 2010 Grant Monroe
 
 category:           Database
 build-type:         Simple
@@ -24,7 +28,9 @@ library
   default-language:   Haskell2010
   hs-source-dirs:     src
   exposed-modules:
+    -- postgresql-libpq
     Database.PostgreSQL.LibPQ
+    -- postgresql-simple
     Database.PostgreSQL.Simple
     Database.PostgreSQL.Simple.Arrays
     Database.PostgreSQL.Simple.Copy
@@ -50,7 +56,7 @@ library
     Database.PostgreSQL.Simple.TypeInfo.Static
     Database.PostgreSQL.Simple.Types
     Database.PostgreSQL.Simple.HpgsqlUtils
-    -- The next modules are from postgresql-query
+    -- postgresql-query
     Database.PostgreSQL.Query.Functions
     Database.PostgreSQL.Query.SqlBuilder
     Database.PostgreSQL.Query.SqlBuilder.Builder
