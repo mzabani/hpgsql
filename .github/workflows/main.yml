@@ -64,8 +64,8 @@ jobs:
       run: |
         scripts/ci/run-tests-and-annotate-with-error.sh local/hpgsql-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg18
 
-    - name: Run hlint
-      run: nix-shell -p '(import ./nix/nixpkgs.nix {}).haskellPackages.hlint' --run 'hlint .'
+    - name: Run hlint and `cabal check`
+      run: nix-shell --run 'hlint . && cd hpgsql && cabal check && cd -'
 
   build-aarch64-darwin:
     runs-on: macos-14

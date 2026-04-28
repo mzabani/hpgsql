@@ -2,26 +2,25 @@ cabal-version: 2.0
 
 name:           hpgsql
 version:        0.1.0.0
+synopsis:       Pure Haskell PostgreSQL driver (no libpq involved)
 description:    hpgsql is a pure Haskell implementation of a PostgreSQL driver
+category:       Database
 homepage:       https://github.com/mzabani/hpgsql#readme
 bug-reports:    https://github.com/mzabani/hpgsql/issues
 author:         Marcelo Zabani
 maintainer:     mzabani@gmail.com
-copyright:      2025 Marcelo Zabani
+copyright:      2026 Marcelo Zabani
 license:        BSD3
 license-file:   LICENSE
 build-type:     Simple
-extra-source-files:
-    README.md
-
-source-repository head
-  type: git
-  location: https://github.com/mzabani/hpgsql
-
 tested-with:
   GHC ==9.6.7
    || ==9.8.4
    || ==9.10.3
+
+source-repository head
+  type: git
+  location: https://github.com/mzabani/hpgsql
 
 library
   exposed-modules:
@@ -90,7 +89,7 @@ library
       TemplateHaskell
       ViewPatterns
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -O1 -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path
+  ghc-options: -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path
   build-depends:
     Only >= 0.1 && < 0.2,
     aeson >= 2.2 && < 2.3,
