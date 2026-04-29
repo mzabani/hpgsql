@@ -85,22 +85,23 @@ module Database.PostgreSQL.Simple.FromField
   ( FromField (..),
     FromPgField (..),
     FieldParser,
-    Conversion (),
-    runConversion,
-    conversionMap,
-    conversionError,
+    -- Conversion (),
+    -- runConversion,
+    -- conversionMap,
+    -- conversionError,
     ResultError (..),
-    returnError,
+    -- returnError,
     Field,
-    typename,
+    -- typename,
     TypeInfo (..),
     Attribute (..),
-    typeInfo,
-    typeInfoByOid,
-    name,
-    typeOid,
+    -- typeInfo,
+    -- typeInfoByOid,
+    -- name,
+    -- typeOid,
     PQ.Oid (..),
     PQ.Format (..),
+    optionalField,
     fromFieldJSONByteString,
     fromJSONField,
   )
@@ -126,7 +127,8 @@ import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat
-import Database.PostgreSQL.Simple.Internal
+import Database.PostgreSQL.Simple.HpgsqlUtils
+import Database.PostgreSQL.Simple.Internal (postgresqlExceptionFromException, postgresqlExceptionToException)
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
 import Database.PostgreSQL.Simple.Types (Binary (..))
@@ -173,15 +175,18 @@ instance Exception ResultError where
   toException = postgresqlExceptionToException
   fromException = postgresqlExceptionFromException
 
-left :: (Exception a) => a -> Conversion b
-left = conversionError
-
-type FieldParser a = FieldDecoder a
+-- left :: (Exception a) => a -> Conversion b
+-- left = conversionError
 
 class FromField a where
   fromField :: FieldParser a
   default fromField :: (Hpgsql.FromPgField a) => FieldParser a
-  fromField = Hpgsql.fieldDecoder
+  fromField =
+    let dec = Hpgsql.fieldDecoder
+     in \f ->
+          if (Hpgsql.allowedPgTypes dec) f
+            then \mbs -> (Hpgsql.fieldValueDecoder dec) f mbs
+            else \_ -> error "Invalid type OID for FromField instance"
 
 instance FromField ()
 
@@ -246,13 +251,15 @@ instance FromField (Unbounded UTCTime)
 instance FromField (Unbounded ZonedTime)
 
 instance (FromField a) => FromField (Maybe a) where
-  fromField = nullableField fromField
+  fromField = optionalField fromField
 
-instance (FromField a) => FromField (Vector a) where
-  fromField = arrayField Vector.replicateM fromField
+-- instance (FromField a) => FromField (Vector a)
 
-instance (FromField a) => FromField (PGArray a) where
-  fromField = PGArray <$> arrayField replicateM fromField
+-- instance (FromField a) => FromField (PGArray a)
+
+instance (Hpgsql.FromPgField a) => FromField (PGArray a)
+
+instance (Hpgsql.FromPgField a) => FromField (Vector a)
 
 instance {-# OVERLAPPING #-} (Hpgsql.FromPgField a) => FromField (Vector (Vector a))
 
@@ -269,45 +276,56 @@ instance (Aeson.FromJSON a) => FromField (Aeson a)
 --   the built-in, static table.   If the type oid is not there,
 --   hpgsql-simple-compat will check a per-connection cache,  and then
 --   finally query the database's meta-schema.
-typename :: Field -> Conversion ByteString
-typename field = typname <$> typeInfo field
+-- typename :: Field -> Conversion ByteString
+-- typename field = typname <$> typeInfo field
 
-typeInfo :: Field -> Conversion TypeInfo
-typeInfo Field {..} = Conversion $ \conn -> do
-  Ok <$> (getTypeInfo conn typeOid)
+-- typeInfo :: Field -> Conversion TypeInfo
+-- typeInfo Hpgsql.ColumnInfo {..} = Conversion $ \conn -> do
+--   Ok <$> (getTypeInfo conn typeOid)
 
-typeInfoByOid :: PQ.Oid -> Conversion TypeInfo
-typeInfoByOid oid = Conversion $ \conn -> do
-  Ok <$> (getTypeInfo conn oid)
+-- typeInfoByOid :: PQ.Oid -> Conversion TypeInfo
+-- typeInfoByOid oid = Conversion $ \conn -> do
+--   Ok <$> (getTypeInfo conn oid)
 
 -- | Returns the name of the column.  This is often determined by a table
 --   definition,  but it can be set using an @as@ clause.
-name :: Field -> Maybe ByteString
-name Field {..} = unsafeDupablePerformIO (PQ.fname result column)
+-- name :: Field -> Maybe ByteString
+-- name Field {..} = unsafeDupablePerformIO (PQ.fname result column)
 
 -- | Given one of the constructors from 'ResultError',  the field,
 --   and an 'errMessage',  this fills in the other fields in the
 --   exception value and returns it in a 'Left . SomeException'
 --   constructor.
-returnError ::
-  forall a err.
-  (Typeable a, Exception err) =>
-  (String -> Maybe PQ.Oid -> String -> String -> String -> err) ->
-  Field ->
-  String ->
-  Conversion a
-returnError mkErr f msg = do
-  typnam <- typename f
-  left $
-    mkErr
-      (B8.unpack typnam)
-      (error "no tableOid in hpgsql")
-      (maybe "" B8.unpack (name f))
-      (show (typeOf (undefined :: a)))
-      msg
+-- returnError ::
+--   forall a err.
+--   (Typeable a, Exception err) =>
+--   (String -> Maybe PQ.Oid -> String -> String -> String -> err) ->
+--   Field ->
+--   String ->
+--   Conversion a
+-- returnError mkErr f msg = do
+--   typnam <- typename f
+--   left $
+--     mkErr
+--       (B8.unpack typnam)
+--       (error "no tableOid in hpgsql")
+--       (maybe "" B8.unpack (name f))
+--       (show (typeOf (undefined :: a)))
+--       msg
+
+-- | For dealing with SQL @null@ values outside of the 'FromField' class.
+--   Alternatively, one could use 'Control.Applicative.optional',  but that
+--   also turns type and conversion errors into 'Nothing',  whereas this is
+--   more specific and turns only @null@ values into 'Nothing'.
+optionalField :: FieldParser a -> FieldParser (Maybe a)
+optionalField p f mv =
+  case mv of
+    Nothing -> pure Nothing
+    Just _ -> Just <$> p f mv
+{-# INLINE optionalField #-}
 
 fromJSONField :: (Aeson.FromJSON a) => FieldParser a
-fromJSONField = getAeson <$> fieldDecoder
+fromJSONField f mbs = getAeson <$> fromField f mbs
 
 fromFieldJSONByteString :: FieldParser ByteString
-fromFieldJSONByteString = pgJsonByteString <$> fieldDecoder
+fromFieldJSONByteString = fromHpgsqlFieldDecoder $ pgJsonByteString <$> fieldDecoder

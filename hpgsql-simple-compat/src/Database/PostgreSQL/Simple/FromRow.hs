@@ -34,8 +34,9 @@ module Database.PostgreSQL.Simple.FromRow
 where
 
 import Database.PostgreSQL.Simple.FromField (FromField (..))
+import Database.PostgreSQL.Simple.HpgsqlUtils
 import GHC.Generics (Generic (..), K1 (..), M1 (..), (:*:) (..))
-import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), singleColRowDecoder, (:.) (..))
+import Hpgsql.Encoding (FieldDecoder, FromPgField (..), FromPgRow (..), Only (..), singleColRowDecoder, (:.) (..))
 import Hpgsql.Encoding.RowDecoderMonadic (RowDecoderMonadic, toMonadicRowDecoder)
 import Prelude hiding (null)
 
@@ -46,38 +47,41 @@ class FromRow a where
   default fromRow :: (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
   fromRow = genericFromPgRow
 
+fromHpgsqlField :: (FromField a) => FieldDecoder a
+fromHpgsqlField = toHpgsqlFieldDecoder fromField
+
 instance (FromField a) => FromRow (Only a) where
-  fromRow = Only <$> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = Only <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b) => FromRow (a, b) where
-  fromRow = (,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c) => FromRow (a, b, c) where
-  fromRow = (,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d) => FromRow (a, b, c, d) where
-  fromRow = (,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e) => FromRow (a, b, c, d, e) where
-  fromRow = (,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f) => FromRow (a, b, c, d, e, f) where
-  fromRow = (,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g) => FromRow (a, b, c, d, e, f, g) where
-  fromRow = (,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h) => FromRow (a, b, c, d, e, f, g, h) where
-  fromRow = (,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i) => FromRow (a, b, c, d, e, f, g, h, i) where
-  fromRow = (,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i, FromField j) => FromRow (a, b, c, d, e, f, g, h, i, j) where
-  fromRow = (,,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i, FromField j, FromField k) => FromRow (a, b, c, d, e, f, g, h, i, j, k) where
-  fromRow = (,,,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
+  fromRow = (,,,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField) <*> toMonadicRowDecoder (singleColRowDecoder fromHpgsqlField)
 
 instance (FromRow a, FromRow b) => FromRow (a :. b) where
   fromRow = (:.) <$> fromRow <*> fromRow
@@ -95,7 +99,7 @@ instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
   genRowDecoder = M1 <$> genRowDecoder
 
 instance (FromField a) => ProductTypeDecoder (K1 r a) where
-  genRowDecoder = fmap K1 $ toMonadicRowDecoder $ singleColRowDecoder $ fromField @a
+  genRowDecoder = fmap K1 $ toMonadicRowDecoder $ singleColRowDecoder $ fromHpgsqlField @a
 
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
 genericFromPgRow = to <$> genRowDecoder @(Rep a)

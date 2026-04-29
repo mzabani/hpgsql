@@ -16,9 +16,10 @@
 - Add a test to exercise interruption safety with a COPY statement
 - Document that hpgsql-simple-compat may throw runtime errors even if it compiles! Applications must be tested!
 - untypedFieldEncoder is used for enums, but do we even need `LowerCasedPgEnum` anymore?
+- Document all thread and interruption safety notes in all functions!
+- Write a guide to migrate from postgresql-simple
 
 ## Less important:
 - Experiment with TCP NoDelay
 - Connecting with TLS encrypted connection (can come later?)
-- Import postgresql-query into repository? Not sure.
-- Connecting should use PGUSER, PGDATABASE, PGPORT, etc., when the equivalent values are not provided.
+- Connecting should use PGUSER, PGDATABASE, PGPORT, etc., when the equivalent values are not provided. Or should it?

@@ -8,6 +8,11 @@ module Database.PostgreSQL.Simple.HpgsqlUtils
     toHpgsqlRowParams,
     toPgSimpleQuery,
     PgSimpleRow (..),
+    toHpgsqlFieldDecoder,
+    fromHpgsqlFieldDecoder,
+    Conversion,
+    Field,
+    FieldParser,
   )
 where
 
@@ -20,6 +25,7 @@ import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import qualified Hpgsql
 import Hpgsql.Builder (BinaryField)
+import Hpgsql.Encoding (ColumnInfo, FieldDecoder (..))
 import Hpgsql.InternalTypes (SingleQueryFragment (..))
 import qualified Hpgsql.InternalTypes as HpgsqlTypes
 import qualified Hpgsql.Query as Hpgsql
@@ -43,6 +49,22 @@ escapeIdentifier v = "\"" <> BS.intercalate "\"\"" (BS.split 0x22 {- '"' -} v) <
 
 newtype PgSimpleRow = PgSimpleRow [Action]
   deriving newtype (ToRow)
+
+type Conversion a = Either String a
+
+type Field = ColumnInfo
+
+type FieldParser a = Field -> Maybe ByteString -> Conversion a
+
+toHpgsqlFieldDecoder :: FieldParser a -> FieldDecoder a
+toHpgsqlFieldDecoder fp =
+  FieldDecoder
+    { fieldValueDecoder = fp,
+      allowedPgTypes = const True -- No way to check if types are valid ahead of time
+    }
+
+fromHpgsqlFieldDecoder :: FieldDecoder a -> FieldParser a
+fromHpgsqlFieldDecoder = fieldValueDecoder
 
 -- | Given a Hpgsql query, returns the text format with question marks
 -- for query arguments and a row object. With both, you can call
