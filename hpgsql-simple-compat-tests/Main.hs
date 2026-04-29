@@ -272,7 +272,7 @@ testNullableArray TestEnv {..} = do
 
 testCIText :: TestEnv -> Assertion
 testCIText TestEnv {..} = do
-  execute_ conn "CREATE EXTENSION IF NOT EXISTS citext"
+  -- execute_ conn "CREATE EXTENSION IF NOT EXISTS citext" -- hpgsql's test environment already does this
   roundTrip (CI.mk "")
   roundTrip (CI.mk "UPPERCASE")
   roundTrip (CI.mk "lowercase")

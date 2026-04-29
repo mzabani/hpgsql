@@ -14,5 +14,8 @@ pkgs.mkShell {
     scripts/init-pg-cluster.sh ./conf/test-db
     pg_ctl start
     scripts/wait-for-pg-ready.sh
+
+    # Create things needed by tests
+    psql -c 'CREATE EXTENSION citext'
   '';
 }

@@ -9,6 +9,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Functor ((<&>))
+import Data.Functor.Contravariant (contramap)
 import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
@@ -39,7 +40,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, mkUntypedFieldEncoder, rawBytesFieldDecoder, singleColRowDecoder, typeFieldDecoder)
+import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, rawBytesFieldDecoder, singleColRowDecoder, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -519,18 +520,20 @@ ciTextRoundTrip conn = hedgehog $ do
         <*> genCIString
         <*> genCIString
         <*> genCIString
-  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res <-
+    liftIO $
+      query conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 ciTextTextDecoding :: HPgConnection -> PropertyT IO ()
 ciTextTextDecoding conn = hedgehog $ do
   someText :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 50) (Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.unicode)
   res <-
-    liftIO $
+    liftIO $ do
       queryWith
         rowDecoder
         conn
-        (fromString $ "SELECT '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text")
+        (fromString $ "SELECT '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext")
   res === [(CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))]
 
 localTimeRoundTrip :: HPgConnection -> PropertyT IO ()
@@ -668,17 +671,18 @@ myEnumFieldDecoderWithTypeInfoCheck =
         "val3" -> Val3
         _ -> error "Invalid value for MyEnum"
    in typeFieldDecoder
-        ( \fieldInfo ->
-            (typeName <$> lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache) == Just "myenum"
-        )
+        (typeMustBeNamed "myenum")
         $ convert <$> rawBytesFieldDecoder
 
 instance ToPgField MyEnum where
-  fieldEncoder = mkUntypedFieldEncoder $ \encCtx ->
-    (fieldEncoder @Text).toPgField encCtx . \case
-      Val1 -> "val1" :: Text
-      Val2 -> "val2"
-      Val3 -> "val3"
+  fieldEncoder =
+    let convert = \case
+          Val1 -> "val1" :: Text
+          Val2 -> "val2"
+          Val3 -> "val3"
+     in typeFieldEncoder
+          (typeOidWithName "myenum")
+          $ contramap convert fieldEncoder
 
 queryEnumTypes :: HPgConnection -> IO ()
 queryEnumTypes conn = withRollback conn $ do

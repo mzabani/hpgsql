@@ -275,10 +275,9 @@ data ConnectOpts = ConnectOpts
     -- | Immediately after connecting, run a query to fetch all types
     -- from the `pg_type` table. This makes them available in FromPgField
     -- instances.
-    -- The default is True. You probably want to set it to False if you have
-    -- a lot of custom types and are extremely latency sensitive.
-    -- Note that builtin postgres types are available in the connection's type
-    -- cache even if this is False, at no runtime cost.
+    -- The default is True. You should only set it to False if you really
+    -- know what you're doing, because class instances of custom types
+    -- can stop working.
     fillTypeInfoCache :: Bool
   }
 

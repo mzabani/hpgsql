@@ -15,9 +15,11 @@ module Hpgsql.Encoding
     AllowNull (..),
     LowerCasedPgEnum (..),
     (:.) (..),
-    mkUntypedFieldEncoder,
+    untypedFieldEncoder,
     typeFieldEncoder,
+    typeOidWithName,
     typeFieldDecoder,
+    typeMustBeNamed,
     rawBytesFieldDecoder,
     singleColRowDecoder,
     arrayField,
@@ -74,7 +76,7 @@ import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
   { fieldTypeOid :: !Oid,
@@ -249,20 +251,31 @@ class ToPgField a where
 
 -- | Returns a `FieldEncoder` that is sent without a type OID in queries.
 -- This means postgres will try to infer the type of these arguments.
--- TODO: this is useful for custom enum types at the moment, but we could give
--- users a way to create a typed encoder based on a type name since we have
--- the typeInfo cache available.
-mkUntypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
-mkUntypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}
+-- Check 'typedFieldEncoder' if you're interested in encoding your custom types,
+-- you probably don't need this.
+untypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
+untypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}
 
 -- | Allows you to specify a type for a FieldEncoder. This can be useful to avoid
 -- letting postgres infer types itself, which can cause errors. For example:
 --
--- > typeFieldEncoder (lookupTypeByName "my_custom_enum_type") myCustomEnumDecoder
+-- > data MyEnum = Val1 | Val2 | Val3
+-- > myEnumFieldDecoderWithTypeInfoCheck :: FieldEncoder MyEnum
+-- > myEnumFieldDecoderWithTypeInfoCheck =
+-- >   let convert = \case
+-- >         Val1 -> "val1" :: Text
+-- >         Val2 -> "val2"
+-- >         Val3 -> "val3"
+-- >    in typeFieldEncoder
+-- >         (typeOidWithName "my_enum")
+-- >         $ contramap convert fieldEncoder
 --
 -- This will work unless you use non-default flags in your connection options.
 typeFieldEncoder :: (EncodingContext -> Maybe Oid) -> FieldEncoder a -> FieldEncoder a
 typeFieldEncoder ttoid enc = enc {toTypeOid = ttoid}
+
+typeOidWithName :: Text -> (EncodingContext -> Maybe Oid)
+typeOidWithName typName = \encCtx -> typeOid <$> lookupTypeByName typName encCtx.typeInfoCache
 
 instance ToPgField Int where
   fieldEncoder =
@@ -509,29 +522,20 @@ instance ToPgField String where
 -- "Note that the FoldCase instance for ByteStrings is only guaranteed to be correct for ISO-8859-1 encoded strings!".
 -- So we don't have those instances.
 
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
 instance ToPgField (CI Text) where
-  fieldEncoder =
-    let fe = fieldEncoder @Text
-     in FieldEncoder
-          { toTypeOid = \_ -> Just textOid,
-            toPgField = \encCtx -> fe.toPgField encCtx . CI.original
-          }
+  fieldEncoder = typeFieldEncoder (typeOidWithName "citext") $ contramap CI.original fieldEncoder
 
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
 instance ToPgField (CI LT.Text) where
-  fieldEncoder =
-    let fe = fieldEncoder @LT.Text
-     in FieldEncoder
-          { toTypeOid = \_ -> Just textOid,
-            toPgField = \encCtx -> fe.toPgField encCtx . CI.original
-          }
+  fieldEncoder = typeFieldEncoder (typeOidWithName "citext") $ contramap CI.original fieldEncoder
 
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
 instance ToPgField (CI String) where
-  fieldEncoder =
-    let fe = fieldEncoder @String
-     in FieldEncoder
-          { toTypeOid = \_ -> Just textOid,
-            toPgField = \encCtx -> fe.toPgField encCtx . CI.original
-          }
+  fieldEncoder = typeFieldEncoder (typeOidWithName "citext") $ contramap CI.original fieldEncoder
 
 instance ToPgField UUID where
   fieldEncoder =
@@ -863,6 +867,7 @@ rawBytesFieldDecoder =
 -- | Allows you to specify a type (and other checks, possibly) for a FieldDecoder.
 -- This can be useful to ensure you're not accidentally decoding a different type.
 --
+-- > data MyEnum = Val1 | Val2 | Val3
 -- > myEnumFieldDecoderWithTypeInfoCheck :: FieldDecoder MyEnum
 -- > myEnumFieldDecoderWithTypeInfoCheck =
 -- >   let convert = \case
@@ -871,14 +876,16 @@ rawBytesFieldDecoder =
 -- >         "val3" -> Val3
 -- >         _ -> error "Invalid value for MyEnum"
 -- >    in typeFieldDecoder
--- >         ( \fieldInfo ->
--- >             (typeName <$> lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache) == Just "myenum"
--- >         )
+-- >         (typeMustBeNamed "my_enum")
 -- >         $ convert <$> rawBytesFieldDecoder
 --
 -- This will work unless you use non-default flags in your connection options.
 typeFieldDecoder :: (ColumnInfo -> Bool) -> FieldDecoder a -> FieldDecoder a
 typeFieldDecoder fieldCheck dec = dec {allowedPgTypes = fieldCheck}
+
+typeMustBeNamed :: Text -> (ColumnInfo -> Bool)
+typeMustBeNamed typName = \fieldInfo ->
+  (typeName <$> lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache) == Just typName
 
 scientificDecoder :: Bool -> Parser.Parser Scientific
 scientificDecoder mustBeInteger = do
@@ -971,30 +978,26 @@ instance FromPgField LT.Text where
 
 instance FromPgField String where
   fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
-    Just bs -> Right $ Text.unpack $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
+    -- \| This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+    -- connection option).
+    Just bs -> Right $ Text.unpack $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
 
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
 instance FromPgField (CI Text) where
-  fieldDecoder =
-    let dec = CI.mk <$> fieldDecoder
-     in dec
-          { allowedPgTypes = const True
-          }
+  fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
 instance FromPgField (CI LT.Text) where
-  fieldDecoder =
-    let dec = CI.mk <$> fieldDecoder
-     in dec
-          { allowedPgTypes = const True
-          }
+  fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
 instance FromPgField (CI String) where
-  fieldDecoder =
-    let dec = CI.mk <$> fieldDecoder
-     in dec
-          { allowedPgTypes = const True
-          }
+  fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
 instance FromPgField UTCTime where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
@@ -1251,7 +1254,7 @@ instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) wh
   fieldDecoder = LowerCasedPgEnum <$> genericEnumFieldDecoder LT.toLower
 
 instance (Generic a, EnumEncoder (Rep a)) => ToPgField (LowerCasedPgEnum a) where
-  fieldEncoder = mkUntypedFieldEncoder $ \_encCtx -> \(LowerCasedPgEnum v) -> NotNull $ genericEnumToPgField Text.toLower v
+  fieldEncoder = untypedFieldEncoder $ \_encCtx -> \(LowerCasedPgEnum v) -> NotNull $ genericEnumToPgField Text.toLower v
 
 genericEnumFieldDecoder ::
   forall a.
