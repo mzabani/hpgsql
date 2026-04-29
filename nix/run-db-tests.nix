@@ -22,7 +22,11 @@ in
       trap "pg_ctl stop || true" EXIT ERR
       pg_ctl -l "$out/pg_ctl_init.log" start
       scripts/wait-for-pg-ready.sh
+      # Create things needed by tests
+      psql -c 'CREATE EXTENSION citext'
+
       ${hpgsql-tests}/bin/hpgsql-tests ${hspecArgs}
+
       pg_ctl stop
       trap - EXIT ERR
     '';
