@@ -3,7 +3,6 @@
   - TimeOfDay
   - hstore
   - PGRange?
-- Make FieldDecoder implement `Alternative`, add `FromPgField (Either a b)` instance.
 - `run format-hs`, check all is formatted in CI as the last step
 - Write a FromRow instance in hpgsql-simple-compat that checks number of fields and decodes a row of arbitrary length
   - Can the Applicative RowDecoder also know about remaining fields? Ordering is fine in Applicative, it's just sequencing that isn't.- Review all exposed functions per module, move more to Internal modules

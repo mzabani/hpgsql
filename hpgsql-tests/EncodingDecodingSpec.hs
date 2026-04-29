@@ -141,6 +141,9 @@ spec = parallel $ do
       "Querying enum types"
       queryEnumTypes
     it
+      "FieldDecoder Semigroup tries first then falls back"
+      fieldDecoderSemigroup
+    it
       "Generically derived types"
       queryGenericallyDerivedTypes
     it
@@ -607,6 +610,13 @@ localTimeTextDecoding conn = hedgehog $ do
               <> "'::timestamp"
         )
   res === [row]
+
+fieldDecoderSemigroup :: HPgConnection -> IO ()
+fieldDecoderSemigroup conn = do
+  let eitherIntOrText :: FieldDecoder (Either Int Text)
+      eitherIntOrText = (Left <$> fieldDecoder) <> (Right <$> fieldDecoder)
+      decoder = (,) <$> singleField eitherIntOrText <*> singleField eitherIntOrText
+  queryWith decoder conn "SELECT 42, 'hello'::text" `shouldReturn` [(Left 42, Right "hello")]
 
 queryCompositeType :: HPgConnection -> IO ()
 queryCompositeType conn = withRollback conn $ do

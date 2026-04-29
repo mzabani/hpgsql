@@ -85,6 +85,19 @@ data FieldDecoder a = FieldDecoder
   }
   deriving stock (Functor)
 
+instance Semigroup (FieldDecoder a) where
+  dec1 <> dec2 =
+    FieldDecoder
+      { fieldValueDecoder = \cInfo ->
+          let f1 = dec1.fieldValueDecoder cInfo
+              f2 = dec2.fieldValueDecoder cInfo
+           in \mbs ->
+                let cand1 = if dec1.allowedPgTypes cInfo then f1 mbs else Left "Not first parser"
+                    cand2 = if dec2.allowedPgTypes cInfo then f2 mbs else Left "Not second parser"
+                 in cand1 <> cand2,
+        allowedPgTypes = \cInfo -> dec1.allowedPgTypes cInfo || dec2.allowedPgTypes cInfo
+      }
+
 data RowDecoder a = RowDecoder
   { fullRowDecoder :: [ColumnInfo] -> Parser.Parser a,
     -- | Returns the same colInfos with a boolean indicating if
