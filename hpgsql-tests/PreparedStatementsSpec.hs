@@ -5,7 +5,7 @@ import qualified Data.List.NonEmpty as NE
 import Data.Maybe (isJust)
 import DbUtils (aroundConn, withRollback)
 import Hpgsql (HPgConnection, Only (..), query)
-import Hpgsql.Encoding (rowParser)
+import Hpgsql.Encoding (rowDecoder)
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.Pipeline (pipeline, runPipeline)
 import Hpgsql.Query (breakQueryIntoStatements, escapeIdentifier, nonPreparedStatement, preparedStatement, sql, sqlPrep, vALUES)

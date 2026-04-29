@@ -11,13 +11,13 @@ module Hpgsql.Encoding
     Only (..),
     ColumnInfo (..),
     EncodingContext (..),
-    FieldParser (..), -- TODO: Can we export ctor?
-    RowParser (..), -- TODO: Can we export ctor?
+    FieldDecoder (..), -- TODO: Can we export ctor?
+    RowDecoder (..), -- TODO: Can we export ctor?
     AllowNull (..),
     LowerCasedPgEnum (..),
     (:.) (..),
     anyTypeDecoder,
-    singleColRowParser,
+    singleColRowDecoder,
     arrayField,
     toPgVectorField,
     genericFromPgRow,
@@ -80,14 +80,14 @@ data ColumnInfo = ColumnInfo
     encodingContext :: !EncodingContext
   }
 
-data FieldParser a = FieldParser
+data FieldDecoder a = FieldDecoder
   { fieldValueParser :: ColumnInfo -> Maybe ByteString -> Either String a,
     allowedPgTypes :: ColumnInfo -> Bool
   }
   deriving stock (Functor)
 
-data RowParser a = RowParser
-  { fullRowParser :: [ColumnInfo] -> Parser.Parser a,
+data RowDecoder a = RowDecoder
+  { fullRowDecoder :: [ColumnInfo] -> Parser.Parser a,
     -- | Returns the same colInfos with a boolean indicating if
     -- the expected types match for each colInfo.
     rowColumnsTypeCheck :: [ColumnInfo] -> [(ColumnInfo, Bool)],
@@ -95,17 +95,17 @@ data RowParser a = RowParser
   }
   deriving stock (Functor, Generic)
 
-instance Applicative RowParser where
-  pure v = RowParser (const $ pure v) (map (,True)) 0
-  RowParser p1 tc1 nc1 <*> RowParser p2 tc2 nc2 = RowParser (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in tc1 cols1 ++ tc2 cols2) (nc1 + nc2)
+instance Applicative RowDecoder where
+  pure v = RowDecoder (const $ pure v) (map (,True)) 0
+  RowDecoder p1 tc1 nc1 <*> RowDecoder p2 tc2 nc2 = RowDecoder (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in tc1 cols1 ++ tc2 cols2) (nc1 + nc2)
 
-instance (TypeError (TypeLits.Text "RowParser does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowParser where
-  (>>=) = error "inaccessible bind in Monad RowParser instance"
+instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowDecoder where
+  (>>=) = error "inaccessible bind in Monad RowDecoder instance"
 
-singleColRowParser :: FieldParser a -> RowParser a
-singleColRowParser (FieldParser {..}) =
-  RowParser
-    { fullRowParser = \case
+singleColRowDecoder :: FieldDecoder a -> RowDecoder a
+singleColRowDecoder (FieldDecoder {..}) =
+  RowDecoder
+    { fullRowDecoder = \case
         [singleColInfo] ->
           let decode = fieldValueParser singleColInfo
            in do
@@ -118,10 +118,10 @@ singleColRowParser (FieldParser {..}) =
                 case decode nextColBs of
                   Right v -> pure v
                   Left err -> fail err
-        _ -> error "singleColRowParser expected a single column OID but got 0 or >1",
+        _ -> error "singleColRowDecoder expected a single column OID but got 0 or >1",
       rowColumnsTypeCheck = \case
         [singleColInfo] -> [(singleColInfo, allowedPgTypes singleColInfo)]
-        _ -> error "singleColRowParser's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+        _ -> error "singleColRowDecoder's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
       numExpectedColumns = 1
     }
 
@@ -129,12 +129,12 @@ int32Parser :: Parser.Parser Int32
 int32Parser = either fail pure . Cereal.decode @Int32 =<< Parser.take 4
 
 class FromPgField a where
-  fieldParser :: FieldParser a
+  fieldDecoder :: FieldDecoder a
 
 class FromPgRow a where
-  rowParser :: RowParser a
-  default rowParser :: (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
-  rowParser = genericFromPgRow
+  rowDecoder :: RowDecoder a
+  default rowDecoder :: (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
+  rowDecoder = genericFromPgRow
 
 data AllowNull (a :: Bool) where
   AllowNull :: AllowNull True
@@ -144,7 +144,7 @@ type family ResAllowNull (r :: Bool) (a :: Type) :: Type where
   ResAllowNull True a = Maybe a
   ResAllowNull False a = a
 
--- | Allows you to create a @FieldParser@ for composite types.
+-- | Allows you to create a @FieldDecoder@ for composite types.
 -- For a type such as:
 --
 -- > CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);
@@ -154,12 +154,12 @@ type family ResAllowNull (r :: Bool) (a :: Type) :: Type where
 -- > data IntAndBool = IntAndBool Int Bool
 -- >
 -- > instance FromPgField IntAndBool where
--- >   fieldParser = compositeTypeParser DisallowNull (rowParser @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
-compositeTypeParser :: forall a t. AllowNull t -> RowParser a -> FieldParser (ResAllowNull t a)
-compositeTypeParser nullCheck (RowParser {..}) =
+-- >   fieldDecoder = compositeTypeParser DisallowNull (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
+compositeTypeParser :: forall a t. AllowNull t -> RowDecoder a -> FieldDecoder (ResAllowNull t a)
+compositeTypeParser nullCheck (RowDecoder {..}) =
   case nullCheck of
     DisallowNull ->
-      FieldParser
+      FieldDecoder
         { fieldValueParser = \compositeTypeOid -> \case
             Nothing -> Left "Got NULL in composite type but it was not allowed"
             Just bs -> case Parser.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parser.endOfInput) bs of
@@ -168,7 +168,7 @@ compositeTypeParser nullCheck (RowParser {..}) =
           allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
         }
     AllowNull ->
-      FieldParser
+      FieldDecoder
         { fieldValueParser = \compositeTypeColInfo -> \case
             Nothing -> Right Nothing
             Just bs -> case Parser.parseOnly (parserForRecord compositeTypeColInfo.encodingContext <* Parser.endOfInput) bs of
@@ -191,48 +191,48 @@ compositeTypeParser nullCheck (RowParser {..}) =
         pure (oid, sizeBs <> bs)
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
       unless (all snd typecheckedCols) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
-      case Parser.parseOnly (fullRowParser (map (mkColInfo . fst) cols) <* Parser.endOfInput) (mconcat $ map snd cols) of
+      case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (mconcat $ map snd cols) of
         Parser.ParseOk v -> pure v
         Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
 
 instance (FromPgField a) => FromPgRow (Only a) where
-  rowParser = Only <$> singleColRowParser fieldParser
+  rowDecoder = Only <$> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b) => FromPgRow (a, b) where
-  rowParser = (,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c) => FromPgRow (a, b, c) where
-  rowParser = (,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d) => FromPgRow (a, b, c, d) where
-  rowParser = (,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e) => FromPgRow (a, b, c, d, e) where
-  rowParser = (,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f) => FromPgRow (a, b, c, d, e, f) where
-  rowParser = (,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g) => FromPgRow (a, b, c, d, e, f, g) where
-  rowParser = (,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h) => FromPgRow (a, b, c, d, e, f, g, h) where
-  rowParser = (,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i) => FromPgRow (a, b, c, d, e, f, g, h, i) where
-  rowParser = (,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j) => FromPgRow (a, b, c, d, e, f, g, h, i, j) where
-  rowParser = (,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  rowParser = (,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l) where
-  rowParser = (,,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
-  rowParser = (,,,,,,,,,,,,) <$> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser <*> singleColRowParser fieldParser
+  rowDecoder = (,,,,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
 
 data FieldEncoder a = FieldEncoder
   { toTypeOid :: !(EncodingContext -> Maybe Oid),
@@ -604,12 +604,12 @@ divide d re1 re2 =
     }
 
 class ToPgRow a where
-  toRowEncoder :: RowEncoder a
-  default toRowEncoder :: (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
-  toRowEncoder = genericToPgRow
+  rowEncoder :: RowEncoder a
+  default rowEncoder :: (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
+  rowEncoder = genericToPgRow
 
 instance ToPgRow () where
-  toRowEncoder = RowEncoder (\_ -> []) (\_ -> []) (\_ -> \_ -> mempty)
+  rowEncoder = RowEncoder (\_ -> []) (\_ -> []) (\_ -> \_ -> mempty)
 
 singleFieldRowEncoder :: forall a. (ToPgField a) => RowEncoder a
 singleFieldRowEncoder =
@@ -621,16 +621,16 @@ singleFieldRowEncoder =
         }
 
 instance (ToPgField a) => ToPgRow (Only a) where
-  toRowEncoder = contramap fromOnly singleFieldRowEncoder
+  rowEncoder = contramap fromOnly singleFieldRowEncoder
 
 instance (ToPgField a, ToPgField b) => ToPgRow (a, b) where
-  toRowEncoder = divide id singleFieldRowEncoder singleFieldRowEncoder
+  rowEncoder = divide id singleFieldRowEncoder singleFieldRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
-  toRowEncoder = divide (\(a, b, c) -> ((a, b), c)) toRowEncoder singleFieldRowEncoder
+  rowEncoder = divide (\(a, b, c) -> ((a, b), c)) rowEncoder singleFieldRowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
-  toRowEncoder = divide (\(a, b, c, d) -> ((a, b), (c, d))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d) -> ((a, b), (c, d))) rowEncoder rowEncoder
 
 -- This instance implements toBinaryCopyBytes as well because we did this
 -- to test if this method can help improve performance of COPY in our
@@ -642,28 +642,28 @@ instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, 
 --     toPgFieldWithSize v = Builder.binaryField $ toPgField encCtx v
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
-  toRowEncoder = divide (\(a, b, c, d, e) -> ((a, b, c), (d, e))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d, e) -> ((a, b, c), (d, e))) rowEncoder rowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f) => ToPgRow (a, b, c, d, e, f) where
-  toRowEncoder = divide (\(a, b, c, d, e, f) -> ((a, b, c), (d, e, f))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d, e, f) -> ((a, b, c), (d, e, f))) rowEncoder rowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g) => ToPgRow (a, b, c, d, e, f, g) where
-  toRowEncoder = divide (\(a, b, c, d, e, f, g) -> ((a, b, c), (d, e, f, g))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d, e, f, g) -> ((a, b, c), (d, e, f, g))) rowEncoder rowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h) => ToPgRow (a, b, c, d, e, f, g, h) where
-  toRowEncoder = divide (\(a, b, c, d, e, f, g, h) -> ((a, b, c, d), (e, f, g, h))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h) -> ((a, b, c, d), (e, f, g, h))) rowEncoder rowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i) => ToPgRow (a, b, c, d, e, f, g, h, i) where
-  toRowEncoder = divide (\(a, b, c, d, e, f, g, h, i) -> ((a, b, c, d), (e, f, g, h, i))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h, i) -> ((a, b, c, d), (e, f, g, h, i))) rowEncoder rowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j) => ToPgRow (a, b, c, d, e, f, g, h, i, j) where
-  toRowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j) -> ((a, b, c, d, e), (f, g, h, i, j))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j) -> ((a, b, c, d, e), (f, g, h, i, j))) rowEncoder rowEncoder
 
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  toRowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j, k) -> ((a, b, c, d, e, f), (g, h, i, j, k))) toRowEncoder toRowEncoder
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j, k) -> ((a, b, c, d, e, f), (g, h, i, j, k))) rowEncoder rowEncoder
 
 -- instance (ToPgField a) => ToPgRow [a] where
---   toRowEncoder = RowEncoder {
+--   rowEncoder = RowEncoder {
 --     toPgParams = \xs -> concatMap toPgParams xs
 --     , toTypeOids = \_ -> concatMap (\)
 --   } $ \cols -> map (\v encodingContext -> let typOid = toTypeOid (Proxy @a) encodingContext in (typOid, toPgField encodingContext v)) cols
@@ -674,9 +674,9 @@ data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
 infixr 3 :.
 
 instance forall a b. (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
-  toRowEncoder =
-    let !re1 = toRowEncoder @a
-        !re2 = toRowEncoder @b
+  rowEncoder =
+    let !re1 = rowEncoder @a
+        !re2 = rowEncoder @b
      in RowEncoder
           { toPgParams = \(a :. b) -> re1.toPgParams a ++ re2.toPgParams b,
             toTypeOids = \_ -> re1.toTypeOids (Proxy @a) ++ re2.toTypeOids (Proxy @b),
@@ -687,7 +687,7 @@ instance forall a b. (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
           }
 
 instance (FromPgRow a, FromPgRow b) => FromPgRow (a :. b) where
-  rowParser = (:.) <$> rowParser <*> rowParser
+  rowDecoder = (:.) <$> rowDecoder <*> rowDecoder
 
 -- | The OID for `Data.Int`, which is machine dependent.
 haskellIntOid :: Oid
@@ -728,16 +728,16 @@ binaryFloat4Decoder = castWord32ToFloat . either error id . Cereal.decode @Word3
 binaryFloat8Decoder :: ByteString -> Double
 binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decode @Word64
 
-parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldParser a
+parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldDecoder a
 parsePgType !requiredTypeOids !fieldValueParser =
-  FieldParser
+  FieldDecoder
     { fieldValueParser = \_oid -> fieldValueParser,
       allowedPgTypes = (`elem` requiredTypeOids) . typeOid
     }
 
 instance FromPgField () where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \_oid -> \case
           Just "" -> Right ()
           Just bs -> Left $ "Invalid value '" ++ show bs ++ "' for postgres void type"
@@ -746,8 +746,8 @@ instance FromPgField () where
       }
 
 instance FromPgField Int where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
@@ -757,8 +757,8 @@ instance FromPgField Int where
       }
 
 instance FromPgField Int16 where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
@@ -768,8 +768,8 @@ instance FromPgField Int16 where
       }
 
 instance FromPgField Int32 where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
@@ -779,8 +779,8 @@ instance FromPgField Int32 where
       }
 
 instance FromPgField Int64 where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
@@ -790,8 +790,8 @@ instance FromPgField Int64 where
       }
 
 instance FromPgField Integer where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \ColumnInfo {typeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
@@ -807,8 +807,8 @@ instance FromPgField Integer where
       }
 
 instance FromPgField Oid where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \_ -> \case
           -- Oids are just int4
           Just bs -> Oid <$> binaryIntDecoder int4Oid bs
@@ -817,13 +817,13 @@ instance FromPgField Oid where
       }
 
 instance FromPgField Float where
-  fieldParser = parsePgType [float4Oid] $ \case
+  fieldDecoder = parsePgType [float4Oid] $ \case
     Just bs -> Right $ binaryFloat4Decoder bs
     Nothing -> Left "Cannot decode SQL null as the Haskell Float type. Use a `Maybe Float`"
 
 instance FromPgField Double where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \ColumnInfo {typeOid = oid} ->
           let !decoder
                 | oid == float8Oid = binaryFloat8Decoder
@@ -839,10 +839,10 @@ instance FromPgField Double where
 -- This can be useful to build `FromPgField` instances for enum types,
 -- since postgres uses their UTF8 text representation even in the
 -- binary protocol, but otherwise it's easier to compose existing
--- FieldParsers.
-anyTypeDecoder :: FieldParser ByteString
+-- FieldDecoders.
+anyTypeDecoder :: FieldDecoder ByteString
 anyTypeDecoder =
-  FieldParser
+  FieldDecoder
     { fieldValueParser = \_oid -> \case
         Nothing -> Left "Cannot decode SQL null as the `anyTypeDecoder`."
         Just bs -> Right bs,
@@ -868,8 +868,8 @@ scientificDecoder mustBeInteger = do
 
 instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \ColumnInfo {typeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
@@ -886,20 +886,20 @@ instance FromPgField Scientific where
       }
 
 instance FromPgField (Ratio Integer) where
-  fieldParser = toRational <$> fieldParser @Scientific
+  fieldDecoder = toRational <$> fieldDecoder @Scientific
 
 binaryTrue :: ByteString
 binaryTrue = Cereal.encode True
 
 instance FromPgField Bool where
-  fieldParser = parsePgType [boolOid] $ \case
+  fieldDecoder = parsePgType [boolOid] $ \case
     Just bs -> Right $ bs == binaryTrue
     Nothing -> Left "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
 
 instance FromPgField Char where
-  fieldParser =
-    let textParser = fieldValueParser (fieldParser @Text)
-     in FieldParser
+  fieldDecoder =
+    let textParser = fieldValueParser (fieldDecoder @Text)
+     in FieldDecoder
           { fieldValueParser = \colInfo@ColumnInfo {typeOid = oid} ->
               let !decodeText = textParser colInfo
                in \mbs -> case mbs of
@@ -917,44 +917,44 @@ instance FromPgField Char where
           }
 
 instance FromPgField ByteString where
-  fieldParser = parsePgType [byteaOid] $ \case
+  fieldDecoder = parsePgType [byteaOid] $ \case
     Just bs -> Right bs
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
 
 instance FromPgField LBS.ByteString where
-  fieldParser = parsePgType [byteaOid] $ \case
+  fieldDecoder = parsePgType [byteaOid] $ \case
     Just bs -> Right $ LBS.fromStrict bs
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
 
 instance FromPgField Text where
-  fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
+  fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
     Just bs -> Right $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField LT.Text where
-  fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
+  fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
     Just bs -> Right $ LT.fromStrict $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField String where
-  fieldParser = parsePgType [textOid, varcharOid, nameOid] $ \case
+  fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
     Just bs -> Right $ Text.unpack $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
 
 instance FromPgField (CI Text) where
-  fieldParser = CI.mk <$> fieldParser
+  fieldDecoder = CI.mk <$> fieldDecoder
 
 instance FromPgField (CI LT.Text) where
-  fieldParser = CI.mk <$> fieldParser
+  fieldDecoder = CI.mk <$> fieldDecoder
 
 instance FromPgField (CI String) where
-  fieldParser = CI.mk <$> fieldParser
+  fieldDecoder = CI.mk <$> fieldDecoder
 
 instance FromPgField UTCTime where
-  fieldParser = parsePgType [timestamptzOid] $ \case
+  fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decode @Int64 bs
@@ -964,7 +964,7 @@ instance FromPgField UTCTime where
     Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
 
 instance FromPgField (Unbounded UTCTime) where
-  fieldParser = parsePgType [timestamptzOid] $ \case
+  fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decode @Int64 bs
@@ -981,7 +981,7 @@ instance FromPgField (Unbounded UTCTime) where
     Nothing -> Left "Cannot decode SQL null as the Haskell (Unbounded UTCTime) type. Use a `Maybe (Unbounded UTCTime)`"
 
 instance FromPgField ZonedTime where
-  fieldParser = parsePgType [timestamptzOid] $ \case
+  fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decode @Int64 bs
@@ -991,7 +991,7 @@ instance FromPgField ZonedTime where
     Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
 
 instance FromPgField (Unbounded ZonedTime) where
-  fieldParser = parsePgType [timestamptzOid] $ \case
+  fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
       totalusecs <- Cereal.decode @Int64 bs
@@ -1008,7 +1008,7 @@ instance FromPgField (Unbounded ZonedTime) where
     Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
 
 instance FromPgField LocalTime where
-  fieldParser = parsePgType [timestampOid] $ \case
+  fieldDecoder = parsePgType [timestampOid] $ \case
     Just bs -> do
       totalusecs <- Cereal.decode @Int64 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
@@ -1017,7 +1017,7 @@ instance FromPgField LocalTime where
     Nothing -> Left "Cannot decode SQL null as the Haskell LocalTime type. Use a `Maybe LocalTime`"
 
 instance FromPgField Day where
-  fieldParser = parsePgType [dateOid] $ \case
+  fieldDecoder = parsePgType [dateOid] $ \case
     Just bs -> do
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
@@ -1027,7 +1027,7 @@ instance FromPgField Day where
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
 
 instance FromPgField (Unbounded Day) where
-  fieldParser = parsePgType [dateOid] $ \case
+  fieldDecoder = parsePgType [dateOid] $ \case
     Just bs -> do
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
@@ -1044,22 +1044,22 @@ instance FromPgField (Unbounded Day) where
     Nothing -> Left "Cannot decode SQL null as the Haskell (Unbounded Day) type. Use a `Maybe (Unbounded Day)`"
 
 instance FromPgField CalendarDiffTime where
-  fieldParser = parsePgType [intervalOid] $ \case
+  fieldDecoder = parsePgType [intervalOid] $ \case
     Just bs -> do
       (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decode bs
       Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
     Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
 
 instance FromPgField UUID where
-  fieldParser = parsePgType [uuidOid] $ \case
+  fieldDecoder = parsePgType [uuidOid] $ \case
     Just bs -> case UUID.fromByteString (LBS.fromStrict bs) of
       Just uuid -> Right uuid
       Nothing -> Left "Bug in Hpgsql: UUID field could not be decoded"
     Nothing -> Left "Cannot decode SQL null as the Haskell UUID type. Use a `Maybe UUID`"
 
 instance FromPgField Aeson.Value where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
@@ -1072,11 +1072,11 @@ instance FromPgField Aeson.Value where
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
       }
 
--- | A FieldParser that accepts and decodes SQL NULLs into `Nothing` values
+-- | A FieldDecoder that accepts and decodes SQL NULLs into `Nothing` values
 -- for a given parser.
-nullableField :: FieldParser a -> FieldParser (Maybe a)
-nullableField FieldParser {..} =
-  FieldParser
+nullableField :: FieldDecoder a -> FieldDecoder (Maybe a)
+nullableField FieldDecoder {..} =
+  FieldDecoder
     { fieldValueParser = \oid ->
         let !origFieldValueParser = fieldValueParser oid
          in \case
@@ -1086,18 +1086,18 @@ nullableField FieldParser {..} =
     }
 
 instance (FromPgField a) => FromPgField (Maybe a) where
-  fieldParser = nullableField fieldParser
+  fieldDecoder = nullableField fieldDecoder
 
--- | A FieldParser that accepts and decodes Postgres arrays.
-arrayField :: forall a f. (Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> FieldParser a -> FieldParser (f a)
+-- | A FieldDecoder that accepts and decodes Postgres arrays.
+arrayField :: forall a f. (Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> FieldDecoder a -> FieldDecoder (f a)
 arrayField !replicateFunction !elementParser =
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
-  FieldParser
+  FieldDecoder
     { fieldValueParser = \colInfo ->
-        let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parser.endOfInput
+        let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
-              Just bs -> case Parser.parseOnly arrayFieldParser bs of
+              Just bs -> case Parser.parseOnly arrayFieldDecoder bs of
                 Parser.ParseOk v -> Right v
                 Parser.ParseFail err -> Left err,
       allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
@@ -1124,23 +1124,23 @@ arrayField !replicateFunction !elementParser =
               Right el -> pure el
 
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
-  fieldParser = arrayField Vector.replicateM fieldParser
+  fieldDecoder = arrayField Vector.replicateM fieldDecoder
 
 instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser = \colInfo ->
-          let !arrayFieldParser = arrayParser colInfo.encodingContext <* Parser.endOfInput
+          let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector (Vector a))`"
-                Just bs -> case Parser.parseOnly arrayFieldParser bs of
+                Just bs -> case Parser.parseOnly arrayFieldDecoder bs of
                   Parser.ParseOk v -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
       }
     where
-      !elementParser = fieldParser @a
+      !elementParser = fieldDecoder @a
       arrayParser :: EncodingContext -> Parser.Parser (Vector (Vector a))
       arrayParser encodingContext = do
         !ndim <- int32Parser
@@ -1172,11 +1172,11 @@ int16Parser :: Parser.Parser Int16
 int16Parser = either fail pure . Cereal.decode @Int16 =<< Parser.take 2
 
 -- {- Generic deriving -}
-genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
+genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
 genericFromPgRow = to <$> genRowDecoder @(Rep a)
 
 class ProductTypeDecoder f where
-  genRowDecoder :: RowParser (f a)
+  genRowDecoder :: RowDecoder (f a)
 
 instance (ProductTypeDecoder a, ProductTypeDecoder b) => ProductTypeDecoder (a :*: b) where
   genRowDecoder = (:*:) <$> genRowDecoder <*> genRowDecoder
@@ -1185,7 +1185,7 @@ instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
   genRowDecoder = M1 <$> genRowDecoder
 
 instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
-  genRowDecoder = fmap K1 $ singleColRowParser $ fieldParser @a
+  genRowDecoder = fmap K1 $ singleColRowDecoder $ fieldDecoder @a
 
 genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
 genericToPgRow = contramap from genRowEncoder
@@ -1205,18 +1205,18 @@ instance (ToPgField a) => ProductTypeEncoder (K1 r a) where
 newtype LowerCasedPgEnum a = LowerCasedPgEnum a
 
 instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) where
-  fieldParser = LowerCasedPgEnum <$> genericEnumFieldParser LT.toLower
+  fieldDecoder = LowerCasedPgEnum <$> genericEnumFieldDecoder LT.toLower
 
 instance (Generic a, EnumEncoder (Rep a)) => ToPgField (LowerCasedPgEnum a) where
   fieldEncoder = mkUntypedFieldEncoder $ \_encCtx -> \(LowerCasedPgEnum v) -> NotNull $ genericEnumToPgField Text.toLower v
 
-genericEnumFieldParser ::
+genericEnumFieldDecoder ::
   forall a.
   (Generic a, EnumDecoder (Rep a)) =>
   -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
   (LT.Text -> LT.Text) ->
-  FieldParser a
-genericEnumFieldParser nameTransform = fromMaybe (error $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)) . flip Map.lookup allValuesMap <$> anyTypeDecoder
+  FieldDecoder a
+genericEnumFieldDecoder nameTransform = fromMaybe (error $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)) . flip Map.lookup allValuesMap <$> anyTypeDecoder
   where
     -- TODO: Vector of pointers to ByteStrings for a bit more memory locality? Does it make a perf difference?
     allValuesMap = Map.mapKeys (LBS.toStrict . LT.encodeUtf8 . nameTransform) $ fmap to genEnumDecoder

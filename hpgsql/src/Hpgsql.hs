@@ -117,7 +117,7 @@ module Hpgsql
     PostgresError (..),
     IrrecoverableHpgsqlError (..),
     ErrorDetail (..),
-    RowParser (..),
+    RowDecoder (..),
     TransactionStatus (..),
     Only (..),
     FromPgRow (..),
@@ -125,7 +125,7 @@ module Hpgsql
   )
 where
 
-import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), RowParser (..))
+import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), RowDecoder (..))
 import Hpgsql.Internal
 import Hpgsql.InternalTypes (ConnString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), TransactionStatus (..))
 import Hpgsql.Query (Query)

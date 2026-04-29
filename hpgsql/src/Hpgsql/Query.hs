@@ -46,12 +46,12 @@ escapeIdentifier v = Query {queryString = [FragmentOfStaticSql "\"", FragmentOfS
 -- > [sql| INSERT INTO emp(id,name) ^{vALUES rows} ON CONFLICT DO NOTHING |]
 vALUES :: forall a. (ToPgRow a) => [a] -> Query
 vALUES [] =
-  let rowOids = toRowEncoder.toTypeOids (Proxy @a)
+  let rowOids = rowEncoder.toTypeOids (Proxy @a)
       nullParams :: [EncodingContext -> (Maybe Oid, BinaryField)]
       nullParams = map (\f -> \encCtx -> (f encCtx, SqlNull)) rowOids
    in [sql|(SELECT * FROM (VALUES ^{commaSeparatedRowTuples [nullParams]}) _subq LIMIT 0)|]
 vALUES rows =
-  let allParams = map toRowEncoder.toPgParams rows
+  let allParams = map rowEncoder.toPgParams rows
    in "VALUES " <> commaSeparatedRowTuples allParams
 
 commaSeparatedRowTuples :: [[EncodingContext -> (Maybe Oid, BinaryField)]] -> Query

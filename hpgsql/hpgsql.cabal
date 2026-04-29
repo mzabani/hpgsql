@@ -30,7 +30,7 @@ library
       Hpgsql.Connection
       Hpgsql.Copy
       Hpgsql.Encoding
-      Hpgsql.Encoding.RowParserMonadic
+      Hpgsql.Encoding.RowDecoderMonadic
       Hpgsql.InternalTypes
       Hpgsql.Notification
       Hpgsql.Parsing

@@ -33,7 +33,7 @@ import Database.PostgreSQL.Simple.Internal as Base hiding (result, row)
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Hpgsql (Query, execute_, queryMWith)
-import Hpgsql.Encoding.RowParserMonadic (RowParserMonadic)
+import Hpgsql.Encoding.RowDecoderMonadic (RowDecoderMonadic)
 import Hpgsql.Query (escapeIdentifier, sql)
 
 -- | Cursor within a transaction.
@@ -59,7 +59,7 @@ closeCursor (Cursor name conn) =
 -- supplied fold-like function on each row as it is received. In case
 -- the cursor is exhausted, a 'Left' value is returned, otherwise a
 -- 'Right' value is returned.
-foldForwardWithParser :: Cursor -> RowParserMonadic r -> Int -> (a -> r -> IO a) -> a -> IO (Either a a)
+foldForwardWithParser :: Cursor -> RowDecoderMonadic r -> Int -> (a -> r -> IO a) -> a -> IO (Either a a)
 foldForwardWithParser (Cursor name conn) parser chunkSize f a0 = mapHpgsqlErrors $ do
   let q =
         [sql|FETCH FORWARD ^{fromString (show chunkSize)} FROM ^{escapeIdentifier (fromQuery name)}|]

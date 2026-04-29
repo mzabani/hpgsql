@@ -100,7 +100,7 @@ genString :: Gen String
 genString = Gen.string (Range.linearFrom 0 (-10) 10) genChar
 
 toComparableParams :: (ToPgRow a) => a -> [(Maybe Oid, BinaryField)]
-toComparableParams = map ($ EncodingContext builtinPgTypesMap) . toRowEncoder.toPgParams
+toComparableParams = map ($ EncodingContext builtinPgTypesMap) . rowEncoder.toPgParams
 
 -- | Queries built with mkQuery, including reused $N placeholders.
 genMkQuery :: Gen (Query, [(Maybe Oid, BinaryField)])

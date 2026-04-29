@@ -103,23 +103,23 @@ sendQueryAfterThreadKilled useTimeout conn = do
   -- Give enough time to be certain the query was sent to postgres
   -- See Note [`timeout` uses the same ThreadId] for why we need to test both
   -- `timeout` and `withAsync`
-  let firstQuery = querySWith (rowParser @(Only ())) conn [sql|SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x)|]
+  let firstQuery = querySWith (rowDecoder @(Only ())) conn [sql|SELECT x, pg_sleep(x / 1000.0) FROM generate_series(1,1000) q(x)|]
   didNotFinish <- emulatedTimeout 300_000 $ firstQuery >>= S.effects
   didNotFinish `shouldBe` Nothing
-  didNotFinish2 <- emulatedTimeout 300_000 $ queryWith (rowParser @(Only ())) conn [sql|SELECT pg_sleep(999)|]
+  didNotFinish2 <- emulatedTimeout 300_000 $ queryWith (rowDecoder @(Only ())) conn [sql|SELECT pg_sleep(999)|]
   didNotFinish2 `shouldBe` Nothing
   didNotFinish3 <- emulatedTimeout 300_000 $ runPipeline conn (traverse pipelineCmd [[sql|SELECT pg_sleep(5)|], [sql|SELECT 37|]]) >>= sequenceA
   case didNotFinish3 of
     Just _ -> expectationFailure "didNotFinish3 was supposed to have been killed before finishing"
     Nothing -> pure ()
   didNotFinish4 <- emulatedTimeout 300_000 $ do
-    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineWith (rowParser @(Only ())) [sql|SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout|] <*> pipelineCmd [sql|SELECT pg_sleep(5)|]
+    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineWith (rowDecoder @(Only ())) [sql|SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout|] <*> pipelineCmd [sql|SELECT pg_sleep(5)|]
     void firstCmd
     secondCmd
   case didNotFinish4 of
     Just _ -> expectationFailure "didNotFinish4 was supposed to have been killed before finishing"
     Nothing -> pure ()
-  queryWith (rowParser @(Only Int)) conn [sql|with nums(v) as (values (1), (2), (3)) SELECT v FROM nums|]
+  queryWith (rowDecoder @(Only Int)) conn [sql|with nums(v) as (values (1), (2), (3)) SELECT v FROM nums|]
     `shouldReturn` [Only 1, Only 2, Only 3]
   where
     emulatedTimeout :: Int -> IO a -> IO (Maybe a)
@@ -138,7 +138,7 @@ sendQueryAfterCopyKilled useTimeout conn = do
       putCopyData conn "6,The Grinch\n"
       threadDelay 10_000_000
   didNotFinish `shouldBe` Nothing
-  queryWith (rowParser @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
+  queryWith (rowDecoder @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
   execute_ conn [sql|DROP TABLE employee|]
 
 sendQueryAfterBinaryCopyKilled :: Bool -> HPgConnection -> IO ()
@@ -159,7 +159,7 @@ sendQueryAfterBinaryCopyKilled useTimeout conn = do
         [sql|COPY employee FROM STDIN WITH (FORMAT BINARY);|]
         slowRows
   didNotFinish `shouldBe` Nothing
-  queryWith (rowParser @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
+  queryWith (rowDecoder @(Int, Text)) conn [sql|SELECT * FROM employee|] `shouldReturn` []
   execute_ conn [sql|DROP TABLE employee|]
 
 assumptionsAboutThreadIdBehaviour :: HPgConnection -> IO ()
@@ -194,16 +194,16 @@ sendQueriesConcurrently conn = forConcurrently_ [1 .. 10] $ const $ do
   (res1, res2, res3) <-
     runConcurrently $
       (,,)
-        <$> Concurrently (queryWith (rowParser @(Int, Int, ())) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10, pg_sleep(0.1) FROM nums")
-        <*> Concurrently (queryWith (rowParser @(Int, Int, ())) conn "with nums(v) as (values (1), (2), (3)) SELECT v, 11, pg_sleep(0.1) FROM nums")
-        <*> Concurrently (queryWith (rowParser @(Int, Int, ())) conn "with nums(v) as (values (4), (5), (6)) SELECT v, 12, pg_sleep(0.1) FROM nums")
+        <$> Concurrently (queryWith (rowDecoder @(Int, Int, ())) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10, pg_sleep(0.1) FROM nums")
+        <*> Concurrently (queryWith (rowDecoder @(Int, Int, ())) conn "with nums(v) as (values (1), (2), (3)) SELECT v, 11, pg_sleep(0.1) FROM nums")
+        <*> Concurrently (queryWith (rowDecoder @(Int, Int, ())) conn "with nums(v) as (values (4), (5), (6)) SELECT v, 12, pg_sleep(0.1) FROM nums")
   res1 `shouldBe` [(37, 10, ()), (49, 10, ()), (-13, 10, ())]
   res2 `shouldBe` [(1, 11, ()), (2, 11, ()), (3, 11, ())]
   res3 `shouldBe` [(4, 12, ()), (5, 12, ()), (6, 12, ())]
 
 cancelStreamingQueryThenTryToConsumeResults :: HPgConnection -> IO ()
 cancelStreamingQueryThenTryToConsumeResults conn = do
-  res <- querySWith (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,100000000)"
+  res <- querySWith (rowDecoder @(Only Int)) conn "SELECT * FROM generate_series(1,100000000)"
   firstTwoElems <- S.toList_ $ S.take 2 res
   thirdAndFourthElems :> restOfStream <- S.toList $ S.splitAt 2 res
   fifthAndSixthElems <- S.toList_ $ S.take 2 restOfStream
@@ -218,7 +218,7 @@ cancelStreamingQueryThenTryToConsumeResults conn = do
 
 threadThatSendsPipelinMustBeThreadThatConsumesResults :: HPgConnection -> IO ()
 threadThatSendsPipelinMustBeThreadThatConsumesResults conn = do
-  res <- querySWith (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10)"
+  res <- querySWith (rowDecoder @(Only Int)) conn "SELECT * FROM generate_series(1,10)"
   withAsync (S.effects res) $ \otherThreadResults ->
     wait otherThreadResults `shouldThrow` irrecoverableErrorWithMsg "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
 
@@ -308,7 +308,7 @@ interruptingCopyInsideTransactionDoesNotPreserveSemantics conn = do
 queryThatErrorsDueToBadFromPgFieldImplementation1 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = do
   tid <- myThreadId
-  queryWith (rowParser @(Only Bool)) conn "SELECT CASE WHEN x >= 300 THEN NULL::boolean ELSE TRUE END FROM generate_series(1,100000) q(x)"
+  queryWith (rowDecoder @(Only Bool)) conn "SELECT CASE WHEN x >= 300 THEN NULL::boolean ELSE TRUE END FROM generate_series(1,100000) q(x)"
     `shouldThrow` irrecoverableErrorWithMsg "Failed parsing a row"
 
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
@@ -316,12 +316,12 @@ queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = d
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
   when cancelQueryExplicitly $ cancelAnyRunningStatement conn False
   execute conn "select true" `shouldReturn` 1
-  queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
+  queryWith rowDecoder conn "select 37" `shouldReturn` [Only (37 :: Int)]
 
 queryThatErrorsDueToBadFromPgFieldImplementation2 :: Bool -> HPgConnection -> IO ()
 queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = do
   -- A streaming variant that only throws in later elements of the stream, since that can render internal and naive exception-catching moot
-  res <- querySWith (rowParser @(Only Bool)) conn "SELECT CASE WHEN x >= 300 THEN NULL::boolean ELSE TRUE END FROM generate_series(1,10000000) q(x)"
+  res <- querySWith (rowDecoder @(Only Bool)) conn "SELECT CASE WHEN x >= 300 THEN NULL::boolean ELSE TRUE END FROM generate_series(1,10000000) q(x)"
   S.effects res `shouldThrow` irrecoverableErrorWithMsg "Failed parsing a row"
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,
@@ -332,7 +332,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = d
   execute conn "select true" `shouldReturn` 1
   -- modifyMVar_ _globalDebugLock $ const (pure False)
   -- putStrLn "BBBBBBBBBBBB"
-  queryWith rowParser conn "select 37" `shouldReturn` [Only (37 :: Int)]
+  queryWith rowDecoder conn "select 37" `shouldReturn` [Only (37 :: Int)]
 
 -- Note [`timeout` uses the same ThreadId]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

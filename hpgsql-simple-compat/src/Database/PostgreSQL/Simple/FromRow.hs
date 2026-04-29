@@ -35,11 +35,11 @@ where
 
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import GHC.Generics (Generic (..), K1 (..), M1 (..), (:*:) (..))
-import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), singleColRowParser, (:.) (..))
-import Hpgsql.Encoding.RowParserMonadic (RowParserMonadic, toMonadicRowParser)
+import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), Only (..), singleColRowDecoder, (:.) (..))
+import Hpgsql.Encoding.RowDecoderMonadic (RowDecoderMonadic, toMonadicRowDecoder)
 import Prelude hiding (null)
 
-type RowParser = RowParserMonadic
+type RowParser = RowDecoderMonadic
 
 class FromRow a where
   fromRow :: RowParser a
@@ -47,46 +47,46 @@ class FromRow a where
   fromRow = genericFromPgRow
 
 instance (FromField a) => FromRow (Only a) where
-  fromRow = Only <$> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = Only <$> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b) => FromRow (a, b) where
-  fromRow = (,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c) => FromRow (a, b, c) where
-  fromRow = (,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d) => FromRow (a, b, c, d) where
-  fromRow = (,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e) => FromRow (a, b, c, d, e) where
-  fromRow = (,,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f) => FromRow (a, b, c, d, e, f) where
-  fromRow = (,,,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g) => FromRow (a, b, c, d, e, f, g) where
-  fromRow = (,,,,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h) => FromRow (a, b, c, d, e, f, g, h) where
-  fromRow = (,,,,,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i) => FromRow (a, b, c, d, e, f, g, h, i) where
-  fromRow = (,,,,,,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i, FromField j) => FromRow (a, b, c, d, e, f, g, h, i, j) where
-  fromRow = (,,,,,,,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromField a, FromField b, FromField c, FromField d, FromField e, FromField f, FromField g, FromField h, FromField i, FromField j, FromField k) => FromRow (a, b, c, d, e, f, g, h, i, j, k) where
-  fromRow = (,,,,,,,,,,) <$> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField) <*> toMonadicRowParser (singleColRowParser fromField)
+  fromRow = (,,,,,,,,,,) <$> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField) <*> toMonadicRowDecoder (singleColRowDecoder fromField)
 
 instance (FromRow a, FromRow b) => FromRow (a :. b) where
   fromRow = (:.) <$> fromRow <*> fromRow
 
-field :: (FromPgField a) => RowParserMonadic a
-field = toMonadicRowParser $ singleColRowParser fieldParser
+field :: (FromPgField a) => RowDecoderMonadic a
+field = toMonadicRowDecoder $ singleColRowDecoder fieldDecoder
 
 class ProductTypeDecoder f where
-  genRowDecoder :: RowParserMonadic (f a)
+  genRowDecoder :: RowDecoderMonadic (f a)
 
 instance (ProductTypeDecoder a, ProductTypeDecoder b) => ProductTypeDecoder (a :*: b) where
   genRowDecoder = (:*:) <$> genRowDecoder <*> genRowDecoder
@@ -95,7 +95,7 @@ instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
   genRowDecoder = M1 <$> genRowDecoder
 
 instance (FromField a) => ProductTypeDecoder (K1 r a) where
-  genRowDecoder = fmap K1 $ toMonadicRowParser $ singleColRowParser $ fromField @a
+  genRowDecoder = fmap K1 $ toMonadicRowDecoder $ singleColRowDecoder $ fromField @a
 
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowParser a
 genericFromPgRow = to <$> genRowDecoder @(Rep a)

@@ -84,7 +84,7 @@
 module Database.PostgreSQL.Simple.FromField
   ( FromField (..),
     FromPgField (..),
-    FieldParser (..),
+    FieldParser,
     Conversion (),
     runConversion,
     conversionMap,
@@ -105,10 +105,12 @@ module Database.PostgreSQL.Simple.FromField
 where
 
 import Control.Exception (Exception (fromException, toException))
+import Control.Monad (replicateM)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LBS
+import Data.CaseInsensitive (CI)
 import Data.Int (Int16, Int32, Int64)
 import Data.Scientific (Scientific)
 import Data.Text (Text)
@@ -117,7 +119,6 @@ import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (UTCTime)
 import Data.Time.LocalTime.Compat (CalendarDiffTime, LocalTime, ZonedTime)
 import Data.Typeable (Typeable, typeOf)
-import Data.CaseInsensitive (CI)
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
@@ -127,8 +128,7 @@ import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.TypeInfo as TI
 import Database.PostgreSQL.Simple.Types (Binary (..))
-import Control.Monad (replicateM)
-import Hpgsql.Encoding (FieldParser (..), FromPgField (..), arrayField, nullableField)
+import Hpgsql.Encoding (FieldDecoder (..), FromPgField (..), arrayField, nullableField)
 import qualified Hpgsql.Encoding as Hpgsql
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid)
@@ -174,10 +174,11 @@ instance Exception ResultError where
 left :: (Exception a) => a -> Conversion b
 left = conversionError
 
+type FieldParser a = FieldDecoder a
 class FromField a where
   fromField :: FieldParser a
   default fromField :: (Hpgsql.FromPgField a) => FieldParser a
-  fromField = Hpgsql.fieldParser
+  fromField = Hpgsql.fieldDecoder
 
 instance FromField ()
 
@@ -269,7 +270,7 @@ instance (Aeson.FromJSON a) => FromField (Aeson a)
 -- -- of pragmatism: users wanting to migrate to hpgsql will likely find this easier
 -- -- than alternatives.
 -- instance {-# OVERLAPPABLE #-} (FromField a) => FromPgField a where
---   fieldParser =
+--   fieldDecoder =
 --     Hpgsql.FieldParser
 --       { Hpgsql.fieldValueParser = \colInfo mbs ->
 --           let field = Field {result = error "Field.result not available in hpgsql-simple-compat", column = error "Field.column not available in hpgsql-simple-compat", typeOid = fromHpgsqlOid $ Hpgsql.typeOid colInfo}

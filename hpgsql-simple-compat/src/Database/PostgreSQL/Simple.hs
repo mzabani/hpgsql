@@ -141,7 +141,7 @@ import qualified Database.PostgreSQL.LibPQ as PQ
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.Cursor (closeCursor, declareCursor, foldForwardWithParser)
 import Database.PostgreSQL.Simple.FromField (ResultError (..))
-import Database.PostgreSQL.Simple.FromRow (FromRow (..))
+import Database.PostgreSQL.Simple.FromRow (FromRow (..), RowParser)
 import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery, toHpgsqlRowParams)
 import Database.PostgreSQL.Simple.Internal as Base
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
@@ -154,7 +154,6 @@ import Database.PostgreSQL.Simple.Types
     (:.) (..),
   )
 import qualified Hpgsql
-import Hpgsql.Encoding.RowParserMonadic (RowParserMonadic)
 import qualified Hpgsql.Query as Hpgsql
 
 -- | Format a query string with a variable number of rows.
@@ -356,7 +355,7 @@ returning :: (ToRow q, FromRow r) => Connection -> Query -> [q] -> IO [r]
 returning = returningWith fromRow
 
 -- | A version of 'returning' taking parser as argument
-returningWith :: (ToRow q) => RowParserMonadic r -> Connection -> Query -> [q] -> IO [r]
+returningWith :: (ToRow q) => RowParser r -> Connection -> Query -> [q] -> IO [r]
 returningWith _ _ _ [] = return []
 returningWith _parser _conn _q _qs = error "TODO Hpgsql"
 
@@ -386,13 +385,13 @@ query_ :: (FromRow r) => Connection -> Query -> IO [r]
 query_ conn q = query conn q ()
 
 -- | A version of 'query' taking parser as argument
-queryWith :: (ToRow q) => RowParserMonadic r -> Connection -> Query -> q -> IO [r]
+queryWith :: (ToRow q) => RowParser r -> Connection -> Query -> q -> IO [r]
 queryWith parser conn template qs =
   mapHpgsqlErrors $
     Hpgsql.queryMWith parser (hpgConn conn) (toHpgsqlQuery template qs)
 
 -- | A version of 'query_' taking parser as argument
-queryWith_ :: RowParserMonadic r -> Connection -> Query -> IO [r]
+queryWith_ :: RowParser r -> Connection -> Query -> IO [r]
 queryWith_ parser conn q = queryWith parser conn q ()
 
 -- | Perform a @SELECT@ or other SQL query that is expected to return
@@ -435,7 +434,7 @@ fold = foldWithOptions defaultFoldOptions
 -- | A version of 'fold' taking a parser as an argument
 foldWith ::
   (ToRow params) =>
-  RowParserMonadic row ->
+  RowParser row ->
   Connection ->
   Query ->
   params ->
@@ -486,7 +485,7 @@ foldWithOptions opts = foldWithOptionsAndParser opts fromRow
 foldWithOptionsAndParser ::
   (ToRow params) =>
   FoldOptions ->
-  RowParserMonadic row ->
+  RowParser row ->
   Connection ->
   Query ->
   params ->
@@ -511,7 +510,7 @@ fold_ = foldWithOptions_ defaultFoldOptions
 
 -- | A version of 'fold_' taking a parser as an argument
 foldWith_ ::
-  RowParserMonadic r ->
+  RowParser r ->
   Connection ->
   Query ->
   a ->
@@ -535,7 +534,7 @@ foldWithOptions_ opts conn query' a f = doFold opts fromRow conn query' () a f
 -- | A version of 'foldWithOptions_' taking a parser as an argument
 foldWithOptionsAndParser_ ::
   FoldOptions ->
-  RowParserMonadic r ->
+  RowParser r ->
   Connection ->
   -- | Query.
   Query ->
@@ -549,7 +548,7 @@ foldWithOptionsAndParser_ opts parser conn query' a f = doFold opts parser conn 
 doFold ::
   (ToRow q) =>
   FoldOptions ->
-  RowParserMonadic row ->
+  RowParser row ->
   Connection ->
   Query ->
   q ->
@@ -612,7 +611,7 @@ forEach = forEachWith fromRow
 -- | A version of 'forEach' taking a parser as an argument
 forEachWith ::
   (ToRow q) =>
-  RowParserMonadic r ->
+  RowParser r ->
   Connection ->
   Query ->
   q ->
@@ -634,7 +633,7 @@ forEach_ = forEachWith_ fromRow
 {-# INLINE forEach_ #-}
 
 forEachWith_ ::
-  RowParserMonadic r ->
+  RowParser r ->
   Connection ->
   Query ->
   (r -> IO ()) ->

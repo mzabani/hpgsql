@@ -22,7 +22,7 @@ f val = do
         <$> pipelineCmd_ [sql|UPDATE tbl SET val=#{val}|]
         <*> pipeline1 [sql|SELECT SUM(val) FROM tbl|]
         <*> pipelineSWith
-          (rowParser @(Vector Int, Vector Text))
+          (rowDecoder @(Vector Int, Vector Text))
           -- We use a prepared statement for the query below
           [sqlPrep|SELECT x, y FROM tbl|]
   updateTbl

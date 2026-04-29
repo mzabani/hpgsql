@@ -9,7 +9,7 @@ import DbUtils
     withRollback,
   )
 import Hpgsql
-import Hpgsql.Encoding.RowParserMonadic (toMonadicRowParser)
+import Hpgsql.Encoding.RowDecoderMonadic (toMonadicRowDecoder)
 import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Transaction (transactionStatus)
 import Streaming (Of (..))
@@ -78,13 +78,13 @@ queryingAndReturningAFewRows :: HPgConnection -> IO ()
 queryingAndReturningAFewRows conn =
   forM_ [1 .. 2] $
     const $ do
-      queryWith (rowParser @(Int, Int)) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
-      -- Test the Aplicative and Monad instances of RowParserMonadic
-      queryMWith ((,) <$> toMonadicRowParser (rowParser @(Only Int)) <*> toMonadicRowParser (rowParser @(Only Int))) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
+      queryWith (rowDecoder @(Int, Int)) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
+      -- Test the Aplicative and Monad instances of RowDecoderMonadic
+      queryMWith ((,) <$> toMonadicRowDecoder (rowDecoder @(Only Int)) <*> toMonadicRowDecoder (rowDecoder @(Only Int))) conn "with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(Only 37, Only 10), (Only 49, Only 10), (Only (-13), Only 10)]
       queryMWith
         ( do
-            (f1, f2) <- toMonadicRowParser (rowParser @(Int, Int))
-            Only f3 <- toMonadicRowParser (rowParser @(Only Int))
+            (f1, f2) <- toMonadicRowDecoder (rowDecoder @(Int, Int))
+            Only f3 <- toMonadicRowDecoder (rowDecoder @(Only Int))
             pure (f1, f2, f3)
         )
         conn
@@ -93,17 +93,17 @@ queryingAndReturningAFewRows conn =
 
 queryingAndReturningAFewRowsMoreThanOneStatement :: HPgConnection -> IO ()
 queryingAndReturningAFewRowsMoreThanOneStatement conn = do
-  queryWith (rowParser @(Int, Int)) conn "SELECT 1; SELECT TRUE; with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
+  queryWith (rowDecoder @(Int, Int)) conn "SELECT 1; SELECT TRUE; with nums(v) as (values (37), (49), (-13)) SELECT v, 10 FROM nums" `shouldReturn` [(37, 10), (49, 10), (-13, 10)]
 
 queryingAndReturningZeroRows :: HPgConnection -> IO ()
 queryingAndReturningZeroRows conn =
   forM_ [1 .. 2] $
     const $
-      queryWith (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,3) WHERE false" `shouldReturn` []
+      queryWith (rowDecoder @(Only Int)) conn "SELECT * FROM generate_series(1,3) WHERE false" `shouldReturn` []
 
 queryingStreamingSum :: HPgConnection -> IO ()
 queryingStreamingSum conn = do
-  res <- querySWith (rowParser @(Only Int)) conn "SELECT * FROM generate_series(1,10000)"
+  res <- querySWith (rowDecoder @(Only Int)) conn "SELECT * FROM generate_series(1,10000)"
   S.sum_ (S.map fromOnly res) `shouldReturn` ((1 + 10000) * 5000)
 
 executingCountReturningStatements :: HPgConnection -> IO ()
@@ -118,12 +118,12 @@ executingMixedRowsAndCountReturningStatements conn = withRollback conn $ do
 
 queryMWithismatchInNumberOfColumns :: HPgConnection -> IO ()
 queryMWithismatchInNumberOfColumns conn = do
-  queryWith (rowParser @(Bool, Bool)) conn "select 1, 2, 3"
+  queryWith (rowDecoder @(Bool, Bool)) conn "select 1, 2, 3"
     `shouldThrow` pgErrorMustContain "select 1, 2, 3" [(ErrorCode, "08P01"), (ErrorHumanReadableMsg, "bind message has 2 result formats but query has 3 columns")]
 
 queryMWithismatchInTypesOfColumns :: HPgConnection -> IO ()
 queryMWithismatchInTypesOfColumns conn = do
-  queryWith (rowParser @(Bool, Bool)) conn "select 1, 2"
+  queryWith (rowDecoder @(Bool, Bool)) conn "select 1, 2"
     `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
 
 queryThatErrorsFollowedBySuccessfulQuery :: HPgConnection -> IO ()
@@ -131,16 +131,16 @@ queryThatErrorsFollowedBySuccessfulQuery conn = do
   -- TODO: Test empty query string
   -- TODO: Test multiple statements inside the same query string
   -- TODO: Test error statement + empty statement + normal statement all inside the same query string
-  queryWith (rowParser @(Only Bool)) conn "select 1/(x - 2) > 0 from generate_series(1,2) subq(x)"
+  queryWith (rowDecoder @(Only Bool)) conn "select 1/(x - 2) > 0 from generate_series(1,2) subq(x)"
     `shouldThrow` pgErrorMustContain "select 1/(x - 2) > 0 from generate_series(1,2) subq(x)" [(ErrorCode, "22012"), (ErrorHumanReadableMsg, "division by zero")]
-  queryWith (rowParser @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
+  queryWith (rowDecoder @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
     `shouldReturn` [Only False, Only False]
 
 queryThatErrorsBeforeReturningAnyRowsFollowedBySuccessfulQuery :: HPgConnection -> IO ()
 queryThatErrorsBeforeReturningAnyRowsFollowedBySuccessfulQuery conn = do
-  queryWith (rowParser @(Only Bool)) conn "select 1/0"
+  queryWith (rowDecoder @(Only Bool)) conn "select 1/0"
     `shouldThrow` pgErrorMustContain "select 1/0" [(ErrorCode, "22012"), (ErrorHumanReadableMsg, "division by zero")]
-  queryWith (rowParser @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
+  queryWith (rowDecoder @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
     `shouldReturn` [Only False, Only False]
 
 discardingReturnCountsAndValues :: HPgConnection -> IO ()
@@ -152,19 +152,19 @@ discardingReturnCountsAndValues conn = withRollback conn $ do
 wellFormedPreparedStatements :: HPgConnection -> IO ()
 wellFormedPreparedStatements conn = withRollback conn $ do
   executeMany_ conn ["CREATE TABLE xx(num int)", "CREATE TABLE yy()", "INSERT INTO xx (num) SELECT * FROM generate_series(1,10)"]
-  queryWith (rowParser @(Only Int)) conn "SELECT COUNT(*) FROM xx WHERE num IN (8, 9)" `shouldReturn` [Only 2]
-  queryWith (rowParser @(Only Int)) conn (mkQuery "SELECT COUNT(*) FROM xx WHERE num BETWEEN $1 AND $2" (1 :: Int, 5 :: Int)) `shouldReturn` [Only 5]
-  queryWith (rowParser @(Only Int)) conn "SELECT * FROM xx WHERE num < 0" `shouldReturn` []
+  queryWith (rowDecoder @(Only Int)) conn "SELECT COUNT(*) FROM xx WHERE num IN (8, 9)" `shouldReturn` [Only 2]
+  queryWith (rowDecoder @(Only Int)) conn (mkQuery "SELECT COUNT(*) FROM xx WHERE num BETWEEN $1 AND $2" (1 :: Int, 5 :: Int)) `shouldReturn` [Only 5]
+  queryWith (rowDecoder @(Only Int)) conn "SELECT * FROM xx WHERE num < 0" `shouldReturn` []
   execute_ conn "DROP TABLE xx;"
 
 preparedStatementWrongTypes :: HPgConnection -> IO ()
 preparedStatementWrongTypes conn =
-  queryWith (rowParser @(Int, Text)) conn "SELECT 1, 2" `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+  queryWith (rowDecoder @(Int, Text)) conn "SELECT 1, 2" `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
 
 preparedStatementWrongTypesThrowsEvenWithZeroReturnedRows :: HPgConnection -> IO ()
 preparedStatementWrongTypesThrowsEvenWithZeroReturnedRows conn =
   -- TODO: Test prepared statement with a query that fails the parser
-  queryWith (rowParser @(Int, Text)) conn "SELECT 1, 2 WHERE FALSE -- No rows still throws" `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+  queryWith (rowDecoder @(Int, Text)) conn "SELECT 1, 2 WHERE FALSE -- No rows still throws" `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
 
 checkCommandCounts :: HPgConnection -> IO ()
 checkCommandCounts conn = withRollback conn $ do
@@ -195,7 +195,7 @@ queryTransactionStatusInAllTransactionStates conn = do
 raiseNoticeThenRunQuery :: HPgConnection -> IO ()
 raiseNoticeThenRunQuery conn = do
   execute_ conn "DO $$ BEGIN\nRAISE NOTICE 'test1'; RAISE NOTICE 'test2';\nEND;\n$$;"
-  queryWith (rowParser @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
+  queryWith (rowDecoder @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
     `shouldReturn` [Only False, Only False]
 
 changeParameterStatus :: HPgConnection -> IO ()

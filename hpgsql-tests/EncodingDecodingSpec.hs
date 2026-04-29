@@ -39,7 +39,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldEncoder (..), FieldParser (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, mkUntypedFieldEncoder, singleColRowParser)
+import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldEncoder (..), FieldDecoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, mkUntypedFieldEncoder, singleColRowDecoder)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -156,14 +156,14 @@ valuesRoundTrip conn = do
   --       close to `minBound`, 0, and `maxBound`, with e.g. microsecond precision/fractional values
   -- TODO: Test +-Infinity and NaN for floats and doubles
   let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Aeson.Null)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
 
 byteaValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 byteaValuesRoundTrip conn = hedgehog $ do
   let genBs = Gen.bytes (Gen.linear 0 50)
   (b1, b2, b3, b4, b5) <- Gen.forAll $ (,,,,) <$> genBs <*> genBs <*> genBs <*> genBs <*> genBs
   let row = (b1, LBS.fromStrict b1, b2, LBS.fromStrict b2, b3, LBS.fromStrict b3, b4, LBS.fromStrict b4, b5, LBS.fromStrict b5)
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 dateAndTimestampTzRoundTrip :: HPgConnection -> PropertyT IO ()
@@ -187,7 +187,7 @@ dateAndTimestampTzRoundTrip conn = hedgehog $ do
   -- TODO: If we change the server's timezone, does this still round-trip?
   annotateShow someNominalDiffTime
   let (nomSecs, nomRemMicros) = someNominalDiffTimeMicros `quotRem` 1_000_000
-  res <- liftIO $ queryWith rowParser conn (mkQuery ("SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4, $5, $6, $7 - INTERVAL '" <> fromString (show nomSecs) <> " seconds " <> fromString (show nomRemMicros) <> " microseconds'") row)
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery ("SELECT $1, $2, '1900-01-01T00:00:13Z'::timestamptz, '1993-04-15T11:49:55.5Z'::timestamptz, $3, $4, $5, $6, $7 - INTERVAL '" <> fromString (show nomSecs) <> " seconds " <> fromString (show nomRemMicros) <> " microseconds'") row)
   res === [rowRes]
 
 numericValuesRoundTrip :: HPgConnection -> PropertyT IO ()
@@ -199,7 +199,7 @@ numericValuesRoundTrip conn = hedgehog $ do
   integerVal :: Integer <- Gen.forAll $ (*) <$> (fromIntegral @Int64 <$> Gen.enumBounded) <*> (fromIntegral @Int64 <$> Gen.enumBounded)
   let row = (1.521 :: Double, 1.521 :: Double, 1.521 :: Scientific, floatVal, floatVal2, doubleVal, doubleVal2, integerVal)
       rowRes = (1.521 :: Scientific, 1.5 :: Scientific, 1.521 :: Scientific, floatVal, floatVal2, doubleVal, doubleVal2, integerVal)
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1::numeric, $2::numeric(4,1), $3, $4, $5, $6, $7, $8" row)
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1::numeric, $2::numeric(4,1), $3, $4, $5, $6, $7, $8" row)
   res === [rowRes]
 
 numericValuesRoundTripEvenWhenTargetTypesAreLarger :: HPgConnection -> PropertyT IO ()
@@ -210,7 +210,7 @@ numericValuesRoundTripEvenWhenTargetTypesAreLarger conn = hedgehog $ do
   int8Val :: Int64 <- Gen.forAll Gen.enumBounded
   let row = (floatVal, int2Val, int2Val, int2Val, int2Val, int4Val, int4Val, int4Val, int8Val, int8Val)
       rowRes = (float2Double floatVal, fromIntegral int2Val :: Int32, fromIntegral int2Val :: Int64, fromIntegral int2Val :: Integer, fromIntegral int2Val :: Scientific, fromIntegral int4Val :: Int64, fromIntegral int4Val :: Integer, fromIntegral int4Val :: Scientific, fromIntegral int8Val :: Integer, fromIntegral int8Val :: Scientific)
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [rowRes]
 
 numericExtremeValuesRoundTrip :: HPgConnection -> IO ()
@@ -219,18 +219,18 @@ numericExtremeValuesRoundTrip conn = do
   let int16Row = (minBound :: Int16, maxBound :: Int16)
       int32Row = (minBound :: Int32, maxBound :: Int32)
       int64Row = (minBound :: Int64, maxBound :: Int64)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2" int16Row) `shouldReturn` [int16Row]
-  queryWith rowParser conn (mkQuery "SELECT $1, $2" int32Row) `shouldReturn` [int32Row]
-  queryWith rowParser conn (mkQuery "SELECT $1, $2" int64Row) `shouldReturn` [int64Row]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2" int16Row) `shouldReturn` [int16Row]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2" int32Row) `shouldReturn` [int32Row]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2" int64Row) `shouldReturn` [int64Row]
   -- NaN for Float and Double
-  [(f :: Float, d :: Double)] <- queryWith rowParser conn (mkQuery "SELECT $1, $2" (nanFloat, nanDouble))
+  [(f :: Float, d :: Double)] <- queryWith rowDecoder conn (mkQuery "SELECT $1, $2" (nanFloat, nanDouble))
   f `shouldSatisfy` isNaN
   d `shouldSatisfy` isNaN
   -- +-Infinity for Float and Double
   let infRow = (posInfFloat, negInfFloat, posInfDouble, negInfDouble)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4" infRow) `shouldReturn` [infRow]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4" infRow) `shouldReturn` [infRow]
   -- NaN and +-Infinity encoded as Float, decoded as Double
-  [(d1 :: Double, d2 :: Double, d3 :: Double)] <- queryWith rowParser conn (mkQuery "SELECT $1, $2, $3" (nanFloat, posInfFloat, negInfFloat))
+  [(d1 :: Double, d2 :: Double, d3 :: Double)] <- queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3" (nanFloat, posInfFloat, negInfFloat))
   d1 `shouldSatisfy` isNaN
   d2 `shouldBe` posInfDouble
   d3 `shouldBe` negInfDouble
@@ -246,11 +246,11 @@ rationalValuesRoundTrip :: HPgConnection -> IO ()
 rationalValuesRoundTrip conn = do
   -- Rationals with terminating decimal representations round-trip exactly
   let row = (1 % 2 :: Rational, 3 % 4 :: Rational, 7 % 8 :: Rational, 1 % 5 :: Rational, (-3) % 20 :: Rational, 0 % 1 :: Rational, 123456789 % 1000 :: Rational)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7" row) `shouldReturn` [row]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7" row) `shouldReturn` [row]
   -- Decoding from integer types
   let intRow = (42 :: Int32, (-7) :: Int16)
       ratRes = (42 % 1 :: Rational, (-7) % 1 :: Rational)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2" intRow) `shouldReturn` [ratRes]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2" intRow) `shouldReturn` [ratRes]
 
 jsonValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 jsonValuesRoundTrip conn = hedgehog $ do
@@ -258,7 +258,7 @@ jsonValuesRoundTrip conn = hedgehog $ do
   jsonVal2 :: Aeson.Value <- Gen.forAll genJsonValue
   jsonVal3 :: Aeson.Value <- Gen.forAll genJsonValue
   let row = (jsonVal1, jsonVal2, jsonVal3)
-  [(v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson)] <- liftIO $ queryWith rowParser conn [sql|SELECT #{jsonVal1}, #{jsonVal1}::jsonb, #{jsonVal2}::json, #{jsonVal3}::jsonb|]
+  [(v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson)] <- liftIO $ queryWith rowDecoder conn [sql|SELECT #{jsonVal1}, #{jsonVal1}::jsonb, #{jsonVal2}::json, #{jsonVal3}::jsonb|]
   v1 === jsonVal1
   v2 === jsonVal1
   Aeson.toJSON v3 === jsonVal2
@@ -267,17 +267,17 @@ jsonValuesRoundTrip conn = hedgehog $ do
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do
   let rowRes = (fromGregorian 1999 12 31, fromGregorian 2010 01 01, fromGregorian 2011 07 04, fromGregorian 1981 03 17, NegInfinity @UTCTime, PosInfinity @UTCTime, NegInfinity @Day, PosInfinity @Day)
-  queryWith rowParser conn (mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date, '-infinity'::timestamptz, 'infinity'::timestamptz, '-infinity'::date, 'infinity'::date" ()) `shouldReturn` [rowRes]
+  queryWith rowDecoder conn (mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date, '-infinity'::timestamptz, 'infinity'::timestamptz, '-infinity'::date, 'infinity'::date" ()) `shouldReturn` [rowRes]
 
 dateEncoding :: HPgConnection -> IO ()
 dateEncoding conn = do
   let row = (fromGregorian 1999 12 31, fromGregorian 2010 01 01, fromGregorian 2011 07 04, fromGregorian 1981 03 17)
-  queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4" row) `shouldReturn` [row]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4" row) `shouldReturn` [row]
 
 timestampDecoding :: HPgConnection -> IO ()
 timestampDecoding conn = do
   let rowRes = (UTCTime (fromGregorian 1999 12 31) 0, UTCTime (fromGregorian 2010 01 01) 0, UTCTime (fromGregorian 2011 07 04) (secondsToDiffTime 1), UTCTime (fromGregorian 1981 03 17) 43200, UTCTime (fromGregorian 1900 11 30) 43201)
-  queryWith rowParser conn (mkQuery "SELECT '1999-12-31'::timestamptz, '2010-01-01'::timestamptz, '2011-07-04T00:00:01Z'::timestamptz, '1981-03-17T12:00:00Z'::timestamptz, '1900-11-30T12:00:01Z'::timestamptz" ()) `shouldReturn` [rowRes]
+  queryWith rowDecoder conn (mkQuery "SELECT '1999-12-31'::timestamptz, '2010-01-01'::timestamptz, '2011-07-04T00:00:01Z'::timestamptz, '1981-03-17T12:00:00Z'::timestamptz, '1900-11-30T12:00:01Z'::timestamptz" ()) `shouldReturn` [rowRes]
 
 timestampEncoding :: HPgConnection -> IO ()
 timestampEncoding conn = do
@@ -287,8 +287,8 @@ timestampEncoding conn = do
 lessUsualTypes :: HPgConnection -> IO ()
 lessUsualTypes conn = do
   -- Just making sure this doesn't throw is likely enough
-  void $ queryWith (rowParser @(Oid, Int, String, Char)) conn "SELECT oid, typlen, typname, typcategory FROM pg_type"
-  void $ queryWith (rowParser @(Oid, Int16, String, Char)) conn "SELECT oid, typlen, typname, typcategory FROM pg_type"
+  void $ queryWith (rowDecoder @(Oid, Int, String, Char)) conn "SELECT oid, typlen, typname, typcategory FROM pg_type"
+  void $ queryWith (rowDecoder @(Oid, Int16, String, Char)) conn "SELECT oid, typlen, typname, typcategory FROM pg_type"
 
 byteaTextDecoding :: HPgConnection -> PropertyT IO ()
 byteaTextDecoding conn = hedgehog $ do
@@ -319,7 +319,7 @@ dateAndTimestampTextDecoding conn = hedgehog $ do
   res <-
     liftIO $
       queryWith
-        rowParser
+        rowDecoder
         conn
         ( fromString $
             "SELECT '"
@@ -359,7 +359,7 @@ numericTextDecoding conn = hedgehog $ do
   res <-
     liftIO $
       queryWith
-        rowParser
+        rowDecoder
         conn
         ( fromString $
             "SELECT '1.521'::numeric, '1.521'::numeric(4,1), '1.521'::numeric"
@@ -390,7 +390,7 @@ numericTextDecodingLargerTypes conn = hedgehog $ do
   res <-
     liftIO $
       queryWith
-        rowParser
+        rowDecoder
         conn
         ( fromString $
             "SELECT '"
@@ -429,18 +429,18 @@ numericTextDecodingLargerTypes conn = hedgehog $ do
 
 numericExtremeTextDecoding :: HPgConnection -> IO ()
 numericExtremeTextDecoding conn = do
-  queryWith rowParser conn (fromString $ "SELECT '" <> show (minBound :: Int16) <> "'::int2, '" <> show (maxBound :: Int16) <> "'::int2")
+  queryWith rowDecoder conn (fromString $ "SELECT '" <> show (minBound :: Int16) <> "'::int2, '" <> show (maxBound :: Int16) <> "'::int2")
     `shouldReturn` [(minBound :: Int16, maxBound :: Int16)]
-  queryWith rowParser conn (fromString $ "SELECT '" <> show (minBound :: Int32) <> "'::int4, '" <> show (maxBound :: Int32) <> "'::int4")
+  queryWith rowDecoder conn (fromString $ "SELECT '" <> show (minBound :: Int32) <> "'::int4, '" <> show (maxBound :: Int32) <> "'::int4")
     `shouldReturn` [(minBound :: Int32, maxBound :: Int32)]
-  queryWith rowParser conn (fromString $ "SELECT '" <> show (minBound :: Int64) <> "'::int8, '" <> show (maxBound :: Int64) <> "'::int8")
+  queryWith rowDecoder conn (fromString $ "SELECT '" <> show (minBound :: Int64) <> "'::int8, '" <> show (maxBound :: Int64) <> "'::int8")
     `shouldReturn` [(minBound :: Int64, maxBound :: Int64)]
-  [(f :: Float, d :: Double)] <- queryWith rowParser conn "SELECT 'NaN'::float4, 'NaN'::float8"
+  [(f :: Float, d :: Double)] <- queryWith rowDecoder conn "SELECT 'NaN'::float4, 'NaN'::float8"
   f `shouldSatisfy` isNaN
   d `shouldSatisfy` isNaN
-  queryWith rowParser conn "SELECT 'Infinity'::float4, '-Infinity'::float4, 'Infinity'::float8, '-Infinity'::float8"
+  queryWith rowDecoder conn "SELECT 'Infinity'::float4, '-Infinity'::float4, 'Infinity'::float8, '-Infinity'::float8"
     `shouldReturn` [((1 / 0) :: Float, ((-1) / 0) :: Float, (1 / 0) :: Double, ((-1) / 0) :: Double)]
-  [(d1 :: Double, d2 :: Double, d3 :: Double)] <- queryWith rowParser conn "SELECT 'NaN'::float4, 'Infinity'::float4, '-Infinity'::float4"
+  [(d1 :: Double, d2 :: Double, d3 :: Double)] <- queryWith rowDecoder conn "SELECT 'NaN'::float4, 'Infinity'::float4, '-Infinity'::float4"
   d1 `shouldSatisfy` isNaN
   d2 `shouldBe` (1 / 0 :: Double)
   d3 `shouldBe` ((-1) / 0 :: Double)
@@ -454,7 +454,7 @@ jsonTextDecoding conn = hedgehog $ do
   [(v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson)] <-
     liftIO $
       queryWith
-        rowParser
+        rowDecoder
         conn
         ( fromString $
             "SELECT '"
@@ -486,7 +486,7 @@ uuidRoundTrip conn = hedgehog $ do
         let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
         pure uuid
   row <- Gen.forAll $ (,,,,,,,,,) <$> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid <*> genUuid
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 uuidTextDecoding :: HPgConnection -> PropertyT IO ()
@@ -496,7 +496,7 @@ uuidTextDecoding conn = hedgehog $ do
   res <-
     liftIO $
       queryWith
-        rowParser
+        rowDecoder
         conn
         (fromString $ "SELECT '" <> UUID.toString uuid <> "'::uuid")
   res === [Only uuid]
@@ -519,7 +519,7 @@ ciTextRoundTrip conn = hedgehog $ do
         <*> genCIString
         <*> genCIString
         <*> genCIString
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 ciTextTextDecoding :: HPgConnection -> PropertyT IO ()
@@ -528,7 +528,7 @@ ciTextTextDecoding conn = hedgehog $ do
   res <-
     liftIO $
       queryWith
-        rowParser
+        rowDecoder
         conn
         (fromString $ "SELECT '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text")
   res === [(CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))]
@@ -544,7 +544,7 @@ localTimeRoundTrip conn = hedgehog $ do
             localTimeOfDay = timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
         pure $ LocalTime localDay localTimeOfDay
   row <- Gen.forAll $ (,,,,,,,,,) <$> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime
-  res <- liftIO $ queryWith rowParser conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
   res === [row]
 
 localTimeTextDecoding :: HPgConnection -> PropertyT IO ()
@@ -569,7 +569,7 @@ localTimeTextDecoding conn = hedgehog $ do
       -- nonetheless.
       execute conn "SET LOCAL timezone = 'UTC'"
       queryWith
-        rowParser
+        rowDecoder
         conn
         ( fromString $
             "SELECT '"
@@ -614,10 +614,10 @@ queryCompositeType conn = withRollback conn $ do
   -- TODO: Test that one can create a record type with FromPgField and ToPgField instances!
   execute conn "CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);"
   execute conn "CREATE TYPE mixed_bin_text AS (numfield INT, textfield TEXT);"
-  let intAndBoolParser = singleColRowParser $ compositeTypeParser DisallowNull $ rowParser @(Int, Bool)
-      intAndTextParser = singleColRowParser $ compositeTypeParser DisallowNull $ rowParser @(Int, Text)
-      intAndBoolParserNullableFields = singleColRowParser $ compositeTypeParser DisallowNull $ rowParser @(Maybe Int, Maybe Bool)
-      intAndBoolParserNullableValue = singleColRowParser $ compositeTypeParser AllowNull $ rowParser @(Int, Bool)
+  let intAndBoolParser = singleColRowDecoder $ compositeTypeParser DisallowNull $ rowDecoder @(Int, Bool)
+      intAndTextParser = singleColRowDecoder $ compositeTypeParser DisallowNull $ rowDecoder @(Int, Text)
+      intAndBoolParserNullableFields = singleColRowDecoder $ compositeTypeParser DisallowNull $ rowDecoder @(Maybe Int, Maybe Bool)
+      intAndBoolParserNullableValue = singleColRowDecoder $ compositeTypeParser AllowNull $ rowDecoder @(Int, Bool)
   queryWith intAndBoolParser conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` [(14, True)]
   query1 conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` (Only $ IntAndBool 14 True)
   queryWith ((,,) <$> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields) conn (mkQuery "SELECT ROW(NULL,$1)::int_and_bool, ROW($2,NULL)::int_and_bool, ROW(NULL, NULL)::int_and_bool" (True, 27 :: Int)) `shouldReturn` [((Nothing, Just True), (Just 27, Nothing), (Nothing, Nothing))]
@@ -629,7 +629,7 @@ data IntAndBool = IntAndBool Int Bool
   deriving stock (Eq, Show)
 
 instance FromPgField IntAndBool where
-  fieldParser = compositeTypeParser DisallowNull (rowParser @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
+  fieldDecoder = compositeTypeParser DisallowNull (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
 
 queryArrayTypes :: HPgConnection -> PropertyT IO ()
 queryArrayTypes conn = hedgehog $ do
@@ -637,12 +637,12 @@ queryArrayTypes conn = hedgehog $ do
   intArrDim1 <- fmap Vector.fromList $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
   nullIntArrDim1 <- fmap PGArray $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.maybe $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
   liftIO $ do
-    queryWith rowParser conn (mkQuery "SELECT $1, $1, $2" (intArrDim1, nullIntArrDim1)) `shouldReturn` [(intArrDim1, intArrDim1, nullIntArrDim1)]
-    queryWith (rowParser @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
-    queryWith (rowParser @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
-    queryWith (rowParser @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]
-    queryWith (rowParser @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
-    queryWith (rowParser @(Only (Vector Aeson.Value))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)) `shouldReturn` [Only $ Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]]
+    queryWith rowDecoder conn (mkQuery "SELECT $1, $1, $2" (intArrDim1, nullIntArrDim1)) `shouldReturn` [(intArrDim1, intArrDim1, nullIntArrDim1)]
+    queryWith (rowDecoder @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
+    queryWith (rowDecoder @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
+    queryWith (rowDecoder @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]
+    queryWith (rowDecoder @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
+    queryWith (rowDecoder @(Only (Vector Aeson.Value))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)) `shouldReturn` [Only $ Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]]
     let multiDimArray1 = Vector.fromList [Vector.fromList [1, 2, 3, 4], Vector.fromList [4, 5, 6, 7 :: Int]]
     query conn [sql|SELECT ARRAY[ARRAY[1,2,3,4],ARRAY[4,5,6, 7]]|] `shouldReturn` [Only multiDimArray1]
     let multiDimArray2 = Vector.fromList [Vector.fromList [1, 2, 3], Vector.fromList [4, 5, 6 :: Int], Vector.fromList [7, 8, 9 :: Int]]
@@ -652,7 +652,7 @@ data MyEnum = Val1 | Val2 | Val3
   deriving stock (Eq, Show)
 
 instance FromPgField MyEnum where
-  fieldParser =
+  fieldDecoder =
     let convert = \case
           "val1" -> Val1
           "val2" -> Val2
@@ -660,8 +660,8 @@ instance FromPgField MyEnum where
           _ -> error "Invalid value for MyEnum"
      in convert <$> anyTypeDecoder
 
-myEnumFieldParserWithTypeInfoCheck :: FieldParser MyEnum
-myEnumFieldParserWithTypeInfoCheck =
+myEnumFieldDecoderWithTypeInfoCheck :: FieldDecoder MyEnum
+myEnumFieldDecoderWithTypeInfoCheck =
   let convert = \case
         "val1" -> Val1
         "val2" -> Val2
@@ -683,19 +683,19 @@ instance ToPgField MyEnum where
 queryEnumTypes :: HPgConnection -> IO ()
 queryEnumTypes conn = withRollback conn $ do
   execute conn "CREATE TYPE myenum AS ENUM ('val1', 'val2', 'val3');"
-  queryWith (rowParser @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn "SELECT 'val1'::myenum, 'val2'::myenum, 'val3'::myenum, NULL::myenum" `shouldReturn` [(Val1, Val2, Val3, Nothing)]
-  queryWith (rowParser @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn (mkQuery "SELECT $1, $2, $3, $4" (Val1, Val2, Val3, Nothing :: Maybe MyEnum)) `shouldReturn` [(Val1, Val2, Val3, Nothing)]
+  queryWith (rowDecoder @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn "SELECT 'val1'::myenum, 'val2'::myenum, 'val3'::myenum, NULL::myenum" `shouldReturn` [(Val1, Val2, Val3, Nothing)]
+  queryWith (rowDecoder @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn (mkQuery "SELECT $1, $2, $3, $4" (Val1, Val2, Val3, Nothing :: Maybe MyEnum)) `shouldReturn` [(Val1, Val2, Val3, Nothing)]
   -- The statement below will fail because the new myenum type is not in the typeCache
   -- yet. Then we add it and it will pass
-  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
+  queryWith (singleColRowDecoder myEnumFieldDecoderWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
-  queryWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]"
+  queryWith (singleColRowDecoder myEnumFieldDecoderWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT ARRAY['val2'::myenum]" "Query result column types do not match expected column types"
   (refreshTyiCacheAction, queryRes) <-
     runPipeline conn $
       (,)
         <$> refreshTypeInfoCache conn
-        <*> pipelineWith (singleColRowParser myEnumFieldParserWithTypeInfoCheck) "SELECT 'val2'::myenum"
+        <*> pipelineWith (singleColRowDecoder myEnumFieldDecoderWithTypeInfoCheck) "SELECT 'val2'::myenum"
   refreshTyiCacheAction
   queryRes `shouldReturn` [Val2]
   query conn "SELECT ARRAY['val2'::myenum]" `shouldReturn` [Only (PGArray [Val2])]
@@ -748,9 +748,9 @@ genSomeGenericProdType =
 queryGenericallyDerivedTypes :: HPgConnection -> IO ()
 queryGenericallyDerivedTypes conn = withRollback conn $ do
   execute conn "CREATE TYPE myenum AS ENUM ('eval1', 'eval2', 'eval3');"
-  queryWith rowParser conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericRecord 13 EVal2 "Some text" True False]
-  queryWith rowParser conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericProdType 13 EVal2 "Some text" True False]
-  queryWith rowParser conn "SELECT 'eval1'::myenum, 'eval2'::myenum, 'eval3'::myenum" `shouldReturn` [(EVal1, EVal2, EVal3)]
+  queryWith rowDecoder conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericRecord 13 EVal2 "Some text" True False]
+  queryWith rowDecoder conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericProdType 13 EVal2 "Some text" True False]
+  queryWith rowDecoder conn "SELECT 'eval1'::myenum, 'eval2'::myenum, 'eval3'::myenum" `shouldReturn` [(EVal1, EVal2, EVal3)]
 
 queryGenericallyDerivedTypesRoundTrip :: HPgConnection -> PropertyT IO ()
 queryGenericallyDerivedTypesRoundTrip conn = hedgehog $ do
@@ -760,8 +760,8 @@ queryGenericallyDerivedTypesRoundTrip conn = hedgehog $ do
   -- instance returns no type OID, so postgres needs the cast to pick the enum type.
   (res1, res2) <- liftIO $ withRollback conn $ do
     execute conn "CREATE TYPE myenum AS ENUM ('eval1', 'eval2', 'eval3');"
-    r1 <- queryWith rowParser conn (mkQuery "SELECT $1, $2::myenum, $3, $4, $5" someRec)
-    r2 <- queryWith rowParser conn (mkQuery "SELECT $1, $2::myenum, $3, $4, $5" somePT)
+    r1 <- queryWith rowDecoder conn (mkQuery "SELECT $1, $2::myenum, $3, $4, $5" someRec)
+    r2 <- queryWith rowDecoder conn (mkQuery "SELECT $1, $2::myenum, $3, $4, $5" somePT)
     pure (r1, r2)
   res1 === [someRec]
   res2 === [somePT]

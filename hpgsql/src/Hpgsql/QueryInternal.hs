@@ -44,7 +44,7 @@ data SqlFragment
 -- Note that if the number of arguments does not match what's in the query string,
 -- this will throw an error.
 mkQuery :: (ToPgRow a) => ByteString -> a -> Query
-mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarNumberedArgs $ decodeUtf8 qryText) (toRowEncoder.toPgParams p)
+mkQuery qryText p = mkQueryInternalFromSqlStatements (parseSql AcceptOnlyDollarNumberedArgs $ decodeUtf8 qryText) (rowEncoder.toPgParams p)
   where
     mkQueryInternalFromSqlStatements :: [BlockOrNotBlock] -> [EncodingContext -> (Maybe Oid, BinaryField)] -> Query
     mkQueryInternalFromSqlStatements blocks allParams =

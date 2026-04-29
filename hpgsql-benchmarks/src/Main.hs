@@ -204,7 +204,7 @@ main = do
           void $
             bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
-                Hpgsql.queryWith (Hpgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                Hpgsql.queryWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
         it ("hasql Tuple List (" ++ show n ++ " rows)") $
           void $
             bench ("hasql Tuple List (" ++ show n ++ " rows)") $
@@ -220,7 +220,7 @@ main = do
           void $
             bench ("hpgsql Record List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
-                Hpgsql.queryWith (Hpgsql.rowParser @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                Hpgsql.queryWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
         it ("hasql Record List (" ++ show n ++ " rows)") $
           void $
             bench ("hasql Record List (" ++ show n ++ " rows)") $
@@ -239,7 +239,7 @@ main = do
           void $
             bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
-                res <- Hpgsql.querySWith (Hpgsql.rowParser @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
                 S.effects res
         it ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
           void $
@@ -257,7 +257,7 @@ main = do
           void $
             bench ("hpgsql Record Stream (" ++ show n ++ " rows)") $ do
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
-                res <- Hpgsql.querySWith (Hpgsql.rowParser @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
                 S.effects res
         it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
           void $

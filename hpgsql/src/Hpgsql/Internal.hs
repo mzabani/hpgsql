@@ -82,7 +82,7 @@ module Hpgsql.Internal
     consumeResults,
     consumeResultsIgnoreRows,
     consumeStreamingResults,
-    WhichRowParser (..),
+    WhichRowDecoder (..),
     mkPostgresError,
     throwPostgresError,
     throwIrrecoverableErrorWithStatement,
@@ -139,8 +139,8 @@ import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnString (..))
-import Hpgsql.Encoding (ColumnInfo (..), FromPgRow (..), RowEncoder (..), RowParser (..), ToPgRow (..))
-import Hpgsql.Encoding.RowParserMonadic (ConversionState (..), RowParserMonadic (..))
+import Hpgsql.Encoding (ColumnInfo (..), FromPgRow (..), RowEncoder (..), RowDecoder (..), ToPgRow (..))
+import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
@@ -863,20 +863,20 @@ executeMany_ conn qry = void $ executeMany conn qry
 -- consumes the returned Stream, and the returned Stream must be consumed completely
 -- (up to the last row or a postgres error) before you are able to run other queries.
 queryS :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
-queryS = querySWith rowParser
+queryS = querySWith rowDecoder
 
 -- | Streams results directly from the connection's socket, i.e. without using cursors.
 -- It is important to note the same thread that runs this must be the thread that
 -- consumes the returned Stream, and the returned Stream must be consumed completely
 -- (up to the last row or a postgres error) before you are able to run other queries.
-querySWith :: RowParser a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
+querySWith :: RowDecoder a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
 querySWith rparser conn qry = join $ runPipeline conn $ pipelineSWith rparser qry
 
 -- | Streams results directly from the connection's socket, i.e. without using cursors.
 -- It is important to note the same thread that runs this must be the thread that
 -- consumes the returned Stream, and the returned Stream must be consumed completely
 -- (up to the last row or a postgres error) before you are able to run other queries.
-querySMWith :: RowParserMonadic a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
+querySMWith :: RowDecoderMonadic a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
 querySMWith rparser conn qry = join $ runPipeline conn $ pipelineSMWith rparser qry
 
 -- | Sends any number of queries to the backend atomically, or throws an irrecoverable exception
@@ -1122,20 +1122,20 @@ acquireOwnershipOfOrphanedQueries conn = do
         Just tid -> (`elem` [ThreadDied, ThreadFinished]) <$> threadStatus tid
 
 pipelineS :: (FromPgRow a) => Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineS = pipelineSWith rowParser
+pipelineS = pipelineSWith rowDecoder
 
-pipelineSWith :: RowParser a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineSWith rowparser@(RowParser _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
+pipelineSWith :: RowDecoder a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
+pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
     (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just expectedColFmts)])
     ( \conn qryIds -> do
         case lastAndInit qryIds of
           (firstQueries, mLastQry) -> do
             forM_ firstQueries $ consumeResultsIgnoreRows conn
-            pure $ consumeStreamingResults (ApplicativeRowParser rowparser) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
+            pure $ consumeStreamingResults (ApplicativeRowDecoder rowparser) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
     )
 
-pipelineSMWith :: RowParserMonadic a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
+pipelineSMWith :: RowDecoderMonadic a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineSMWith rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
     (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Nothing)])
@@ -1143,22 +1143,22 @@ pipelineSMWith rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQuer
         case lastAndInit qryIds of
           (firstQueries, mLastQry) -> do
             forM_ firstQueries $ consumeResultsIgnoreRows conn
-            pure $ consumeStreamingResults (MonadicRowParser rowparser) conn (fromMaybe (error "pipelineSMWith internal bug: no mLastQry") mLastQry)
+            pure $ consumeStreamingResults (MonadicRowDecoder rowparser) conn (fromMaybe (error "pipelineSMWith internal bug: no mLastQry") mLastQry)
     )
 
 pipeline :: (FromPgRow a) => Query -> Pipeline (IO [a])
-pipeline = pipelineWith rowParser
+pipeline = pipelineWith rowDecoder
 
-pipelineWith :: RowParser a -> Query -> Pipeline (IO [a])
+pipelineWith :: RowDecoder a -> Query -> Pipeline (IO [a])
 pipelineWith rowparser q = (S.toList_ =<<) <$> pipelineSWith rowparser q
 
-pipelineM :: RowParserMonadic a -> Query -> Pipeline (IO [a])
+pipelineM :: RowDecoderMonadic a -> Query -> Pipeline (IO [a])
 pipelineM rowparser q = (S.toList_ =<<) <$> pipelineSMWith rowparser q
 
 pipeline1 :: (FromPgRow a) => Query -> Pipeline (IO a)
-pipeline1 = pipeline1With rowParser
+pipeline1 = pipeline1With rowDecoder
 
-pipeline1With :: RowParser a -> Query -> Pipeline (IO a)
+pipeline1With :: RowDecoder a -> Query -> Pipeline (IO a)
 pipeline1With rowparser q = (toSingleRow =<<) <$> pipelineWith rowparser q
   where
     toSingleRow res = do
@@ -1169,9 +1169,9 @@ pipeline1With rowparser q = (toSingleRow =<<) <$> pipelineWith rowparser q
         _ -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query/pipeline1 call, but got more than one."
 
 pipelineMay :: (FromPgRow a) => Query -> Pipeline (IO (Maybe a))
-pipelineMay = pipelineMayWith rowParser
+pipelineMay = pipelineMayWith rowDecoder
 
-pipelineMayWith :: RowParser a -> Query -> Pipeline (IO (Maybe a))
+pipelineMayWith :: RowDecoder a -> Query -> Pipeline (IO (Maybe a))
 pipelineMayWith rowparser q = (toMaybeRow =<<) <$> pipelineWith rowparser q
   where
     toMaybeRow res = do
@@ -1250,9 +1250,9 @@ runPipelineInternal conn (Pipeline (NE.nonEmpty -> mQueries) run) onMsgsSentTxn 
         onMsgsSentTxn
         $ \qryIds -> pure $ run conn (NE.toList qryIds)
 
-data WhichRowParser a = ApplicativeRowParser !(RowParser a) | MonadicRowParser !(RowParserMonadic a)
+data WhichRowDecoder a = ApplicativeRowDecoder !(RowDecoder a) | MonadicRowDecoder !(RowDecoderMonadic a)
 
-consumeStreamingResults :: WhichRowParser a -> HPgConnection -> QueryId -> Stream (Of a) IO ()
+consumeStreamingResults :: WhichRowDecoder a -> HPgConnection -> QueryId -> Stream (Of a) IO ()
 consumeStreamingResults rp conn qryId = S.effect $ do
   qText <- lookupQueryText conn qryId
   (mERowDesc, rowsStream) <- consumeResults conn qryId
@@ -1273,12 +1273,12 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           mkColInfo oid = ColumnInfo oid encodingContext
           colInfos = map mkColInfo coltypes
       !rowparser <- case rp of
-        ApplicativeRowParser (RowParser rparser rtypecheck expectedNumCols) -> do
+        ApplicativeRowDecoder (RowDecoder rparser rtypecheck expectedNumCols) -> do
           let typecheckedColInfos = rtypecheck colInfos
           unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " ++ show numResultColumns ++ " columns but row parser expected " ++ show expectedNumCols
           unless (all snd typecheckedColInfos) $ throwIrrecoverableErrorWithStatement qText "Query result column types do not match expected column types"
           pure $ rparser colInfos <* Parser.endOfInput
-        MonadicRowParser (RowParserMonadic rparser) -> pure $ fmap fst $ rparser ConversionState {colsLeftToParse = colInfos} <* Parser.endOfInput
+        MonadicRowDecoder (RowDecoderMonadic rparser) -> pure $ fmap fst $ rparser ConversionState {colsLeftToParse = colInfos} <* Parser.endOfInput
       pure $ do
         errOrCmdComplete <-
           S.mapM
@@ -1293,24 +1293,24 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           Right _cmdComplete -> pure mempty
 
 query :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO [a]
-query = queryWith (rowParser @a)
+query = queryWith (rowDecoder @a)
 
-queryWith :: RowParser a -> HPgConnection -> Query -> IO [a]
+queryWith :: RowDecoder a -> HPgConnection -> Query -> IO [a]
 queryWith rparser conn qry = join $ runPipeline conn $ pipelineWith rparser qry
 
-queryMWith :: RowParserMonadic a -> HPgConnection -> Query -> IO [a]
+queryMWith :: RowDecoderMonadic a -> HPgConnection -> Query -> IO [a]
 queryMWith rparser conn qry = join $ runPipeline conn $ pipelineM rparser qry
 
 query1 :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO a
-query1 = query1With rowParser
+query1 = query1With rowDecoder
 
-query1With :: RowParser a -> HPgConnection -> Query -> IO a
+query1With :: RowDecoder a -> HPgConnection -> Query -> IO a
 query1With rparser conn q = join $ runPipeline conn $ pipeline1With rparser q
 
 queryMay :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO (Maybe a)
-queryMay = queryMayWith rowParser
+queryMay = queryMayWith rowDecoder
 
-queryMayWith :: RowParser a -> HPgConnection -> Query -> IO (Maybe a)
+queryMayWith :: RowDecoder a -> HPgConnection -> Query -> IO (Maybe a)
 queryMayWith rparser conn q = join $ runPipeline conn $ pipelineMayWith rparser q
 
 withCopy_ :: HPgConnection -> Query -> IO a -> IO Int64
@@ -1357,8 +1357,7 @@ copyFromS conn copyQ allRows =
     -- Take the controlMsgsLock to flush all buffers
     withControlMsgsLock conn (const $ pure ()) (const $ pure ()) (const $ pure ())
     encCtx <- readMVar conn.encodingContext
-    let rowEncoder = toRowEncoder
-        !toBinaryRow = rowEncoder.toBinaryCopyBytes encCtx
+    let !toBinaryRow = rowEncoder.toBinaryCopyBytes encCtx
         numColsBs = Builder.int16BE $ fromIntegral $ length $ rowEncoder.toTypeOids (Proxy @r)
     rethrowAsIrrecoverable $ nonAtomicSendMsg conn $ CopyData $ Builder.byteString "PGCOPY\n\xff\r\n\0" <> Builder.int32BE 0 <> Builder.int32BE 0
     eHasRows <- S.inspect allRows

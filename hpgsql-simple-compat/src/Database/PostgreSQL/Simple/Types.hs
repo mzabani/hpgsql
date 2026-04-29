@@ -166,7 +166,7 @@ newtype Binary a = Binary {fromBinary :: a}
 instance ToField (Binary ByteString)
 
 instance Hpgsql.FromPgField (Binary ByteString) where
-  fieldParser = Binary <$> Hpgsql.fieldParser
+  fieldDecoder = Binary <$> Hpgsql.fieldDecoder
 
 instance ToPgField (Binary ByteString) where
   fieldEncoder = contramap fromBinary fieldEncoder

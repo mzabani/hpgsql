@@ -2,6 +2,7 @@ module Hpgsql.Types
   ( Aeson (..),
     PgJson, -- Do not export ctor
     PGArray (..),
+    pgJsonByteString
   )
 where
 
@@ -16,7 +17,7 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map.Strict as Map
 import Data.Typeable (Typeable)
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (ColumnInfo (..), FieldEncoder (..), FieldParser (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
+import Hpgsql.Encoding (ColumnInfo (..), FieldEncoder (..), FieldDecoder (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
@@ -37,7 +38,7 @@ instance forall a. (ToPgField a) => ToPgField (PGArray a) where
       }
 
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
-  fieldParser = PGArray <$> arrayField replicateM fieldParser
+  fieldDecoder = PGArray <$> arrayField replicateM fieldDecoder
 
 -- | A JSON type that does not incur the costs of deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates
@@ -54,9 +55,13 @@ instance ToJSON PgJson where
 
   toEncoding (PgJson bs) = AesonInternal.unsafeToEncoding (Builder.byteString bs)
 
+-- | A valid UTF8 representation of the JSON value.
+pgJsonByteString :: PgJson -> ByteString
+pgJsonByteString (PgJson bs) = bs
+
 instance FromPgField PgJson where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
@@ -74,8 +79,8 @@ newtype Aeson a = Aeson {getAeson :: a}
   deriving (Eq, Show, Read, Typeable, Functor)
 
 instance (FromJSON a) => FromPgField (Aeson a) where
-  fieldParser =
-    FieldParser
+  fieldDecoder =
+    FieldDecoder
       { fieldValueParser =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not

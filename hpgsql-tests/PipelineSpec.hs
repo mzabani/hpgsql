@@ -52,7 +52,7 @@ instance Show SomeRowReturningStatementTest where
   show (SomeRowReturningStatementTest s) = show s
 
 -- | Row parser, query, function to check query results and expected results length.
-data RowReturningStatementTest a = RowsStatement ((RowParser a), Query, [a] -> IO (), Int64)
+data RowReturningStatementTest a = RowsStatement ((RowDecoder a), Query, [a] -> IO (), Int64)
 
 -- | Query and expected returned count.
 data CountReturningStatementTest = CountReturningStatement (Query, Int64)
@@ -68,11 +68,11 @@ instance Show (RowReturningStatementTest a) where
   show _ = "some-statement"
 
 exampleStmt :: [SomeRowReturningStatementTest] =
-  [ SomeRowReturningStatementTest $ RowsStatement (rowParser @(Int, Int), "SELECT 3, 4 FROM generate_series(1,2)", (`shouldBe` [(3, 4), (3, 4)]), 2),
-    SomeRowReturningStatementTest $ RowsStatement (rowParser @(Int, Int), "SELECT 1, 2 WHERE FALSE", (`shouldBe` []), 0),
-    SomeRowReturningStatementTest $ RowsStatement (rowParser @(Bool, Bool), [sql|SELECT #{True}, #{False}|], (`shouldBe` [(True, False)]), 1),
+  [ SomeRowReturningStatementTest $ RowsStatement (rowDecoder @(Int, Int), "SELECT 3, 4 FROM generate_series(1,2)", (`shouldBe` [(3, 4), (3, 4)]), 2),
+    SomeRowReturningStatementTest $ RowsStatement (rowDecoder @(Int, Int), "SELECT 1, 2 WHERE FALSE", (`shouldBe` []), 0),
+    SomeRowReturningStatementTest $ RowsStatement (rowDecoder @(Bool, Bool), [sql|SELECT #{True}, #{False}|], (`shouldBe` [(True, False)]), 1),
     -- Queries with multiple statements: we expect only the results of the last statement
-    SomeRowReturningStatementTest $ RowsStatement (rowParser @(Only Int64), [sql|SELECT 1; SELECT 34; SELECT * FROM generate_series(11,17)|], (`shouldBe` map Only [11 .. 17]), 7)
+    SomeRowReturningStatementTest $ RowsStatement (rowDecoder @(Only Int64), [sql|SELECT 1; SELECT 34; SELECT * FROM generate_series(11,17)|], (`shouldBe` map Only [11 .. 17]), 7)
   ]
 
 countReturningStmts :: [CountReturningStatementTest] =
@@ -170,7 +170,7 @@ runVariedPipelinesWithError conn = hedgehog $ do
 
 runPipelineWithMultipleStatements :: HPgConnection -> IO ()
 runPipelineWithMultipleStatements conn = do
-  (resultsOfFirstStmt, resultsOfSecondStmt, resultsOfLastStmt, createTbl) <- runPipeline conn $ (,,,) <$> pipelineWith (rowParser @(Int, Int)) "SELECT 1, 2 WHERE FALSE" <*> pipelineSWith (rowParser @(Int, Int)) "SELECT 3, 4 FROM generate_series(1,2)" <*> pipelineSWith (rowParser @(Int64, Bool)) "SELECT x, FALSE FROM generate_series(1,3) subq(x)" <*> pipelineCmd "CREATE table test_table()"
+  (resultsOfFirstStmt, resultsOfSecondStmt, resultsOfLastStmt, createTbl) <- runPipeline conn $ (,,,) <$> pipelineWith (rowDecoder @(Int, Int)) "SELECT 1, 2 WHERE FALSE" <*> pipelineSWith (rowDecoder @(Int, Int)) "SELECT 3, 4 FROM generate_series(1,2)" <*> pipelineSWith (rowDecoder @(Int64, Bool)) "SELECT x, FALSE FROM generate_series(1,3) subq(x)" <*> pipelineCmd "CREATE table test_table()"
   resultsOfFirstStmt `shouldReturn` []
   (resultsOfSecondStmt >>= S.toList_) `shouldReturn` [(3, 4), (3, 4)]
   (resultsOfLastStmt >>= S.toList_) `shouldReturn` [(1, False), (2, False), (3, False)]
@@ -191,14 +191,14 @@ runPipelineErrorSemanticsUnsupportedCaseStillBehavesWell conn = do
   -- In case it's not a postgres error in a pipelined statement and rather a user error,
   -- we don't promise anything to users, but we test that Hpgsql at least won't deadlock
   -- or do something gnarly, and preferrably we throw an informative exception.
-  (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowParser @(Only Bool)) "SELECT 1" <*> pipelineWith (rowParser @(Int, Int)) "SELECT 3, 4"
+  (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowDecoder @(Only Bool)) "SELECT 1" <*> pipelineWith (rowDecoder @(Int, Int)) "SELECT 3, 4"
   goodCmd `shouldReturn` 1
   parserErrCmd `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
   otherCmd `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that."
 
 runPipelineErrorSemanticsQueriesConsumedOutOfOrder :: HPgConnection -> IO ()
 runPipelineErrorSemanticsQueriesConsumedOutOfOrder conn = do
-  (cmd1, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowParser @(Only Bool)) "SELECT TRUE" <*> pipelineWith (rowParser @(Int, Int)) "SELECT 3, 4"
+  (cmd1, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowDecoder @(Only Bool)) "SELECT TRUE" <*> pipelineWith (rowDecoder @(Int, Int)) "SELECT 3, 4"
   cmd1 `shouldReturn` 1
   cmd3 `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that."
   -- We don't promise users that they can consume a statement at
