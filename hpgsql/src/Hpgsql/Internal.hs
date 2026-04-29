@@ -139,7 +139,7 @@ import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnString (..))
-import Hpgsql.Encoding (ColumnInfo (..), FromPgRow (..), RowEncoder (..), RowDecoder (..), ToPgRow (..))
+import Hpgsql.Encoding (ColumnInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
@@ -148,7 +148,7 @@ import qualified Hpgsql.Msgs as Msgs
 import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.SimpleParser as Parser
-import Hpgsql.TypeInfo (TypeInfo (..), builtinPgTypesMap)
+import Hpgsql.TypeInfo (TypeInfo (..), buildTypeInfoCache, builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString as SocketBS
@@ -341,8 +341,8 @@ refreshTypeInfoCache conn =
   where
     fillTypeInfoCache queryResultsIO = do
       queryResults <- queryResultsIO
-      let customTypes = Map.fromList $ map (\(oid, typname, typarray) -> (oid, TypeInfo typname (if typarray == 0 then Nothing else Just typarray))) queryResults
-      modifyMVar_ conn.encodingContext $ \_ -> pure $ EncodingContext $ customTypes `Map.union` builtinPgTypesMap
+      let customTypes = buildTypeInfoCache $ map (\(oid, typname, typarray) -> TypeInfo oid typname (if typarray == 0 then Nothing else Just typarray)) queryResults
+      modifyMVar_ conn.encodingContext $ \_ -> pure $ EncodingContext $ customTypes <> builtinPgTypesMap
 
 -- | Useful to reset the connection's internal typeInfo cache
 -- to the builtin postgres types.

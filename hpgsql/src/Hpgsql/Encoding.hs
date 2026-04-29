@@ -5,7 +5,6 @@ module Hpgsql.Encoding
     FromPgField (..),
     ToPgField (..),
     FieldEncoder (..),
-    mkUntypedFieldEncoder,
     ToPgRow (..),
     RowEncoder (..),
     Only (..),
@@ -16,7 +15,10 @@ module Hpgsql.Encoding
     AllowNull (..),
     LowerCasedPgEnum (..),
     (:.) (..),
-    anyTypeDecoder,
+    mkUntypedFieldEncoder,
+    typeFieldEncoder,
+    typeFieldDecoder,
+    rawBytesFieldDecoder,
     singleColRowDecoder,
     arrayField,
     toPgVectorField,
@@ -72,10 +74,10 @@ import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, nameOid, numericOid, oidOid, textOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
 
 data ColumnInfo = ColumnInfo
-  { typeOid :: !Oid,
+  { fieldTypeOid :: !Oid,
     -- | The EncodingContext as of the moment the query ran.
     encodingContext :: !EncodingContext
   }
@@ -252,6 +254,15 @@ class ToPgField a where
 -- the typeInfo cache available.
 mkUntypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
 mkUntypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}
+
+-- | Allows you to specify a type for a FieldEncoder. This can be useful to avoid
+-- letting postgres infer types itself, which can cause errors. For example:
+--
+-- > typeFieldEncoder (lookupTypeByName "my_custom_enum_type") myCustomEnumDecoder
+--
+-- This will work unless you use non-default flags in your connection options.
+typeFieldEncoder :: (EncodingContext -> Maybe Oid) -> FieldEncoder a -> FieldEncoder a
+typeFieldEncoder ttoid enc = enc {toTypeOid = ttoid}
 
 instance ToPgField Int where
   fieldEncoder =
@@ -573,7 +584,7 @@ instance (ToPgField a) => ToPgField (Vector a) where
           { toTypeOid = \encodingContext -> do
               -- Maybe monad
               elOid <- fe.toTypeOid encodingContext
-              arrayTypInfo <- Map.lookup elOid encodingContext.typeInfoCache
+              arrayTypInfo <- lookupTypeByOid elOid encodingContext.typeInfoCache
               arrayTypInfo.oidOfArrayType,
             toPgField = toPgVectorField
           }
@@ -732,7 +743,7 @@ parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldDecoder a
 parsePgType !requiredTypeOids !fieldValueDecoder =
   FieldDecoder
     { fieldValueDecoder = \_oid -> fieldValueDecoder,
-      allowedPgTypes = (`elem` requiredTypeOids) . typeOid
+      allowedPgTypes = (`elem` requiredTypeOids) . fieldTypeOid
     }
 
 instance FromPgField () where
@@ -742,57 +753,57 @@ instance FromPgField () where
           Just "" -> Right ()
           Just bs -> Left $ "Invalid value '" ++ show bs ++ "' for postgres void type"
           Nothing -> Left "Cannot decode SQL null as the Haskell () type. Use a `Maybe ()`",
-        allowedPgTypes = (== voidOid) . typeOid
+        allowedPgTypes = (== voidOid) . fieldTypeOid
       }
 
 instance FromPgField Int where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`",
-        allowedPgTypes = (`elem` haskellIntOids) . typeOid
+        allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
       }
 
 instance FromPgField Int16 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int16 type. Use a `Maybe Int16`",
-        allowedPgTypes = (== int2Oid) . typeOid
+        allowedPgTypes = (== int2Oid) . fieldTypeOid
       }
 
 instance FromPgField Int32 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int32 type. Use a `Maybe Int32`",
-        allowedPgTypes = (`elem` [int2Oid, int4Oid]) . typeOid
+        allowedPgTypes = (`elem` [int2Oid, int4Oid]) . fieldTypeOid
       }
 
 instance FromPgField Int64 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int64 type. Use a `Maybe Int64`",
-        allowedPgTypes = (`elem` [int2Oid, int4Oid, int8Oid]) . typeOid
+        allowedPgTypes = (`elem` [int2Oid, int4Oid, int8Oid]) . fieldTypeOid
       }
 
 instance FromPgField Integer where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
                 Just bs
@@ -803,7 +814,7 @@ instance FromPgField Integer where
                         Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
                       Parser.ParseFail err -> Left err
                 Nothing -> Left "Cannot decode SQL null as the Haskell Integer type. Use a `Maybe Integer`",
-        allowedPgTypes = (`elem` [int8Oid, numericOid, int4Oid, int2Oid]) . typeOid
+        allowedPgTypes = (`elem` [int8Oid, numericOid, int4Oid, int2Oid]) . fieldTypeOid
       }
 
 instance FromPgField Oid where
@@ -813,7 +824,7 @@ instance FromPgField Oid where
           -- Oids are just int4
           Just bs -> Oid <$> binaryIntDecoder int4Oid bs
           Nothing -> Left "Cannot decode SQL null as the Haskell Oid type. Use a `Maybe Oid`",
-        allowedPgTypes = (== oidOid) . typeOid
+        allowedPgTypes = (== oidOid) . fieldTypeOid
       }
 
 instance FromPgField Float where
@@ -824,30 +835,50 @@ instance FromPgField Float where
 instance FromPgField Double where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
           let !decoder
                 | oid == float8Oid = binaryFloat8Decoder
                 | otherwise = float2Double . binaryFloat4Decoder
            in \case
                 Just bs -> Right $ decoder bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`",
-        allowedPgTypes = (`elem` [float8Oid, float4Oid]) . typeOid
+        allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
       }
 
--- | A parser that accepts any PG type and returns the object's
+-- | A decoder that accepts any PG type and returns the object's
 -- postgres' binary representation as a ByteString.
 -- This can be useful to build `FromPgField` instances for enum types,
 -- since postgres uses their UTF8 text representation even in the
 -- binary protocol, but otherwise it's easier to compose existing
 -- FieldDecoders.
-anyTypeDecoder :: FieldDecoder ByteString
-anyTypeDecoder =
+rawBytesFieldDecoder :: FieldDecoder ByteString
+rawBytesFieldDecoder =
   FieldDecoder
     { fieldValueDecoder = \_oid -> \case
-        Nothing -> Left "Cannot decode SQL null as the `anyTypeDecoder`."
+        Nothing -> Left "Cannot decode SQL null as the `rawBytesFieldDecoder`."
         Just bs -> Right bs,
       allowedPgTypes = const True
     }
+
+-- | Allows you to specify a type (and other checks, possibly) for a FieldDecoder.
+-- This can be useful to ensure you're not accidentally decoding a different type.
+--
+-- > myEnumFieldDecoderWithTypeInfoCheck :: FieldDecoder MyEnum
+-- > myEnumFieldDecoderWithTypeInfoCheck =
+-- >   let convert = \case
+-- >         "val1" -> Val1
+-- >         "val2" -> Val2
+-- >         "val3" -> Val3
+-- >         _ -> error "Invalid value for MyEnum"
+-- >    in typeFieldDecoder
+-- >         ( \fieldInfo ->
+-- >             (typeName <$> lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache) == Just "myenum"
+-- >         )
+-- >         $ convert <$> rawBytesFieldDecoder
+--
+-- This will work unless you use non-default flags in your connection options.
+typeFieldDecoder :: (ColumnInfo -> Bool) -> FieldDecoder a -> FieldDecoder a
+typeFieldDecoder fieldCheck dec = dec {allowedPgTypes = fieldCheck}
 
 scientificDecoder :: Bool -> Parser.Parser Scientific
 scientificDecoder mustBeInteger = do
@@ -870,7 +901,7 @@ instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
                 Just bs ->
@@ -882,7 +913,7 @@ instance FromPgField Scientific where
                       Parser.ParseFail err -> Left err
                     else flip scientific 0 . fromIntegral <$> decodeInt bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`",
-        allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . typeOid
+        allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . fieldTypeOid
       }
 
 instance FromPgField (Ratio Integer) where
@@ -900,7 +931,7 @@ instance FromPgField Char where
   fieldDecoder =
     let textParser = fieldValueDecoder (fieldDecoder @Text)
      in FieldDecoder
-          { fieldValueDecoder = \colInfo@ColumnInfo {typeOid = oid} ->
+          { fieldValueDecoder = \colInfo@ColumnInfo {fieldTypeOid = oid} ->
               let !decodeText = textParser colInfo
                in \mbs -> case mbs of
                     Just bs ->
@@ -913,7 +944,7 @@ instance FromPgField Char where
                           Right t -> if Text.length t > 1 then Left "Cannot parse text with more than one character into a Haskell Char type." else Right (Text.head t)
                     Nothing -> Left "Cannot decode SQL null as the Haskell Char type. Use a `Maybe Char`",
             -- TODO: All the varchar types?
-            allowedPgTypes = (`elem` [charOid, textOid]) . typeOid
+            allowedPgTypes = (`elem` [charOid, textOid]) . fieldTypeOid
           }
 
 instance FromPgField ByteString where
@@ -945,13 +976,25 @@ instance FromPgField String where
     Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
 
 instance FromPgField (CI Text) where
-  fieldDecoder = CI.mk <$> fieldDecoder
+  fieldDecoder =
+    let dec = CI.mk <$> fieldDecoder
+     in dec
+          { allowedPgTypes = const True
+          }
 
 instance FromPgField (CI LT.Text) where
-  fieldDecoder = CI.mk <$> fieldDecoder
+  fieldDecoder =
+    let dec = CI.mk <$> fieldDecoder
+     in dec
+          { allowedPgTypes = const True
+          }
 
 instance FromPgField (CI String) where
-  fieldDecoder = CI.mk <$> fieldDecoder
+  fieldDecoder =
+    let dec = CI.mk <$> fieldDecoder
+     in dec
+          { allowedPgTypes = const True
+          }
 
 instance FromPgField UTCTime where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
@@ -1061,15 +1104,15 @@ instance FromPgField Aeson.Value where
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder =
-          \ColumnInfo {typeOid} ->
+          \ColumnInfo {fieldTypeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if typeOid == jsonbOid then BS.drop 1 else Prelude.id
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
              in \case
                   Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
                     Just d -> Right d
                     Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
                   Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
-        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . typeOid
+        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 
 -- | A FieldDecoder that accepts and decodes SQL NULLs into `Nothing` values
@@ -1216,7 +1259,7 @@ genericEnumFieldDecoder ::
   -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
   (LT.Text -> LT.Text) ->
   FieldDecoder a
-genericEnumFieldDecoder nameTransform = fromMaybe (error $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)) . flip Map.lookup allValuesMap <$> anyTypeDecoder
+genericEnumFieldDecoder nameTransform = fromMaybe (error $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)) . flip Map.lookup allValuesMap <$> rawBytesFieldDecoder
   where
     -- TODO: Vector of pointers to ByteStrings for a bit more memory locality? Does it make a perf difference?
     allValuesMap = Map.mapKeys (LBS.toStrict . LT.encodeUtf8 . nameTransform) $ fmap to genEnumDecoder

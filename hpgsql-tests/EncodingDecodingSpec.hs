@@ -39,11 +39,11 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldEncoder (..), FieldDecoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, anyTypeDecoder, compositeTypeParser, mkUntypedFieldEncoder, singleColRowDecoder)
+import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, mkUntypedFieldEncoder, rawBytesFieldDecoder, singleColRowDecoder, typeFieldDecoder)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (Oid, TypeInfo (..))
+import Hpgsql.TypeInfo (Oid, TypeInfo (..), lookupTypeByOid)
 import Hpgsql.Types (PGArray (..), PgJson)
 import Numeric (showHex)
 import Test.Hspec
@@ -658,7 +658,7 @@ instance FromPgField MyEnum where
           "val2" -> Val2
           "val3" -> Val3
           _ -> error "Invalid value for MyEnum"
-     in convert <$> anyTypeDecoder
+     in convert <$> rawBytesFieldDecoder
 
 myEnumFieldDecoderWithTypeInfoCheck :: FieldDecoder MyEnum
 myEnumFieldDecoderWithTypeInfoCheck =
@@ -667,11 +667,11 @@ myEnumFieldDecoderWithTypeInfoCheck =
         "val2" -> Val2
         "val3" -> Val3
         _ -> error "Invalid value for MyEnum"
-      base = convert <$> anyTypeDecoder
-   in base
-        { allowedPgTypes = \colInfo ->
-            (typeName <$> Map.lookup colInfo.typeOid colInfo.encodingContext.typeInfoCache) == Just "myenum"
-        }
+   in typeFieldDecoder
+        ( \fieldInfo ->
+            (typeName <$> lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache) == Just "myenum"
+        )
+        $ convert <$> rawBytesFieldDecoder
 
 instance ToPgField MyEnum where
   fieldEncoder = mkUntypedFieldEncoder $ \encCtx ->
