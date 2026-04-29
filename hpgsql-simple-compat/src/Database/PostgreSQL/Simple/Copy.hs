@@ -47,7 +47,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
 import Data.Typeable (Typeable)
 import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
-import Database.PostgreSQL.Simple.Internal hiding (result, row)
+import Database.PostgreSQL.Simple.Internal hiding (result)
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Simple.Types
 import qualified Hpgsql

@@ -57,11 +57,13 @@ library
     Database.PostgreSQL.Simple.Types
     Database.PostgreSQL.Simple.HpgsqlUtils
     -- postgresql-query
+    Database.PostgreSQL.Query
     Database.PostgreSQL.Query.Functions
     Database.PostgreSQL.Query.SqlBuilder
     Database.PostgreSQL.Query.SqlBuilder.Builder
     Database.PostgreSQL.Query.SqlBuilder.Class
     Database.PostgreSQL.Query.SqlBuilder.Types
+    Database.PostgreSQL.Query.TH
     Database.PostgreSQL.Query.TH.SqlExp
     Database.PostgreSQL.Query.Types
 
