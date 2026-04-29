@@ -5,9 +5,9 @@ module Hpgsql.Copy
     putCopyError,
     withCopy,
     withCopy_,
-    copyFromL,
+    copyFrom,
     copyFromS,
   )
 where
 
-import Hpgsql.Internal (copyEnd, copyFromL, copyFromS, copyStart, putCopyData, putCopyError, withCopy, withCopy_)
+import Hpgsql.Internal (copyEnd, copyFrom, copyFromS, copyStart, putCopyData, putCopyError, withCopy, withCopy_)

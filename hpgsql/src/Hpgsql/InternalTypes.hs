@@ -314,6 +314,7 @@ data PoolCleanup = PoolCleanup
     -- TODO: Check for any temporary tables and throw?
   }
 
+-- | An error coming from PostgreSQL. You can safely handle this and continue using the connection.
 data PostgresError = PostgresError {pgErrorDetails :: Map ErrorDetail LBS.ByteString, failedStatement :: !ByteString}
   deriving stock (Show)
 

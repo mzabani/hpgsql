@@ -65,6 +65,14 @@
 --
 -- To define your own encoder and decoder instances, take a look at "Hpgsql.Encoding".
 --
+--
+-- = Handling errors
+--
+-- - Hpgsql is interruption-safe (with one exception for COPY inside transactions; see "Hpgsql.Copy"), so a query can be interrupted by asynchronous exceptions and you should still be able to run new queries on the same connection without any other side-effects. Naturally, it is up to you to determine which queries ran or not to completion, since they might have side-effects.
+-- - Hpgsql will throw either `PostgresError` or `IrrecoverableHpgsqlError`, and:
+--   - If you receive a `IrrecoverableHpgsqlError`, Hpgsql makes no promises about which statements ran to completion and what connection state is, and you should `closeForcefully` the connection without running any other queries. These errors should only be thrown for "obvious" developer mistakes from which usually there would be no way to proceed, anyway.
+--   - If you receive a `PostgresError` exception, postgres and Hpgsql's states are synced and you can issue new queries afterwards.
+--
 -- = What's in this module
 --
 -- This module re-exports the essentials: connecting, querying, and the core types.

@@ -16,7 +16,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Copy (copyFromL, copyStart, putCopyData, putCopyError, withCopy_)
+import Hpgsql.Copy (copyFrom, copyStart, putCopyData, putCopyError, withCopy_)
 import Hpgsql.Query (sql)
 import Hpgsql.Transaction (transactionStatus)
 import Test.Hspec
@@ -63,7 +63,7 @@ copyBinaryFmtStatementSucceeding conn = hedgehog $ do
   rows <- Gen.forAll genRows
   result <- liftIO $ withRollback conn $ do
     execute_ conn "CREATE UNLOGGED TABLE copy_test1 (id INT NOT NULL, name TEXT NOT NULL)"
-    copyFromL
+    copyFrom
       conn
       "COPY copy_test1 FROM STDIN WITH (FORMAT BINARY);"
       rows

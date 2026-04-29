@@ -11,7 +11,7 @@ Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API la
 - A SQL quasiquoter like the one in [postgresql-query](https://hackage.haskell.org/package/postgresql-query) and [hasql-interpolate](https://hackage-content.haskell.org/package/hasql-interpolate-1.0.1.0/docs/Hasql-Interpolate.html)
 - Prepared statements
 
-Here's an example of a pipeline mixing streams, prepared and non prepared results:
+Here's an example of a pipeline mixing streams, prepared and non prepared statements:
 
 ```haskell
 f :: Int -> IO (Stream (Of Aeson.Value) IO ())
