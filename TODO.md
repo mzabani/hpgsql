@@ -12,7 +12,6 @@
 - Read https://www.iankduncan.com/engineering/2024-01-26-records-of-effects, think about it.
 - Connecting with a password
 - Double-check licensing and authorship in cabal files and READMEs
-- Why ResAllowNull for composite types? Seems unnecessary.
 - Add a test to exercise interruption safety with a COPY statement
 - Document that hpgsql-simple-compat may throw runtime errors even if it compiles! Applications must be tested!
 - untypedFieldEncoder is used for enums, but do we even need `LowerCasedPgEnum` anymore?

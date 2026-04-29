@@ -12,7 +12,6 @@ module Hpgsql.Encoding
     EncodingContext (..),
     FieldDecoder (..), -- TODO: Can we export ctor?
     RowDecoder (..), -- TODO: Can we export ctor?
-    AllowNull (..),
     LowerCasedPgEnum (..),
     (:.) (..),
     untypedFieldEncoder,
@@ -42,7 +41,6 @@ import qualified Data.CaseInsensitive as CI
 import Data.Fixed (divMod')
 import Data.Functor.Contravariant (Contravariant (..))
 import Data.Int (Int16, Int32, Int64)
-import Data.Kind (Type)
 import qualified Data.List as List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -137,14 +135,6 @@ class FromPgRow a where
   default rowDecoder :: (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
   rowDecoder = genericFromPgRow
 
-data AllowNull (a :: Bool) where
-  AllowNull :: AllowNull True
-  DisallowNull :: AllowNull False
-
-type family ResAllowNull (r :: Bool) (a :: Type) :: Type where
-  ResAllowNull True a = Maybe a
-  ResAllowNull False a = a
-
 -- | Allows you to create a @FieldDecoder@ for composite types.
 -- For a type such as:
 --
@@ -155,28 +145,17 @@ type family ResAllowNull (r :: Bool) (a :: Type) :: Type where
 -- > data IntAndBool = IntAndBool Int Bool
 -- >
 -- > instance FromPgField IntAndBool where
--- >   fieldDecoder = compositeTypeParser DisallowNull (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
-compositeTypeParser :: forall a t. AllowNull t -> RowDecoder a -> FieldDecoder (ResAllowNull t a)
-compositeTypeParser nullCheck (RowDecoder {..}) =
-  case nullCheck of
-    DisallowNull ->
-      FieldDecoder
-        { fieldValueDecoder = \compositeTypeOid -> \case
-            Nothing -> Left "Got NULL in composite type but it was not allowed"
-            Just bs -> case Parser.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parser.endOfInput) bs of
-              Parser.ParseOk v -> Right v
-              Parser.ParseFail err -> Left err,
-          allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
-        }
-    AllowNull ->
-      FieldDecoder
-        { fieldValueDecoder = \compositeTypeColInfo -> \case
-            Nothing -> Right Nothing
-            Just bs -> case Parser.parseOnly (parserForRecord compositeTypeColInfo.encodingContext <* Parser.endOfInput) bs of
-              Parser.ParseOk v -> Right (Just v)
-              Parser.ParseFail err -> Left err,
-          allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
-        }
+-- >   fieldDecoder = compositeTypeParser (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
+compositeTypeParser :: forall a. RowDecoder a -> FieldDecoder a
+compositeTypeParser (RowDecoder {..}) =
+  FieldDecoder
+    { fieldValueDecoder = \compositeTypeOid -> \case
+        Nothing -> Left "Got NULL in composite type but it was not allowed"
+        Just bs -> case Parser.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parser.endOfInput) bs of
+          Parser.ParseOk v -> Right v
+          Parser.ParseFail err -> Left err,
+      allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
+    }
   where
     parserForRecord :: EncodingContext -> Parser.Parser a
     parserForRecord encodingContext = do
