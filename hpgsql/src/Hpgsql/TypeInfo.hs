@@ -1,8 +1,8 @@
 -- |
 -- This file has is very similar to a similarly named file from the great postgresql-simple library, more specifically
 -- to https://hackage.haskell.org/package/postgresql-simple-0.7.0.0/docs/src/Database.PostgreSQL.Simple.TypeInfo.Static.html
--- We started with that and later came up with our own, though.
--- We thank you for their great work.
+-- We started with that and later came up with our own from scratch, though.
+-- We thank them for their great work.
 module Hpgsql.TypeInfo
   ( boolOid,
     byteaOid,
@@ -115,18 +115,25 @@ newtype Oid = Oid Int32
 
 data TypeInfo = TypeInfo
   { typeName :: Text,
-    -- | Only a Nothing if this is already an array type
+    -- | Only a Nothing if this is already an array type, otherwise
+    -- the Oid of the Array type with elements of this TypeInfo.
     oidOfArrayType :: Maybe Oid
   }
 
 newtype EncodingContext = EncodingContext
-  { typeInfoCache :: Map Oid TypeInfo
+  { -- | A map with all builtin PostgreSQL types plus
+    -- user-defined types unless you specify custom connection options.
+    typeInfoCache :: Map Oid TypeInfo
   }
 
 -- The query to get all the code you find in this file is:
 -- 1. psql -X -t -d postgres -c "select typname || E'Oid :: Oid\n' || typname || 'Oid = Oid ' || oid from pg_catalog.pg_type order by oid" | sed 's|\+||g'
 -- 2. psql -X -t -d postgres -c "select '(' || typname || 'Oid, TypeInfo \"' || typname || '\" ' || case when typarray=0 then 'Nothing' else '(Just ' || typarray || ')' end || '),' from pg_catalog.pg_type order by oid" for the Map
 
+-- | This contains every type that is builtin to PostgreSQL
+-- alongside some info about them.
+-- User defined types are not available here, but are accessible
+-- in @EncodingContext@ in many places where it might be useful.
 builtinPgTypesMap :: Map Oid TypeInfo
 builtinPgTypesMap =
   Map.fromList

@@ -619,10 +619,17 @@ queryCompositeType conn = withRollback conn $ do
       intAndBoolParserNullableFields = singleColRowParser $ compositeTypeParser DisallowNull $ rowParser @(Maybe Int, Maybe Bool)
       intAndBoolParserNullableValue = singleColRowParser $ compositeTypeParser AllowNull $ rowParser @(Int, Bool)
   queryWith intAndBoolParser conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` [(14, True)]
+  query1 conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` (Only $ IntAndBool 14 True)
   queryWith ((,,) <$> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields) conn (mkQuery "SELECT ROW(NULL,$1)::int_and_bool, ROW($2,NULL)::int_and_bool, ROW(NULL, NULL)::int_and_bool" (True, 27 :: Int)) `shouldReturn` [((Nothing, Just True), (Just 27, Nothing), (Nothing, Nothing))]
   queryWith ((,) <$> intAndBoolParser <*> intAndBoolParser) conn (mkQuery "SELECT ROW($1,$2)::int_and_bool, ROW($3,$4)::int_and_bool" ((-42) :: Int, True, 91 :: Int, False)) `shouldReturn` [((-42, True), (91, False))]
   queryWith intAndTextParser conn (mkQuery "SELECT ROW($1,$2)::mixed_bin_text" (14 :: Int, "abc" :: Text)) `shouldReturn` [(14, "abc")]
   queryWith intAndBoolParserNullableValue conn "SELECT NULL::int_and_bool" `shouldReturn` [Nothing]
+
+data IntAndBool = IntAndBool Int Bool
+  deriving stock (Eq, Show)
+
+instance FromPgField IntAndBool where
+  fieldParser = compositeTypeParser DisallowNull (rowParser @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
 
 queryArrayTypes :: HPgConnection -> PropertyT IO ()
 queryArrayTypes conn = hedgehog $ do

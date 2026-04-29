@@ -37,7 +37,6 @@ library
       Hpgsql.Pipeline
       Hpgsql.Pool
       Hpgsql.Query
-      Hpgsql.QueryInternal
       Hpgsql.Time
       Hpgsql.Transaction
       Hpgsql.TypeInfo
@@ -48,6 +47,7 @@ library
       Hpgsql.Locking
       Hpgsql.Msgs
       Hpgsql.Networking
+      Hpgsql.QueryInternal
       Hpgsql.SimpleParser
       Paths_hpgsql
   autogen-modules:

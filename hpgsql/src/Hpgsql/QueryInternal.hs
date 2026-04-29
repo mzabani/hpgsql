@@ -113,6 +113,18 @@ mkQueryInternal queryTemplate allParams =
           statements
    in Query {queryString = mconcat queryFrags, queryParams = concatMap rights allParams, isPrepared = False}
 
+-- A practical quasiquoter for SQL. Interpolate Haskell values with @#{}@:
+--
+-- > let name = "Alice" :: Text
+-- > rows <- query conn [sql|SELECT id, email FROM users WHERE name = #{name}|]
+-- > print (rows :: [(Int, Text)])
+--
+-- Values interpolated with @#{}@ are sent as query parameters, so they are safe from SQL injection.
+--
+-- To embed a 'Query' fragment (e.g. a dynamic table name or a sub-query), use @^{}@:
+--
+-- > let tableName = escapeIdentifier "users"
+-- > rows <- query conn [sql|SELECT * FROM ^{tableName}|]
 sql :: QuasiQuoter
 sql =
   QuasiQuoter
@@ -122,6 +134,8 @@ sql =
       quoteDec = error "Hpgsql's sql quasiquoter does not implement quoteDec"
     }
 
+-- | Just like the @sql@ quasiquoter, but every SQL statement inside is
+-- a prepared statement.
 sqlPrep :: QuasiQuoter
 sqlPrep =
   QuasiQuoter

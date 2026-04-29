@@ -13,6 +13,9 @@
 - Read https://www.iankduncan.com/engineering/2024-01-26-records-of-effects, think about it.
 - Connecting with a password
 - Double-check licensing and authorship in cabal files and READMEs
+- Rename "Parser" to "Decoder" everywhere.
+- Why ResAllowNull for composite types? Seems unnecessary.
+- Add a test to exercise interruption safety with a COPY statement
 
 
 ## Less important:

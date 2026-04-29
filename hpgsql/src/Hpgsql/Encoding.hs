@@ -23,9 +23,10 @@ module Hpgsql.Encoding
     genericFromPgRow,
     genericToPgRow,
     nullableField,
-    -- TODO: Methods below should be internal
-    parsePgType,
     compositeTypeParser,
+
+    -- * Internal
+    parsePgType,
   )
 where
 
@@ -143,7 +144,17 @@ type family ResAllowNull (r :: Bool) (a :: Type) :: Type where
   ResAllowNull True a = Maybe a
   ResAllowNull False a = a
 
--- | TODO: Allow users to supply a typeInfo predicate?
+-- | Allows you to create a @FieldParser@ for composite types.
+-- For a type such as:
+--
+-- > CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);
+--
+-- You can define a Haskell type as such:
+--
+-- > data IntAndBool = IntAndBool Int Bool
+-- >
+-- > instance FromPgField IntAndBool where
+-- >   fieldParser = compositeTypeParser DisallowNull (rowParser @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
 compositeTypeParser :: forall a t. AllowNull t -> RowParser a -> FieldParser (ResAllowNull t a)
 compositeTypeParser nullCheck (RowParser {..}) =
   case nullCheck of
@@ -1193,7 +1204,6 @@ instance (ToPgField a) => ProductTypeEncoder (K1 r a) where
 
 newtype LowerCasedPgEnum a = LowerCasedPgEnum a
 
--- | TODO: Why does this instance require UndecidableInstances?
 instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) where
   fieldParser = LowerCasedPgEnum <$> genericEnumFieldParser LT.toLower
 

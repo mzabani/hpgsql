@@ -3,13 +3,17 @@ module Hpgsql.Query
     SingleQuery, -- Do not export constructor
     sql,
     sqlPrep,
-    mkQueryInternal,
-    breakQueryIntoStatements,
     mkQuery,
     escapeIdentifier,
     vALUES,
     preparedStatement,
     nonPreparedStatement,
+
+    -- * Internal
+    -- $internal
+    breakQueryIntoStatements,
+    mkQueryInternal,
+    encodeParam,
   )
 where
 
@@ -20,8 +24,12 @@ import Data.Proxy (Proxy (..))
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements)
-import Hpgsql.QueryInternal (mkQuery, mkQueryInternal, sql, sqlPrep)
+import Hpgsql.QueryInternal (encodeParam, mkQuery, mkQueryInternal, sql, sqlPrep)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
+
+-- $internal
+-- These functions are internal implementation details and are not intended for public use.
+-- They may change or be removed without notice.
 
 -- | Escapes a database object identifier like a table name or a column name,
 -- so it can be embedded  inside a @[sql|...|]@ quasiquote using @^{expr}@ syntax:
@@ -59,8 +67,12 @@ commaSeparatedRowTuples rowTuples =
           rowTuples
    in Query {queryString = mconcat $ List.intersperse [FragmentOfStaticSql ","] queryFragsPerRow, queryParams = mconcat rowTuples, isPrepared = False}
 
+-- | Turns a `Query` into a prepared `Query`, i.e. every SQL statement
+-- in the `Query` will be a prepared statement.
 preparedStatement :: Query -> Query
 preparedStatement Query {..} = Query {isPrepared = True, ..}
 
+-- | Turns a `Query` into a non-prepared `Query`, i.e. every SQL statement
+-- in the `Query` will not be a prepared statement.
 nonPreparedStatement :: Query -> Query
 nonPreparedStatement Query {..} = Query {isPrepared = False, ..}
