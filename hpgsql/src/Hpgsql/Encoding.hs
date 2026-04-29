@@ -21,16 +21,13 @@ module Hpgsql.Encoding
     typeFieldDecoder,
     typeMustBeNamed,
     rawBytesFieldDecoder,
-    singleColRowDecoder,
+    singleField,
     arrayField,
     toPgVectorField,
     genericFromPgRow,
     genericToPgRow,
     nullableField,
     compositeTypeParser,
-
-    -- * Internal
-    parsePgType,
   )
 where
 
@@ -106,8 +103,8 @@ instance Applicative RowDecoder where
 instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowDecoder where
   (>>=) = error "inaccessible bind in Monad RowDecoder instance"
 
-singleColRowDecoder :: FieldDecoder a -> RowDecoder a
-singleColRowDecoder (FieldDecoder {..}) =
+singleField :: FieldDecoder a -> RowDecoder a
+singleField (FieldDecoder {..}) =
   RowDecoder
     { fullRowDecoder = \case
         [singleColInfo] ->
@@ -122,10 +119,10 @@ singleColRowDecoder (FieldDecoder {..}) =
                 case decode nextColBs of
                   Right v -> pure v
                   Left err -> fail err
-        _ -> error "singleColRowDecoder expected a single column OID but got 0 or >1",
+        _ -> error "singleField expected a single column OID but got 0 or >1",
       rowColumnsTypeCheck = \case
         [singleColInfo] -> [(singleColInfo, allowedPgTypes singleColInfo)]
-        _ -> error "singleColRowDecoder's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+        _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
       numExpectedColumns = 1
     }
 
@@ -200,43 +197,43 @@ compositeTypeParser nullCheck (RowDecoder {..}) =
         Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
 
 instance (FromPgField a) => FromPgRow (Only a) where
-  rowDecoder = Only <$> singleColRowDecoder fieldDecoder
+  rowDecoder = Only <$> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b) => FromPgRow (a, b) where
-  rowDecoder = (,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,) <$> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c) => FromPgRow (a, b, c) where
-  rowDecoder = (,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d) => FromPgRow (a, b, c, d) where
-  rowDecoder = (,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e) => FromPgRow (a, b, c, d, e) where
-  rowDecoder = (,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f) => FromPgRow (a, b, c, d, e, f) where
-  rowDecoder = (,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g) => FromPgRow (a, b, c, d, e, f, g) where
-  rowDecoder = (,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h) => FromPgRow (a, b, c, d, e, f, g, h) where
-  rowDecoder = (,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i) => FromPgRow (a, b, c, d, e, f, g, h, i) where
-  rowDecoder = (,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j) => FromPgRow (a, b, c, d, e, f, g, h, i, j) where
-  rowDecoder = (,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  rowDecoder = (,,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l) where
-  rowDecoder = (,,,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
-  rowDecoder = (,,,,,,,,,,,,) <$> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder <*> singleColRowDecoder fieldDecoder
+  rowDecoder = (,,,,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
 
 data FieldEncoder a = FieldEncoder
   { toTypeOid :: !(EncodingContext -> Maybe Oid),
@@ -1231,7 +1228,7 @@ instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
   genRowDecoder = M1 <$> genRowDecoder
 
 instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
-  genRowDecoder = fmap K1 $ singleColRowDecoder $ fieldDecoder @a
+  genRowDecoder = fmap K1 $ singleField $ fieldDecoder @a
 
 genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
 genericToPgRow = contramap from genRowEncoder

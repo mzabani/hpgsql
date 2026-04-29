@@ -40,7 +40,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, rawBytesFieldDecoder, singleColRowDecoder, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Encoding (AllowNull (..), ColumnInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -617,10 +617,10 @@ queryCompositeType conn = withRollback conn $ do
   -- TODO: Test that one can create a record type with FromPgField and ToPgField instances!
   execute conn "CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);"
   execute conn "CREATE TYPE mixed_bin_text AS (numfield INT, textfield TEXT);"
-  let intAndBoolParser = singleColRowDecoder $ compositeTypeParser DisallowNull $ rowDecoder @(Int, Bool)
-      intAndTextParser = singleColRowDecoder $ compositeTypeParser DisallowNull $ rowDecoder @(Int, Text)
-      intAndBoolParserNullableFields = singleColRowDecoder $ compositeTypeParser DisallowNull $ rowDecoder @(Maybe Int, Maybe Bool)
-      intAndBoolParserNullableValue = singleColRowDecoder $ compositeTypeParser AllowNull $ rowDecoder @(Int, Bool)
+  let intAndBoolParser = singleField $ compositeTypeParser DisallowNull $ rowDecoder @(Int, Bool)
+      intAndTextParser = singleField $ compositeTypeParser DisallowNull $ rowDecoder @(Int, Text)
+      intAndBoolParserNullableFields = singleField $ compositeTypeParser DisallowNull $ rowDecoder @(Maybe Int, Maybe Bool)
+      intAndBoolParserNullableValue = singleField $ compositeTypeParser AllowNull $ rowDecoder @(Int, Bool)
   queryWith intAndBoolParser conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` [(14, True)]
   query1 conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` (Only $ IntAndBool 14 True)
   queryWith ((,,) <$> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields) conn (mkQuery "SELECT ROW(NULL,$1)::int_and_bool, ROW($2,NULL)::int_and_bool, ROW(NULL, NULL)::int_and_bool" (True, 27 :: Int)) `shouldReturn` [((Nothing, Just True), (Just 27, Nothing), (Nothing, Nothing))]
@@ -691,15 +691,15 @@ queryEnumTypes conn = withRollback conn $ do
   queryWith (rowDecoder @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn (mkQuery "SELECT $1, $2, $3, $4" (Val1, Val2, Val3, Nothing :: Maybe MyEnum)) `shouldReturn` [(Val1, Val2, Val3, Nothing)]
   -- The statement below will fail because the new myenum type is not in the typeCache
   -- yet. Then we add it and it will pass
-  queryWith (singleColRowDecoder myEnumFieldDecoderWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
+  queryWith (singleField myEnumFieldDecoderWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT 'val2'::myenum" "Query result column types do not match expected column types"
-  queryWith (singleColRowDecoder myEnumFieldDecoderWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]"
+  queryWith (singleField myEnumFieldDecoderWithTypeInfoCheck) conn "SELECT ARRAY['val2'::myenum]"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "SELECT ARRAY['val2'::myenum]" "Query result column types do not match expected column types"
   (refreshTyiCacheAction, queryRes) <-
     runPipeline conn $
       (,)
         <$> refreshTypeInfoCache conn
-        <*> pipelineWith (singleColRowDecoder myEnumFieldDecoderWithTypeInfoCheck) "SELECT 'val2'::myenum"
+        <*> pipelineWith (singleField myEnumFieldDecoderWithTypeInfoCheck) "SELECT 'val2'::myenum"
   refreshTyiCacheAction
   queryRes `shouldReturn` [Val2]
   query conn "SELECT ARRAY['val2'::myenum]" `shouldReturn` [Only (PGArray [Val2])]
