@@ -81,7 +81,7 @@ data ColumnInfo = ColumnInfo
   }
 
 data FieldDecoder a = FieldDecoder
-  { fieldValueParser :: ColumnInfo -> Maybe ByteString -> Either String a,
+  { fieldValueDecoder :: ColumnInfo -> Maybe ByteString -> Either String a,
     allowedPgTypes :: ColumnInfo -> Bool
   }
   deriving stock (Functor)
@@ -107,7 +107,7 @@ singleColRowDecoder (FieldDecoder {..}) =
   RowDecoder
     { fullRowDecoder = \case
         [singleColInfo] ->
-          let decode = fieldValueParser singleColInfo
+          let decode = fieldValueDecoder singleColInfo
            in do
                 lenNextCol <- fromIntegral <$> int32Parser
                 nextColBs <-
@@ -160,7 +160,7 @@ compositeTypeParser nullCheck (RowDecoder {..}) =
   case nullCheck of
     DisallowNull ->
       FieldDecoder
-        { fieldValueParser = \compositeTypeOid -> \case
+        { fieldValueDecoder = \compositeTypeOid -> \case
             Nothing -> Left "Got NULL in composite type but it was not allowed"
             Just bs -> case Parser.parseOnly (parserForRecord compositeTypeOid.encodingContext <* Parser.endOfInput) bs of
               Parser.ParseOk v -> Right v
@@ -169,7 +169,7 @@ compositeTypeParser nullCheck (RowDecoder {..}) =
         }
     AllowNull ->
       FieldDecoder
-        { fieldValueParser = \compositeTypeColInfo -> \case
+        { fieldValueDecoder = \compositeTypeColInfo -> \case
             Nothing -> Right Nothing
             Just bs -> case Parser.parseOnly (parserForRecord compositeTypeColInfo.encodingContext <* Parser.endOfInput) bs of
               Parser.ParseOk v -> Right (Just v)
@@ -729,16 +729,16 @@ binaryFloat8Decoder :: ByteString -> Double
 binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decode @Word64
 
 parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldDecoder a
-parsePgType !requiredTypeOids !fieldValueParser =
+parsePgType !requiredTypeOids !fieldValueDecoder =
   FieldDecoder
-    { fieldValueParser = \_oid -> fieldValueParser,
+    { fieldValueDecoder = \_oid -> fieldValueDecoder,
       allowedPgTypes = (`elem` requiredTypeOids) . typeOid
     }
 
 instance FromPgField () where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \_oid -> \case
+      { fieldValueDecoder = \_oid -> \case
           Just "" -> Right ()
           Just bs -> Left $ "Invalid value '" ++ show bs ++ "' for postgres void type"
           Nothing -> Left "Cannot decode SQL null as the Haskell () type. Use a `Maybe ()`",
@@ -748,7 +748,7 @@ instance FromPgField () where
 instance FromPgField Int where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -759,7 +759,7 @@ instance FromPgField Int where
 instance FromPgField Int16 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -770,7 +770,7 @@ instance FromPgField Int16 where
 instance FromPgField Int32 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -781,7 +781,7 @@ instance FromPgField Int32 where
 instance FromPgField Int64 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -792,7 +792,7 @@ instance FromPgField Int64 where
 instance FromPgField Integer where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
                 Just bs
@@ -809,7 +809,7 @@ instance FromPgField Integer where
 instance FromPgField Oid where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \_ -> \case
+      { fieldValueDecoder = \_ -> \case
           -- Oids are just int4
           Just bs -> Oid <$> binaryIntDecoder int4Oid bs
           Nothing -> Left "Cannot decode SQL null as the Haskell Oid type. Use a `Maybe Oid`",
@@ -824,7 +824,7 @@ instance FromPgField Float where
 instance FromPgField Double where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
           let !decoder
                 | oid == float8Oid = binaryFloat8Decoder
                 | otherwise = float2Double . binaryFloat4Decoder
@@ -843,7 +843,7 @@ instance FromPgField Double where
 anyTypeDecoder :: FieldDecoder ByteString
 anyTypeDecoder =
   FieldDecoder
-    { fieldValueParser = \_oid -> \case
+    { fieldValueDecoder = \_oid -> \case
         Nothing -> Left "Cannot decode SQL null as the `anyTypeDecoder`."
         Just bs -> Right bs,
       allowedPgTypes = const True
@@ -870,7 +870,7 @@ instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \ColumnInfo {typeOid = oid} ->
+      { fieldValueDecoder = \ColumnInfo {typeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
                 Just bs ->
@@ -898,9 +898,9 @@ instance FromPgField Bool where
 
 instance FromPgField Char where
   fieldDecoder =
-    let textParser = fieldValueParser (fieldDecoder @Text)
+    let textParser = fieldValueDecoder (fieldDecoder @Text)
      in FieldDecoder
-          { fieldValueParser = \colInfo@ColumnInfo {typeOid = oid} ->
+          { fieldValueDecoder = \colInfo@ColumnInfo {typeOid = oid} ->
               let !decodeText = textParser colInfo
                in \mbs -> case mbs of
                     Just bs ->
@@ -1060,7 +1060,7 @@ instance FromPgField UUID where
 instance FromPgField Aeson.Value where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser =
+      { fieldValueDecoder =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if typeOid == jsonbOid then BS.drop 1 else Prelude.id
@@ -1073,12 +1073,12 @@ instance FromPgField Aeson.Value where
       }
 
 -- | A FieldDecoder that accepts and decodes SQL NULLs into `Nothing` values
--- for a given parser.
+-- for a given decoder.
 nullableField :: FieldDecoder a -> FieldDecoder (Maybe a)
 nullableField FieldDecoder {..} =
   FieldDecoder
-    { fieldValueParser = \oid ->
-        let !origFieldValueParser = fieldValueParser oid
+    { fieldValueDecoder = \oid ->
+        let !origFieldValueParser = fieldValueDecoder oid
          in \case
               Nothing -> Right Nothing
               justBs -> Just <$> origFieldValueParser justBs,
@@ -1093,7 +1093,7 @@ arrayField :: forall a f. (Monoid (f a)) => (forall m. (Monad m) => Int -> m a -
 arrayField !replicateFunction !elementParser =
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   FieldDecoder
-    { fieldValueParser = \colInfo ->
+    { fieldValueDecoder = \colInfo ->
         let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
@@ -1119,7 +1119,7 @@ arrayField !replicateFunction !elementParser =
           replicateFunction dim_i $ do
             size :: Int <- fromIntegral <$> int32Parser
             elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
-            case elementParser.fieldValueParser elementColInfo elementBs of
+            case elementParser.fieldValueDecoder elementColInfo elementBs of
               Left err -> fail $ "Error parsing array element: " ++ show err
               Right el -> pure el
 
@@ -1130,7 +1130,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser = \colInfo ->
+      { fieldValueDecoder = \colInfo ->
           let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector (Vector a))`"
@@ -1164,7 +1164,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
             do
               size :: Int <- fromIntegral <$> int32Parser
               elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
-              case elementParser.fieldValueParser elementColInfo elementBs of
+              case elementParser.fieldValueDecoder elementColInfo elementBs of
                 Left err -> fail $ "Error parsing array element: " ++ show err
                 Right el -> pure el
 

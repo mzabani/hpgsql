@@ -62,7 +62,7 @@ pgJsonByteString (PgJson bs) = bs
 instance FromPgField PgJson where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser =
+      { fieldValueDecoder =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if typeOid == jsonbOid then BS.drop 1 else Prelude.id
@@ -81,7 +81,7 @@ newtype Aeson a = Aeson {getAeson :: a}
 instance (FromJSON a) => FromPgField (Aeson a) where
   fieldDecoder =
     FieldDecoder
-      { fieldValueParser =
+      { fieldValueDecoder =
           \ColumnInfo {typeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if typeOid == jsonbOid then BS.drop 1 else Prelude.id
