@@ -14,6 +14,7 @@
 - Double-check licensing and authorship in cabal files and READMEs
 - Why ResAllowNull for composite types? Seems unnecessary.
 - Add a test to exercise interruption safety with a COPY statement
+- Document that hpgsql-simple-compat may throw runtime errors even if it compiles! Applications must be tested!
 
 
 ## Less important:

@@ -355,11 +355,6 @@ disconnectedError = fatalError "connection disconnected"
 close :: Connection -> IO ()
 close Connection {..} = mapHpgsqlErrors $ Hpgsql.closeGracefully hpgConn
 
-data Row = Row
-  { row :: {-# UNPACK #-} !PQ.Row,
-    rowresult :: !PQ.Result
-  }
-
 newtype Conversion a = Conversion {runConversion :: Connection -> IO (Ok a)}
 
 liftConversion :: IO a -> Conversion a

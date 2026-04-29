@@ -101,6 +101,8 @@ module Database.PostgreSQL.Simple.FromField
     typeOid,
     PQ.Oid (..),
     PQ.Format (..),
+    fromFieldJSONByteString,
+    fromJSONField,
   )
 where
 
@@ -132,7 +134,7 @@ import Hpgsql.Encoding (FieldDecoder (..), FromPgField (..), arrayField, nullabl
 import qualified Hpgsql.Encoding as Hpgsql
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid)
-import Hpgsql.Types (Aeson, PGArray (..))
+import Hpgsql.Types (Aeson, PGArray (..), getAeson, pgJsonByteString)
 
 -- | Exception thrown if conversion from a SQL value to a Haskell
 -- value fails.
@@ -175,6 +177,7 @@ left :: (Exception a) => a -> Conversion b
 left = conversionError
 
 type FieldParser a = FieldDecoder a
+
 class FromField a where
   fromField :: FieldParser a
   default fromField :: (Hpgsql.FromPgField a) => FieldParser a
@@ -257,42 +260,6 @@ instance FromField (Binary ByteString)
 
 instance (Aeson.FromJSON a) => FromField (Aeson a)
 
--- type FieldParser a = Field -> Maybe ByteString -> Conversion a
-
--- -- | A type that may be converted from a SQL type.
--- class FromField a where
---   fromField :: FieldParser a
-
--- -- | The instances derived here rely on unsafePerformIO and bottoms in lots
--- -- of places. They should be fine for most commonly found FromField instances
--- -- out there, but will crash and burn for others.
--- -- This is also an orphan instance, but we choose to accept that in the name
--- -- of pragmatism: users wanting to migrate to hpgsql will likely find this easier
--- -- than alternatives.
--- instance {-# OVERLAPPABLE #-} (FromField a) => FromPgField a where
---   fieldDecoder =
---     Hpgsql.FieldParser
---       { Hpgsql.fieldValueParser = \colInfo mbs ->
---           let field = Field {result = error "Field.result not available in hpgsql-simple-compat", column = error "Field.column not available in hpgsql-simple-compat", typeOid = fromHpgsqlOid $ Hpgsql.typeOid colInfo}
---               strictBs = fmap LB.toStrict mbs
---            in unsafePerformIO $ do
---                 -- Build a Connection with a pre-populated TypeInfoCache from
---                 -- Hpgsql's encodingContext. This allows 'typename', 'returnError',
---                 -- and 'typeInfo' to work for any type in the cache.
---                 connectionObjects <- newMVar $ hpgsqlTypeInfoCacheToCompat (Hpgsql.encodingContext colInfo)
---                 let conn =
---                       Connection
---                         connectionObjects
---                         (error "Connection not available in FromField instances in hpgsql-simple-compat")
---                         (error "Connection not available in FromField instances in hpgsql-simple-compat")
---                 ok <- runConversion (fromField field strictBs) conn
---                 case ok of
---                   Ok a -> pure (Right a)
---                   Errors errs -> pure (Left (show errs)),
---         Hpgsql.fieldFmt = BadlySupportedTextFmt,
---         Hpgsql.allowedPgTypes = const True
---       }
-
 -- | Returns the data type name.  This is the preferred way of identifying
 --   types that do not have a stable type oid, such as types provided by
 --   extensions to PostgreSQL.
@@ -338,3 +305,9 @@ returnError mkErr f msg = do
       (maybe "" B8.unpack (name f))
       (show (typeOf (undefined :: a)))
       msg
+
+fromJSONField :: (Aeson.FromJSON a) => FieldParser a
+fromJSONField = getAeson <$> fieldDecoder
+
+fromFieldJSONByteString :: FieldParser ByteString
+fromFieldJSONByteString = pgJsonByteString <$> fieldDecoder

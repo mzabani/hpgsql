@@ -28,6 +28,7 @@ module Database.PostgreSQL.Simple.ToField
   ( Action (..),
     ToField (..),
     ToPgField (..),
+    toJSONField,
   )
 where
 
@@ -161,3 +162,6 @@ instance (ToPgField a) => ToField (Vector a)
 instance (ToPgField a) => ToField (PGArray a)
 
 instance (Aeson.ToJSON a) => ToField (Aeson a)
+
+toJSONField :: (Aeson.ToJSON a) => a -> Action
+toJSONField v = QueryArgument $ encodeParam $ Aeson.toJSON v
