@@ -12,21 +12,31 @@ module Hpgsql.Encoding
     EncodingContext (..),
     FieldDecoder (..), -- TODO: Can we export ctor?
     RowDecoder (..), -- TODO: Can we export ctor?
-    LowerCasedPgEnum (..),
     (:.) (..),
-    untypedFieldEncoder,
-    typeFieldEncoder,
-    typeOidWithName,
-    typeFieldDecoder,
-    typeMustBeNamed,
-    rawBytesFieldDecoder,
     singleField,
     arrayField,
     toPgVectorField,
     genericFromPgRow,
     genericToPgRow,
     nullableField,
-    compositeTypeParser,
+
+    -- * Postgres enums
+    LowerCasedPgEnum (..),
+    genericEnumFieldDecoder,
+    genericEnumFieldEncoder,
+
+    -- * Postgres composite types
+    compositeTypeDecoder,
+
+    -- * Driving PostgreSQL type inference
+    typeFieldEncoder,
+    typeOidWithName,
+    typeFieldDecoder,
+    typeMustBeNamed,
+
+    -- * Things you probably don't need
+    rawBytesFieldDecoder,
+    untypedFieldEncoder,
   )
 where
 
@@ -158,9 +168,9 @@ class FromPgRow a where
 -- > data IntAndBool = IntAndBool Int Bool
 -- >
 -- > instance FromPgField IntAndBool where
--- >   fieldDecoder = compositeTypeParser (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
-compositeTypeParser :: forall a. RowDecoder a -> FieldDecoder a
-compositeTypeParser (RowDecoder {..}) =
+-- >   fieldDecoder = compositeTypeDecoder rowDecoder <&> \(i, b) -> IntAndBool i b
+compositeTypeDecoder :: forall a. RowDecoder a -> FieldDecoder a
+compositeTypeDecoder (RowDecoder {..}) =
   FieldDecoder
     { fieldValueDecoder = \compositeTypeOid -> \case
         Nothing -> Left "Got NULL in composite type but it was not allowed"
@@ -187,6 +197,8 @@ compositeTypeParser (RowDecoder {..}) =
       case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (mconcat $ map snd cols) of
         Parser.ParseOk v -> pure v
         Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
+
+compositeTypeEncoder :: error "TODO"
 
 instance (FromPgField a) => FromPgRow (Only a) where
   rowDecoder = Only <$> singleField fieldDecoder
@@ -237,13 +249,6 @@ instance Contravariant FieldEncoder where
 
 class ToPgField a where
   fieldEncoder :: FieldEncoder a
-
--- | Returns a `FieldEncoder` that is sent without a type OID in queries.
--- This means postgres will try to infer the type of these arguments.
--- Check 'typedFieldEncoder' if you're interested in encoding your custom types,
--- you probably don't need this.
-untypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
-untypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}
 
 -- | Allows you to specify a type for a FieldEncoder. This can be useful to avoid
 -- letting postgres infer types itself, which can cause errors. For example:
@@ -1237,14 +1242,32 @@ instance (ProductTypeEncoder f) => ProductTypeEncoder (M1 i c f) where
 instance (ToPgField a) => ProductTypeEncoder (K1 r a) where
   genRowEncoder = contramap unK1 singleFieldRowEncoder
 
+-- | For the very common case of a Haskell enum matching a custom postgres enum type
+-- that has its values all as lower case strings, this newtype can help you derive
+-- instances as such:
+--
+-- > data Mood = Sad | Ok | Happy
+-- >   deriving stock (Generic)
+-- >   deriving (FromPgField, ToPgField) via (LowerCasedPgEnum Mood)
+--
+-- And this would match the Postgres equivalent:
+--
+-- > CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+--
+-- If you run into PostgreSQL type inference problems with this, you can
+-- write instances manually with 'genericEnumFieldDecoder', 'genericEnumFieldEncoder',
+-- 'typeFieldEncoder', and 'typeFieldDecoder'.
 newtype LowerCasedPgEnum a = LowerCasedPgEnum a
 
 instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) where
   fieldDecoder = LowerCasedPgEnum <$> genericEnumFieldDecoder LT.toLower
 
 instance (Generic a, EnumEncoder (Rep a)) => ToPgField (LowerCasedPgEnum a) where
-  fieldEncoder = untypedFieldEncoder $ \_encCtx -> \(LowerCasedPgEnum v) -> NotNull $ genericEnumToPgField Text.toLower v
+  fieldEncoder = untypedFieldEncoder $ \_encCtx -> \(LowerCasedPgEnum v) -> NotNull $ genericEnumFieldEncoder Text.toLower v
 
+-- | One of the functions behind 'LowerCasedPgEnum', but you can decide
+-- how to map your type's constructor names arbitrarily, which can be
+-- useful if you're not using lowercase values in your postgres enums.
 genericEnumFieldDecoder ::
   forall a.
   (Generic a, EnumDecoder (Rep a)) =>
@@ -1271,14 +1294,17 @@ instance (EnumDecoder f) => EnumDecoder (M1 D c f) where
 instance (KnownSymbol ctorName) => EnumDecoder (M1 C ('MetaCons ctorName ctorFixity 'False) U1) where
   genEnumDecoder = Map.singleton (LT.pack $ symbolVal (Proxy @ctorName)) (M1 U1)
 
-genericEnumToPgField ::
+-- | One of the functions behind 'LowerCasedPgEnum', but you can decide
+-- how to map your type's constructor names arbitrarily, which can be
+-- useful if you're not using lowercase values in your postgres enums.
+genericEnumFieldEncoder ::
   forall a.
   (Generic a, EnumEncoder (Rep a)) =>
   -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
   (Text -> Text) ->
   a ->
   ByteString
-genericEnumToPgField nameTransform = encodeUtf8 . nameTransform . genEnumEncoder . from
+genericEnumFieldEncoder nameTransform = encodeUtf8 . nameTransform . genEnumEncoder . from
 
 class EnumEncoder f where
   -- | Returns the textual representation of an enum value's constructor.
@@ -1294,3 +1320,10 @@ instance (EnumEncoder f) => EnumEncoder (M1 D c f) where
 -- U1 is "Unit"-type, that is: no value in the constructor, AKA "pure enum".
 instance (KnownSymbol ctorName) => EnumEncoder (M1 C ('MetaCons ctorName ctorFixity 'False) U1) where
   genEnumEncoder _ = Text.pack $ symbolVal (Proxy @ctorName)
+
+-- | Returns a `FieldEncoder` that is sent without a type OID in queries.
+-- This means postgres will try to infer the type of these arguments.
+-- Check 'typedFieldEncoder' if you're interested in encoding your custom types,
+-- you probably don't need this.
+untypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
+untypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}

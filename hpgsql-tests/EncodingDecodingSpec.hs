@@ -40,7 +40,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (FieldInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Encoding (FieldInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeDecoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -627,10 +627,10 @@ queryCompositeType conn = withRollback conn $ do
   -- TODO: Test that one can create a record type with FromPgField and ToPgField instances!
   execute conn "CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);"
   execute conn "CREATE TYPE mixed_bin_text AS (numfield INT, textfield TEXT);"
-  let intAndBoolParser = singleField $ compositeTypeParser $ rowDecoder @(Int, Bool)
-      intAndTextParser = singleField $ compositeTypeParser $ rowDecoder @(Int, Text)
-      intAndBoolParserNullableFields = singleField $ compositeTypeParser $ rowDecoder @(Maybe Int, Maybe Bool)
-      intAndBoolParserNullableValue = singleField $ nullableField $ compositeTypeParser $ rowDecoder @(Int, Bool)
+  let intAndBoolParser = singleField $ compositeTypeDecoder $ rowDecoder @(Int, Bool)
+      intAndTextParser = singleField $ compositeTypeDecoder $ rowDecoder @(Int, Text)
+      intAndBoolParserNullableFields = singleField $ compositeTypeDecoder $ rowDecoder @(Maybe Int, Maybe Bool)
+      intAndBoolParserNullableValue = singleField $ nullableField $ compositeTypeDecoder $ rowDecoder @(Int, Bool)
   queryWith intAndBoolParser conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` [(14, True)]
   query1 conn (mkQuery "SELECT ROW($1,$2)::int_and_bool" (14 :: Int, True)) `shouldReturn` (Only $ IntAndBool 14 True)
   queryWith ((,,) <$> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields <*> intAndBoolParserNullableFields) conn (mkQuery "SELECT ROW(NULL,$1)::int_and_bool, ROW($2,NULL)::int_and_bool, ROW(NULL, NULL)::int_and_bool" (True, 27 :: Int)) `shouldReturn` [((Nothing, Just True), (Just 27, Nothing), (Nothing, Nothing))]
@@ -642,7 +642,7 @@ data IntAndBool = IntAndBool Int Bool
   deriving stock (Eq, Show)
 
 instance FromPgField IntAndBool where
-  fieldDecoder = compositeTypeParser (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
+  fieldDecoder = compositeTypeDecoder (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
 
 queryArrayTypes :: HPgConnection -> PropertyT IO ()
 queryArrayTypes conn = hedgehog $ do
