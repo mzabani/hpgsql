@@ -16,6 +16,7 @@ import Hpgsql.Transaction
     transactionStatus,
     withTransaction,
   )
+import Hpgsql.Types (Only)
 import Test.Hspec
 
 spec :: Spec

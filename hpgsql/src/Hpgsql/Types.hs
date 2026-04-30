@@ -1,5 +1,6 @@
 module Hpgsql.Types
-  ( Aeson (..),
+  ( Only (..),
+    Aeson (..),
     PgJson, -- Do not export ctor
     PGArray (..),
     (:.) (..),
@@ -15,6 +16,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
+import Data.Tuple.Only (Only (..))
 import Data.Typeable (Proxy (..), Typeable)
 import Hpgsql (FromPgRow (..))
 import Hpgsql.Builder (BinaryField (..))

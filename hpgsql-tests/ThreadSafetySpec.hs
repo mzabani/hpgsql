@@ -19,9 +19,10 @@ import DbUtils
 import Hpgsql
 import Hpgsql.Cancellation (cancelAnyRunningStatement)
 import Hpgsql.Copy (copyFromS, putCopyData, withCopy)
-import Hpgsql.Pipeline (pipelineCmd, pipeline, pipelineWith, runPipeline)
+import Hpgsql.Pipeline (pipeline, pipelineCmd, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
 import Hpgsql.Transaction (transactionStatus)
+import Hpgsql.Types (Only (..))
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import System.Mem (performGC)

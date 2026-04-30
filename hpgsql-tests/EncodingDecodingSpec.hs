@@ -45,7 +45,7 @@ import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid, TypeInfo (..), lookupTypeByOid)
-import Hpgsql.Types (PGArray (..), PgJson)
+import Hpgsql.Types (Only (..), PGArray (..), PgJson)
 import Numeric (showHex)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)

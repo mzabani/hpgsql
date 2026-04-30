@@ -33,8 +33,8 @@ where
 import Data.Functor.Contravariant (Contravariant (..))
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
 import GHC.Generics (Generic (..), K1 (..), M1 (..), type (:*:) (..))
-import Hpgsql.Encoding (Only (..), ToPgRow (..))
-import Hpgsql.Types ((:.) (..))
+import Hpgsql.Encoding (ToPgRow (..))
+import Hpgsql.Types (Only (..), (:.) (..))
 
 -- | A collection type that can be turned into a list of rendering
 -- 'Action's.

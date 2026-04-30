@@ -12,13 +12,13 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
-import Hpgsql (Only (..))
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.Parsing (ParsingOpts (..), parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
 import Hpgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
+import Hpgsql.Types (Only (..))
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 

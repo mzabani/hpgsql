@@ -7,6 +7,7 @@ import DbUtils
   )
 import Hpgsql
 import Hpgsql.Query (sql)
+import Hpgsql.Types (Only (..))
 import Test.Hspec
 
 spec :: Spec

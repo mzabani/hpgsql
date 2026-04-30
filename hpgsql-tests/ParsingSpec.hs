@@ -28,11 +28,11 @@ import GHC.Num (Natural)
 import Hedgehog (Gen, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
-import Hpgsql (Only (..))
 import Hpgsql.Encoding (ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.Parsing (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockListText, flattenBlocks, parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
+import Hpgsql.Types (Only (..))
 import Streaming (Of (..), Stream)
 import qualified Streaming.Internal as S
 import qualified Streaming.Prelude as S

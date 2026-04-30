@@ -18,6 +18,7 @@ import Hpgsql.Connection (libpqConnString)
 import Hpgsql.Pipeline (pipeline1, pipelineCmd_, pipelineSWith, runPipeline)
 import Hpgsql.Query (sql, sqlPrep)
 import Hpgsql.Transaction (transactionStatus, withTransaction)
+import Hpgsql.Types (Only (..))
 import Streaming (Of, Stream)
 import qualified Streaming.Prelude as Streaming
 import Test.Hspec

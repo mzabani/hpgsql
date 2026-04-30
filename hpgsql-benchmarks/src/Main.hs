@@ -42,6 +42,7 @@ import qualified Hpgsql
 import Hpgsql.Connection (libpqConnString)
 import qualified Hpgsql.Copy
 import qualified Hpgsql.Query as Hpgsql
+import qualified Hpgsql.Types as Hpgsql
 import Numeric (showFFloat)
 import Streaming (Of (..))
 import Streaming.Prelude (Stream)

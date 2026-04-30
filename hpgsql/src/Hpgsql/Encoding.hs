@@ -22,20 +22,28 @@
 module Hpgsql.Encoding
   ( -- * Decoding
     FromPgField (..),
-    FromPgRow (..),
+    FieldDecoder (..), -- TODO: Can we export ctor?
     FieldInfo (..),
+    FromPgRow (..),
+    RowDecoder (..), -- TODO: Can we export ctor?
+    singleField,
+    nullableField,
+    genericFromPgRow,
+
+    -- * Encoding
+
+    -- | Keep in mind that Haskell's `Int` is an `Int64` on most
+    -- hardware, which is a mismatch for the commonly used 32-bit
+    -- `integer` PostgreSQL type.
+    -- This is not a problem when decoding because Hpgsql can decode
+    -- `integer` into Haskell's `Int`, but when encoding PostgreSQL
+    -- will understandably not accept a larger type.
     ToPgField (..),
     FieldEncoder (..),
     ToPgRow (..),
     RowEncoder (..),
-    Only (..),
     EncodingContext (..),
-    FieldDecoder (..), -- TODO: Can we export ctor?
-    RowDecoder (..), -- TODO: Can we export ctor?
-    singleField,
-    genericFromPgRow,
     genericToPgRow,
-    nullableField,
 
     -- * PostgreSQL enums
     LowerCasedPgEnum (..),
@@ -1167,7 +1175,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
 int16Parser :: Parser.Parser Int16
 int16Parser = either fail pure . Cereal.decode @Int16 =<< Parser.take 2
 
--- {- Generic deriving -}
+-- | Derives `FromPgRow` generically.
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
 genericFromPgRow = to <$> genRowDecoder @(Rep a)
 
@@ -1286,10 +1294,6 @@ untypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = e
 
 -- | A decoder that accepts any PG type and returns the object's
 -- postgres' binary representation as a ByteString.
--- This can be useful to build `FromPgField` instances for enum types,
--- since postgres uses their UTF8 text representation even in the
--- binary protocol, but otherwise it's easier to compose existing
--- FieldDecoders.
 rawBytesFieldDecoder :: FieldDecoder ByteString
 rawBytesFieldDecoder =
   FieldDecoder

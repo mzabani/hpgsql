@@ -12,6 +12,7 @@ import Hpgsql
 import Hpgsql.Encoding.RowDecoderMonadic (toMonadicRowDecoder)
 import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Transaction (transactionStatus)
+import Hpgsql.Types (Only (..))
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Test.Hspec
