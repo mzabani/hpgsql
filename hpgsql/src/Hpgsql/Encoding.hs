@@ -20,21 +20,22 @@ module Hpgsql.Encoding
     genericToPgRow,
     nullableField,
 
-    -- * Postgres enums
+    -- * PostgreSQL enums
     LowerCasedPgEnum (..),
     genericEnumFieldDecoder,
     genericEnumFieldEncoder,
 
-    -- * Postgres composite types
+    -- * PostgreSQL composite types
     compositeTypeDecoder,
+    compositeTypeEncoder,
 
     -- * Driving PostgreSQL type inference
+    typeFieldDecoder,
     typeFieldEncoder,
     typeOidWithName,
-    typeFieldDecoder,
     typeMustBeNamed,
 
-    -- * Things you probably don't need
+    -- * Others
     rawBytesFieldDecoder,
     untypedFieldEncoder,
   )
@@ -198,7 +199,30 @@ compositeTypeDecoder (RowDecoder {..}) =
         Parser.ParseOk v -> pure v
         Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
 
-compositeTypeEncoder :: error "TODO"
+-- | Allows you to create a @FieldEncoder@ for composite types.
+-- For a type such as:
+--
+-- > CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);
+--
+-- You can define a Haskell type as such:
+--
+-- > data IntAndBool = IntAndBool Int Bool
+-- >
+-- > instance ToPgField IntAndBool where
+-- >   fieldEncoder = typeFieldEncoder (typeOidWithName "int_and_bool")
+-- >     $ compositeTypeEncoder $ contramap (\(IntAndBool i b) -> (fromIntegral i :: Int32, b)) rowEncoder
+compositeTypeEncoder :: forall a. RowEncoder a -> FieldEncoder a
+compositeTypeEncoder rowEnc =
+  FieldEncoder
+    { toTypeOid = \_ -> Nothing,
+      toPgField = \encCtx -> \a ->
+        let fields = map (\f -> f encCtx) (rowEnc.toPgParams a)
+            numCols = Builder.int32BE (fromIntegral $ length fields)
+            encodeField (mOid, bf) =
+              let Oid oid = fromMaybe (Oid 0) mOid
+               in Builder.int32BE oid <> Builder.binaryField bf
+         in NotNull (Builder.toStrictByteString (numCols <> foldMap encodeField fields))
+    }
 
 instance (FromPgField a) => FromPgRow (Only a) where
   rowDecoder = Only <$> singleField fieldDecoder
@@ -843,21 +867,6 @@ instance FromPgField Double where
         allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
       }
 
--- | A decoder that accepts any PG type and returns the object's
--- postgres' binary representation as a ByteString.
--- This can be useful to build `FromPgField` instances for enum types,
--- since postgres uses their UTF8 text representation even in the
--- binary protocol, but otherwise it's easier to compose existing
--- FieldDecoders.
-rawBytesFieldDecoder :: FieldDecoder ByteString
-rawBytesFieldDecoder =
-  FieldDecoder
-    { fieldValueDecoder = \_oid -> \case
-        Nothing -> Left "Cannot decode SQL null as the `rawBytesFieldDecoder`."
-        Just bs -> Right bs,
-      allowedPgTypes = const True
-    }
-
 -- | Allows you to specify a type (and other checks, possibly) for a FieldDecoder.
 -- This can be useful to ensure you're not accidentally decoding a different type.
 --
@@ -1327,3 +1336,18 @@ instance (KnownSymbol ctorName) => EnumEncoder (M1 C ('MetaCons ctorName ctorFix
 -- you probably don't need this.
 untypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
 untypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}
+
+-- | A decoder that accepts any PG type and returns the object's
+-- postgres' binary representation as a ByteString.
+-- This can be useful to build `FromPgField` instances for enum types,
+-- since postgres uses their UTF8 text representation even in the
+-- binary protocol, but otherwise it's easier to compose existing
+-- FieldDecoders.
+rawBytesFieldDecoder :: FieldDecoder ByteString
+rawBytesFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \_oid -> \case
+        Nothing -> Left "Cannot decode SQL null as the `rawBytesFieldDecoder`."
+        Just bs -> Right bs,
+      allowedPgTypes = const True
+    }

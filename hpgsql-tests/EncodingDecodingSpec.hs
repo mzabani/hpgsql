@@ -40,7 +40,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (FieldInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeDecoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Encoding (FieldInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -637,12 +637,23 @@ queryCompositeType conn = withRollback conn $ do
   queryWith ((,) <$> intAndBoolParser <*> intAndBoolParser) conn (mkQuery "SELECT ROW($1,$2)::int_and_bool, ROW($3,$4)::int_and_bool" ((-42) :: Int, True, 91 :: Int, False)) `shouldReturn` [((-42, True), (91, False))]
   queryWith intAndTextParser conn (mkQuery "SELECT ROW($1,$2)::mixed_bin_text" (14 :: Int, "abc" :: Text)) `shouldReturn` [(14, "abc")]
   queryWith intAndBoolParserNullableValue conn "SELECT NULL::int_and_bool" `shouldReturn` [Nothing]
+  -- Round-trip using compositeTypeEncoder
+  join $ runPipeline conn $ refreshTypeInfoCache conn
+  query1 conn (mkQuery "SELECT $1" (Only (IntAndBool 14 True))) `shouldReturn` (Only $ IntAndBool 14 True)
+  query1 conn (mkQuery "SELECT $1" (Only (IntAndBool (-42) False))) `shouldReturn` (Only $ IntAndBool (-42) False)
+  queryWith (singleField $ nullableField fieldDecoder) conn (mkQuery "SELECT $1" (Only (Nothing :: Maybe IntAndBool))) `shouldReturn` [Nothing @IntAndBool]
+  queryWith (singleField $ nullableField fieldDecoder) conn (mkQuery "SELECT $1" (Only (Just (IntAndBool 99 True)))) `shouldReturn` [Just (IntAndBool 99 True)]
 
 data IntAndBool = IntAndBool Int Bool
   deriving stock (Eq, Show)
 
 instance FromPgField IntAndBool where
   fieldDecoder = compositeTypeDecoder (rowDecoder @(Int, Bool)) <&> \(i, b) -> IntAndBool i b
+
+instance ToPgField IntAndBool where
+  fieldEncoder =
+    typeFieldEncoder (typeOidWithName "int_and_bool")
+      $ compositeTypeEncoder $ contramap (\(IntAndBool i b) -> (fromIntegral i :: Int32, b)) rowEncoder
 
 queryArrayTypes :: HPgConnection -> PropertyT IO ()
 queryArrayTypes conn = hedgehog $ do
