@@ -40,6 +40,8 @@ This repository contains [a fork of postgresql-simple](https://github.com/mzaban
 
 It is called hpgsql-simple-compat, and its implementation uses hpgsql. You can get a `HPgConnection` out of it so you can gradually migrate your queries to hpgsql.
 
+You should start by swapping all of "postgresql-simple", "postgresql-libpq", and "postgresql-query" in your cabal files by "hpgsql-simple-compat". But read [MIGRATING.md](/MIGRATING.md) for tips and gotchas.
+
 It also contains parts of [postgresql-libpq](https://hackage.haskell.org/package/postgresql-libpq) and [postgresql-query](https://hackage.haskell.org/package/postgresql-query), all implemented on top of hpgsql.
 
 - <sub>I haven't been able to preserve _everything_, so some differences do exist. Also the library is not feature complete yet.</sub>

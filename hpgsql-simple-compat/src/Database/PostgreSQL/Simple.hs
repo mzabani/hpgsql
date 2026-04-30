@@ -22,7 +22,9 @@
 -- A mid-level client library for the PostgreSQL database, aimed at ease of
 -- use and high performance.
 module Database.PostgreSQL.Simple
-  ( -- * Writing queries
+  ( hpgConn,
+
+    -- * Writing queries
     -- $use
 
     -- ** The Query type
