@@ -16,7 +16,9 @@ module Database.PostgreSQL.Simple.HpgsqlUtils
   )
 where
 
+import Control.Applicative (Alternative (..))
 import Control.Exception (toException)
+import Control.Monad (MonadPlus (..))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
@@ -27,7 +29,7 @@ import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import qualified Hpgsql
 import Hpgsql.Builder (BinaryField)
-import Hpgsql.Encoding (FieldInfo (..), FieldDecoder (..))
+import Hpgsql.Encoding (FieldDecoder (..), FieldInfo (..))
 import Hpgsql.InternalTypes (SingleQueryFragment (..))
 import qualified Hpgsql.InternalTypes as HpgsqlTypes
 import qualified Hpgsql.Query as Hpgsql
@@ -69,13 +71,12 @@ instance Applicative Conversion where
       Ok f -> fmap f (runConversion ma conn)
       Errors errs -> (Errors errs)
 
--- instance Alternative Conversion where
---   empty = Conversion $ \_conn -> pure empty
---   ma <|> mb = Conversion $ \conn -> do
---     oka <- runConversion ma conn
---     case oka of
---       Ok _ -> return oka
---       Errors _ -> (oka <|>) <$> runConversion mb conn
+instance Alternative Conversion where
+  empty = Conversion $ \_ -> empty
+  ma <|> mb = Conversion $ \encCtx ->
+    case runConversion ma encCtx of
+      Ok v -> return v
+      Errors _ -> runConversion mb encCtx
 
 instance Monad Conversion where
   m >>= f = Conversion $ \conn -> do
@@ -83,9 +84,9 @@ instance Monad Conversion where
       Ok a -> runConversion (f a) conn
       Errors err -> Errors err
 
--- instance MonadPlus Conversion where
---   mzero = empty
---   mplus = (<|>)
+instance MonadPlus Conversion where
+  mzero = empty
+  mplus = (<|>)
 
 -- conversionMap :: (Ok a -> Ok b) -> Conversion a -> Conversion b
 -- conversionMap f m = Conversion $ \conn -> f <$> runConversion m conn
