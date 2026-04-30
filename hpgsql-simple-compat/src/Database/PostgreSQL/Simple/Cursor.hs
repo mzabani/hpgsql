@@ -29,7 +29,7 @@ import Control.Exception as E
 import Control.Monad (foldM, unless, void)
 import Data.String (fromString)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
-import Database.PostgreSQL.Simple.Internal as Base hiding (result)
+import Database.PostgreSQL.Simple.Internal as Base
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Hpgsql (Query, execute_, queryMWith)

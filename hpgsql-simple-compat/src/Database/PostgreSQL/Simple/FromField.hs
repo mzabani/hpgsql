@@ -2,6 +2,7 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -85,20 +86,19 @@ module Database.PostgreSQL.Simple.FromField
   ( FromField (..),
     FromPgField (..),
     FieldParser,
-    -- Conversion (),
-    -- runConversion,
+    Conversion (..),
     -- conversionMap,
-    -- conversionError,
+    conversionError,
     ResultError (..),
-    -- returnError,
+    returnError,
     Field,
-    -- typename,
+    typename,
     TypeInfo (..),
     Attribute (..),
-    -- typeInfo,
-    -- typeInfoByOid,
+    typeInfo,
+    typeInfoByOid,
     -- name,
-    -- typeOid,
+    typeOid,
     PQ.Oid (..),
     PQ.Format (..),
     optionalField,
@@ -108,7 +108,6 @@ module Database.PostgreSQL.Simple.FromField
 where
 
 import Control.Exception (Exception (fromException, toException))
-import Control.Monad (replicateM)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
@@ -124,18 +123,17 @@ import Data.Time.LocalTime.Compat (CalendarDiffTime, LocalTime, ZonedTime)
 import Data.Typeable (Typeable, typeOf)
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
-import qualified Data.Vector as Vector
 import qualified Database.PostgreSQL.LibPQ as PQ
-import Database.PostgreSQL.Simple.Compat
 import Database.PostgreSQL.Simple.HpgsqlUtils
 import Database.PostgreSQL.Simple.Internal (postgresqlExceptionFromException, postgresqlExceptionToException)
-import Database.PostgreSQL.Simple.Ok
+import Database.PostgreSQL.Simple.Ok (Ok (..))
 import Database.PostgreSQL.Simple.TypeInfo as TI
+import Database.PostgreSQL.Simple.TypeInfo.Types (fromHpgsqlTypeInfo)
 import Database.PostgreSQL.Simple.Types (Binary (..))
-import Hpgsql.Encoding (FieldDecoder (..), FromPgField (..), arrayField, nullableField)
+import Hpgsql.Encoding (ColumnInfo (..), EncodingContext (..), FromPgField (..))
 import qualified Hpgsql.Encoding as Hpgsql
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (Oid)
+import Hpgsql.TypeInfo (Oid, lookupTypeByOid)
 import Hpgsql.Types (Aeson, PGArray (..), getAeson, pgJsonByteString)
 
 -- | Exception thrown if conversion from a SQL value to a Haskell
@@ -175,8 +173,12 @@ instance Exception ResultError where
   toException = postgresqlExceptionToException
   fromException = postgresqlExceptionFromException
 
--- left :: (Exception a) => a -> Conversion b
--- left = conversionError
+-- | This might be very different from postgresql-simple.
+conversionError :: (Exception err) => err -> Conversion a
+conversionError ex = Conversion $ \_ -> Errors [toException ex]
+
+left :: (Exception a) => a -> Conversion b
+left = conversionError
 
 class FromField a where
   fromField :: FieldParser a
@@ -185,8 +187,10 @@ class FromField a where
     let dec = Hpgsql.fieldDecoder
      in \f ->
           if (Hpgsql.allowedPgTypes dec) f
-            then \mbs -> (Hpgsql.fieldValueDecoder dec) f mbs
-            else \_ -> error "Invalid type OID for FromField instance"
+            then \mbs -> Conversion $ \_encCtx -> case (Hpgsql.fieldValueDecoder dec) f mbs of
+              Right v -> Ok v
+              Left err -> Errors [toException $ userError err]
+            else \_ -> Conversion $ \_encCtx -> Errors [toException $ userError "Invalid type OID for FromField instance"]
 
 instance FromField ()
 
@@ -267,25 +271,20 @@ instance FromField (Binary ByteString)
 
 instance (Aeson.FromJSON a) => FromField (Aeson a)
 
--- | Returns the data type name.  This is the preferred way of identifying
---   types that do not have a stable type oid, such as types provided by
---   extensions to PostgreSQL.
---
---   More concretely,  it returns the @typname@ column associated with the
---   type oid in the @pg_type@ table.  First, hpgsql-simple-compat will check
---   the built-in, static table.   If the type oid is not there,
---   hpgsql-simple-compat will check a per-connection cache,  and then
---   finally query the database's meta-schema.
--- typename :: Field -> Conversion ByteString
--- typename field = typname <$> typeInfo field
+typeOid :: Field -> Oid
+typeOid field = field.fieldTypeOid
 
--- typeInfo :: Field -> Conversion TypeInfo
--- typeInfo Hpgsql.ColumnInfo {..} = Conversion $ \conn -> do
---   Ok <$> (getTypeInfo conn typeOid)
+typename :: Field -> Conversion ByteString
+typename field = typname <$> typeInfo field
 
--- typeInfoByOid :: PQ.Oid -> Conversion TypeInfo
--- typeInfoByOid oid = Conversion $ \conn -> do
---   Ok <$> (getTypeInfo conn oid)
+typeInfo :: Field -> Conversion TypeInfo
+typeInfo colInfo = typeInfoByOid colInfo.fieldTypeOid
+
+typeInfoByOid :: PQ.Oid -> Conversion TypeInfo
+typeInfoByOid oid = Conversion $ \encCtx -> do
+  case lookupTypeByOid oid encCtx.typeInfoCache of
+    Nothing -> Errors [toException $ userError $ "Type OID " ++ show oid ++ " not found in TypeInfoCache"]
+    Just t -> Ok (fromHpgsqlTypeInfo t)
 
 -- | Returns the name of the column.  This is often determined by a table
 --   definition,  but it can be set using an @as@ clause.
@@ -296,22 +295,23 @@ instance (Aeson.FromJSON a) => FromField (Aeson a)
 --   and an 'errMessage',  this fills in the other fields in the
 --   exception value and returns it in a 'Left . SomeException'
 --   constructor.
--- returnError ::
---   forall a err.
---   (Typeable a, Exception err) =>
---   (String -> Maybe PQ.Oid -> String -> String -> String -> err) ->
---   Field ->
---   String ->
---   Conversion a
--- returnError mkErr f msg = do
---   typnam <- typename f
---   left $
---     mkErr
---       (B8.unpack typnam)
---       (error "no tableOid in hpgsql")
---       (maybe "" B8.unpack (name f))
---       (show (typeOf (undefined :: a)))
---       msg
+returnError ::
+  forall a err.
+  (Typeable a, Exception err) =>
+  (String -> Maybe PQ.Oid -> String -> String -> String -> err) ->
+  Field ->
+  String ->
+  Conversion a
+returnError mkErr f msg = do
+  typnam <- typename f
+  left $
+    mkErr
+      (B8.unpack typnam)
+      (error "no tableOid in hpgsql")
+      -- (maybe "" B8.unpack (name f))
+      "column name not available in hpgsql-simple-compat"
+      (show (typeOf (undefined :: a)))
+      msg
 
 -- | For dealing with SQL @null@ values outside of the 'FromField' class.
 --   Alternatively, one could use 'Control.Applicative.optional',  but that

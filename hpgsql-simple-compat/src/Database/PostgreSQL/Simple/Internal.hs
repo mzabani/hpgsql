@@ -2,11 +2,13 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -31,10 +33,8 @@
 -- disappear from this module.
 module Database.PostgreSQL.Simple.Internal where
 
-import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Exception
-import Control.Monad (MonadPlus (..))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as LBS
@@ -49,7 +49,6 @@ import Data.Typeable
 import Data.Word
 import Database.PostgreSQL.LibPQ (ExecStatus (..), Oid (..))
 import qualified Database.PostgreSQL.LibPQ as PQ
-import Database.PostgreSQL.Simple.Ok
 import Database.PostgreSQL.Simple.ToField (Action (..))
 import Database.PostgreSQL.Simple.TypeInfo.Types (TypeInfo)
 import Database.PostgreSQL.Simple.Types (Query (..))
@@ -58,19 +57,6 @@ import GHC.IO.Exception
 import Hpgsql (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))
 import qualified Hpgsql
 import qualified Hpgsql.Connection
-
--- | A Field represents metadata about a particular field
---
--- You don't particularly want to retain these structures for a long
--- period of time,  as they will retain the entire query result,  not
--- just the field metadata
-data Field = Field
-  { result :: !PQ.Result,
-    column :: {-# UNPACK #-} !PQ.Column,
-    -- | This returns the type oid associated with the column.  Analogous
-    --   to libpq's @PQftype@.
-    typeOid :: {-# UNPACK #-} !PQ.Oid
-  }
 
 type TypeInfoCache = IntMap.IntMap TypeInfo
 
@@ -354,47 +340,6 @@ disconnectedError = fatalError "connection disconnected"
 
 close :: Connection -> IO ()
 close Connection {..} = mapHpgsqlErrors $ Hpgsql.closeGracefully hpgConn
-
-newtype Conversion a = Conversion {runConversion :: Connection -> IO (Ok a)}
-
-liftConversion :: IO a -> Conversion a
-liftConversion m = Conversion (\_ -> Ok <$> m)
-
-instance Functor Conversion where
-  fmap f m = Conversion $ \conn -> (fmap . fmap) f (runConversion m conn)
-
-instance Applicative Conversion where
-  pure a = Conversion $ \_conn -> pure (pure a)
-  mf <*> ma = Conversion $ \conn -> do
-    okf <- runConversion mf conn
-    case okf of
-      Ok f -> (fmap . fmap) f (runConversion ma conn)
-      Errors errs -> return (Errors errs)
-
-instance Alternative Conversion where
-  empty = Conversion $ \_conn -> pure empty
-  ma <|> mb = Conversion $ \conn -> do
-    oka <- runConversion ma conn
-    case oka of
-      Ok _ -> return oka
-      Errors _ -> (oka <|>) <$> runConversion mb conn
-
-instance Monad Conversion where
-  m >>= f = Conversion $ \conn -> do
-    oka <- runConversion m conn
-    case oka of
-      Ok a -> runConversion (f a) conn
-      Errors err -> return (Errors err)
-
-instance MonadPlus Conversion where
-  mzero = empty
-  mplus = (<|>)
-
-conversionMap :: (Ok a -> Ok b) -> Conversion a -> Conversion b
-conversionMap f m = Conversion $ \conn -> f <$> runConversion m conn
-
-conversionError :: (Exception err) => err -> Conversion a
-conversionError err = Conversion $ \_ -> return (Errors [toException err])
 
 newTempName :: Connection -> IO Query
 newTempName Connection {..} = do
