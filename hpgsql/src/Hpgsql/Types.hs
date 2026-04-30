@@ -16,7 +16,7 @@ import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
 import Data.Typeable (Typeable)
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (FieldInfo (..), FieldDecoder (..), FieldEncoder (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
+import Hpgsql.Encoding (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid, lookupTypeByOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.

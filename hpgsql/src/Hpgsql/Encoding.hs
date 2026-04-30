@@ -1,21 +1,39 @@
 {-# LANGUAGE UndecidableInstances #-}
 
+-- |
+--
+-- = Encoding and decoding fields and rows
+--
+-- This module contains a collection of functions, classes, and instances that can
+-- help you build encoders and decoders for your Haskell types.
+--
+-- Here's an example:
+--
+-- > data Person = Person { name :: Text, born :: Day, heightMeters :: Double }
+-- >   deriving stock Generic
+-- >   deriving anyclass FromPgRow
+-- >
+-- > persons :: [Person] <- query conn "SELECT * FROM persons"
+--
+-- Note that Hpgsql's `RowDecoder` does not have a `Monad` instance because that allows it to
+-- type check query results and field counts even when queries return zero rows. If you need
+-- to write a row decoder that is monadic (because decoding can change depending on the values
+-- of fields), check "Hpgsql.Encoding.RowDecoderMonadic".
 module Hpgsql.Encoding
-  ( FromPgRow (..),
+  ( -- * Decoding
     FromPgField (..),
+    FromPgRow (..),
+    FieldInfo (..),
     ToPgField (..),
     FieldEncoder (..),
     ToPgRow (..),
     RowEncoder (..),
     Only (..),
-    FieldInfo (..),
     EncodingContext (..),
     FieldDecoder (..), -- TODO: Can we export ctor?
     RowDecoder (..), -- TODO: Can we export ctor?
-    (:.) (..),
+    (:.) (..), -- Move to Types.hs?
     singleField,
-    arrayField,
-    toPgVectorField,
     genericFromPgRow,
     genericToPgRow,
     nullableField,
@@ -38,6 +56,8 @@ module Hpgsql.Encoding
     -- * Others
     rawBytesFieldDecoder,
     untypedFieldEncoder,
+    toPgVectorField,
+    arrayField,
   )
 where
 
@@ -90,12 +110,14 @@ data FieldInfo = FieldInfo
     encodingContext :: !EncodingContext
   }
 
+-- | A decoder for a single field/column.
 data FieldDecoder a = FieldDecoder
   { fieldValueDecoder :: FieldInfo -> Maybe ByteString -> Either String a,
     allowedPgTypes :: FieldInfo -> Bool
   }
   deriving stock (Functor)
 
+-- | `f1 <> f2` produces a `FieldDecoder` that tries `f1` first, and if that fails it tries `f2`.
 instance Semigroup (FieldDecoder a) where
   dec1 <> dec2 =
     FieldDecoder
@@ -581,24 +603,6 @@ instance (ToPgField a) => ToPgField (Maybe a) where
               Just n -> fe.toPgField encCtx n
           }
 
--- | Returns a field-encoding function for a vector-like Foldable (e.g. Lists and Vector itself).
-toPgVectorField :: forall f a. (Foldable f, ToPgField a) => EncodingContext -> f a -> BinaryField
-toPgVectorField encCtx =
-  let fe = fieldEncoder @a
-      encodeElement el = Builder.binaryField $ fe.toPgField encCtx el
-      Oid elemOid = fromMaybe (Oid 0) (fe.toTypeOid encCtx)
-   in \vec ->
-        let ndim = Builder.byteString $ Cereal.encode @Int32 1
-            -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
-            hasNull = Builder.byteString $ Cereal.encode @Int32 0
-            -- hasNull = Builder.byteString $ Cereal.encode @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
-            elemOidBs = Builder.byteString $ Cereal.encode @Int32 elemOid
-            lb1 = Builder.byteString $ Cereal.encode @Int32 1
-            (Sum len, encodedElements) = foldMap (\el -> (Sum 1, encodeElement el)) vec
-            dim1 = Builder.byteString $ Cereal.encode @Int32 len
-            fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
-         in NotNull (Builder.toStrictByteString fullBs)
-
 instance (ToPgField a) => ToPgField (Vector a) where
   fieldEncoder =
     let fe = fieldEncoder @a
@@ -867,7 +871,7 @@ instance FromPgField Double where
         allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
       }
 
--- | Allows you to specify a type (and other checks, possibly) for a FieldDecoder.
+-- | Allows you to specify a type (and other checks, possibly) for a `FieldDecoder`.
 -- This can be useful to ensure you're not accidentally decoding a different type.
 --
 -- > data MyEnum = Val1 | Val2 | Val3
@@ -1137,41 +1141,6 @@ nullableField FieldDecoder {..} =
 instance (FromPgField a) => FromPgField (Maybe a) where
   fieldDecoder = nullableField fieldDecoder
 
--- | A FieldDecoder that accepts and decodes Postgres arrays.
-arrayField :: forall a f. (Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> FieldDecoder a -> FieldDecoder (f a)
-arrayField !replicateFunction !elementParser =
-  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
-  FieldDecoder
-    { fieldValueDecoder = \colInfo ->
-        let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
-         in \case
-              Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
-              Just bs -> case Parser.parseOnly arrayFieldDecoder bs of
-                Parser.ParseOk v -> Right v
-                Parser.ParseFail err -> Left err,
-      allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
-    }
-  where
-    arrayParser :: EncodingContext -> Parser.Parser (f a)
-    arrayParser encodingContext = do
-      !ndim <- int32Parser
-      !_hasNull <- int32Parser
-      !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-      let !elementColInfo = FieldInfo elementTypeOid encodingContext
-      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
-      if ndim == 0
-        then pure mempty
-        else do
-          !dim_i :: Int <- fromIntegral <$> int32Parser
-          !_lb_i <- int32Parser
-          unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
-          replicateFunction dim_i $ do
-            size :: Int <- fromIntegral <$> int32Parser
-            elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
-            case elementParser.fieldValueDecoder elementColInfo elementBs of
-              Left err -> fail $ "Error parsing array element: " ++ show err
-              Right el -> pure el
-
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
   fieldDecoder = arrayField Vector.replicateM fieldDecoder
 
@@ -1332,7 +1301,7 @@ instance (KnownSymbol ctorName) => EnumEncoder (M1 C ('MetaCons ctorName ctorFix
 
 -- | Returns a `FieldEncoder` that is sent without a type OID in queries.
 -- This means postgres will try to infer the type of these arguments.
--- Check 'typedFieldEncoder' if you're interested in encoding your custom types,
+-- Check `typedFieldEncoder` if you're interested in encoding your custom types,
 -- you probably don't need this.
 untypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
 untypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}
@@ -1351,3 +1320,56 @@ rawBytesFieldDecoder =
         Just bs -> Right bs,
       allowedPgTypes = const True
     }
+
+-- | Returns a field-encoding function for a vector-like Foldable (e.g. Lists and Vector itself).
+toPgVectorField :: forall f a. (Foldable f, ToPgField a) => EncodingContext -> f a -> BinaryField
+toPgVectorField encCtx =
+  let fe = fieldEncoder @a
+      encodeElement el = Builder.binaryField $ fe.toPgField encCtx el
+      Oid elemOid = fromMaybe (Oid 0) (fe.toTypeOid encCtx)
+   in \vec ->
+        let ndim = Builder.byteString $ Cereal.encode @Int32 1
+            -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
+            hasNull = Builder.byteString $ Cereal.encode @Int32 0
+            -- hasNull = Builder.byteString $ Cereal.encode @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
+            elemOidBs = Builder.byteString $ Cereal.encode @Int32 elemOid
+            lb1 = Builder.byteString $ Cereal.encode @Int32 1
+            (Sum len, encodedElements) = foldMap (\el -> (Sum 1, encodeElement el)) vec
+            dim1 = Builder.byteString $ Cereal.encode @Int32 len
+            fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
+         in NotNull (Builder.toStrictByteString fullBs)
+
+-- | A FieldDecoder that accepts and decodes Postgres arrays.
+arrayField :: forall a f. (Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> FieldDecoder a -> FieldDecoder (f a)
+arrayField !replicateFunction !elementParser =
+  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
+  FieldDecoder
+    { fieldValueDecoder = \colInfo ->
+        let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
+              Just bs -> case Parser.parseOnly arrayFieldDecoder bs of
+                Parser.ParseOk v -> Right v
+                Parser.ParseFail err -> Left err,
+      allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
+    }
+  where
+    arrayParser :: EncodingContext -> Parser.Parser (f a)
+    arrayParser encodingContext = do
+      !ndim <- int32Parser
+      !_hasNull <- int32Parser
+      !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
+      let !elementColInfo = FieldInfo elementTypeOid encodingContext
+      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
+      if ndim == 0
+        then pure mempty
+        else do
+          !dim_i :: Int <- fromIntegral <$> int32Parser
+          !_lb_i <- int32Parser
+          unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+          replicateFunction dim_i $ do
+            size :: Int <- fromIntegral <$> int32Parser
+            elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
+            case elementParser.fieldValueDecoder elementColInfo elementBs of
+              Left err -> fail $ "Error parsing array element: " ++ show err
+              Right el -> pure el

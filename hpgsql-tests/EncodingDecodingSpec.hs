@@ -40,7 +40,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (FieldInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -652,8 +652,9 @@ instance FromPgField IntAndBool where
 
 instance ToPgField IntAndBool where
   fieldEncoder =
-    typeFieldEncoder (typeOidWithName "int_and_bool")
-      $ compositeTypeEncoder $ contramap (\(IntAndBool i b) -> (fromIntegral i :: Int32, b)) rowEncoder
+    typeFieldEncoder (typeOidWithName "int_and_bool") $
+      compositeTypeEncoder $
+        contramap (\(IntAndBool i b) -> (fromIntegral i :: Int32, b)) rowEncoder
 
 queryArrayTypes :: HPgConnection -> PropertyT IO ()
 queryArrayTypes conn = hedgehog $ do
@@ -799,3 +800,7 @@ valuesTypeRoundTrip conn = hedgehog $ do
   resultsSingleVal <- liftIO $ query conn [sql|WITH t AS (^{vALUES rowsSingleVal}) SELECT * FROM t|]
   List.sort results2Tuple === List.sort rows2Tuple
   List.sort resultsSingleVal === List.sort rowsSingleVal
+
+data Person = Person {name :: Text, born :: Day, heightMeters :: Double}
+  deriving stock (Generic)
+  deriving anyclass (FromPgRow)

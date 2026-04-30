@@ -16,6 +16,8 @@ import qualified Hpgsql.SimpleParser as Parser
 -- decoded fields can change the behaviour of other decoded fields.
 -- The regular @RowDecoder@ can even type-check queries that return no results, while
 -- this can't.
+-- Look for the 'query' and 'pipeline' functions with an 'M' in them for ways to query
+-- with this kind of row decoder.
 newtype RowDecoderMonadic a = RowDecoderMonadic
   { -- | Returns the parsed row and the number of columns parsed
     fullRowDecoder :: ConversionState -> Parser.Parser (a, Int)
