@@ -27,7 +27,7 @@ import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import qualified Hpgsql
 import Hpgsql.Builder (BinaryField)
-import Hpgsql.Encoding (ColumnInfo (..), FieldDecoder (..))
+import Hpgsql.Encoding (FieldInfo (..), FieldDecoder (..))
 import Hpgsql.InternalTypes (SingleQueryFragment (..))
 import qualified Hpgsql.InternalTypes as HpgsqlTypes
 import qualified Hpgsql.Query as Hpgsql
@@ -93,7 +93,7 @@ instance Monad Conversion where
 -- conversionError :: (Exception err) => err -> Conversion a
 -- conversionError err = Conversion $ \_ -> return (Errors [toException err])
 
-type Field = ColumnInfo
+type Field = FieldInfo
 
 type FieldParser a = Field -> Maybe ByteString -> Conversion a
 

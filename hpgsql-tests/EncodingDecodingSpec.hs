@@ -40,7 +40,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Encoding (ColumnInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Encoding (FieldInfo (..), EncodingContext (..), FieldDecoder (..), FieldEncoder (..), LowerCasedPgEnum (..), ToPgField (..), ToPgRow, compositeTypeParser, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))

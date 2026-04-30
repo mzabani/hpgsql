@@ -8,7 +8,7 @@ module Hpgsql.Encoding
     ToPgRow (..),
     RowEncoder (..),
     Only (..),
-    ColumnInfo (..),
+    FieldInfo (..),
     EncodingContext (..),
     FieldDecoder (..), -- TODO: Can we export ctor?
     RowDecoder (..), -- TODO: Can we export ctor?
@@ -73,15 +73,15 @@ import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
 
-data ColumnInfo = ColumnInfo
+data FieldInfo = FieldInfo
   { fieldTypeOid :: !Oid,
     -- | The EncodingContext as of the moment the query ran.
     encodingContext :: !EncodingContext
   }
 
 data FieldDecoder a = FieldDecoder
-  { fieldValueDecoder :: ColumnInfo -> Maybe ByteString -> Either String a,
-    allowedPgTypes :: ColumnInfo -> Bool
+  { fieldValueDecoder :: FieldInfo -> Maybe ByteString -> Either String a,
+    allowedPgTypes :: FieldInfo -> Bool
   }
   deriving stock (Functor)
 
@@ -99,10 +99,10 @@ instance Semigroup (FieldDecoder a) where
       }
 
 data RowDecoder a = RowDecoder
-  { fullRowDecoder :: [ColumnInfo] -> Parser.Parser a,
+  { fullRowDecoder :: [FieldInfo] -> Parser.Parser a,
     -- | Returns the same colInfos with a boolean indicating if
     -- the expected types match for each colInfo.
-    rowColumnsTypeCheck :: [ColumnInfo] -> [(ColumnInfo, Bool)],
+    rowColumnsTypeCheck :: [FieldInfo] -> [(FieldInfo, Bool)],
     numExpectedColumns :: !Int
   }
   deriving stock (Functor, Generic)
@@ -176,7 +176,7 @@ compositeTypeParser (RowDecoder {..}) =
       -- we can see a composite type's binary representation consists of: number of columns (Int32) + for_each_column { OID (Int32) + size_or_minus_1 (Int32) + Bytes }
       numCols <- fromIntegral <$> int32Parser
       unless (numCols == numExpectedColumns) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numExpectedColumns
-      let mkColInfo oid = ColumnInfo oid encodingContext
+      let mkColInfo oid = FieldInfo oid encodingContext
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
         (sizeBs, !size) <- Parser.match $ fromIntegral <$> int32Parser
@@ -752,7 +752,7 @@ instance FromPgField () where
 instance FromPgField Int where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
+      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -763,7 +763,7 @@ instance FromPgField Int where
 instance FromPgField Int16 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
+      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -774,7 +774,7 @@ instance FromPgField Int16 where
 instance FromPgField Int32 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
+      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -785,7 +785,7 @@ instance FromPgField Int32 where
 instance FromPgField Int64 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
+      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
           let !decode = binaryIntDecoder oid
            in \case
                 Just bs -> decode bs
@@ -796,7 +796,7 @@ instance FromPgField Int64 where
 instance FromPgField Integer where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
+      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
                 Just bs
@@ -828,7 +828,7 @@ instance FromPgField Float where
 instance FromPgField Double where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
+      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
           let !decoder
                 | oid == float8Oid = binaryFloat8Decoder
                 | otherwise = float2Double . binaryFloat4Decoder
@@ -869,10 +869,10 @@ rawBytesFieldDecoder =
 -- >         $ convert <$> rawBytesFieldDecoder
 --
 -- This will work unless you use non-default flags in your connection options.
-typeFieldDecoder :: (ColumnInfo -> Bool) -> FieldDecoder a -> FieldDecoder a
+typeFieldDecoder :: (FieldInfo -> Bool) -> FieldDecoder a -> FieldDecoder a
 typeFieldDecoder fieldCheck dec = dec {allowedPgTypes = fieldCheck}
 
-typeMustBeNamed :: Text -> (ColumnInfo -> Bool)
+typeMustBeNamed :: Text -> (FieldInfo -> Bool)
 typeMustBeNamed typName = \fieldInfo ->
   (typeName <$> lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache) == Just typName
 
@@ -897,7 +897,7 @@ instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \ColumnInfo {fieldTypeOid = oid} ->
+      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
           let !decodeInt = binaryIntDecoder @Int64 oid
            in \case
                 Just bs ->
@@ -927,7 +927,7 @@ instance FromPgField Char where
   fieldDecoder =
     let textParser = fieldValueDecoder (fieldDecoder @Text)
      in FieldDecoder
-          { fieldValueDecoder = \colInfo@ColumnInfo {fieldTypeOid = oid} ->
+          { fieldValueDecoder = \colInfo@FieldInfo {fieldTypeOid = oid} ->
               let !decodeText = textParser colInfo
                in \mbs -> case mbs of
                     Just bs ->
@@ -1096,7 +1096,7 @@ instance FromPgField Aeson.Value where
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder =
-          \ColumnInfo {fieldTypeOid} ->
+          \FieldInfo {fieldTypeOid} ->
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
              in \case
@@ -1143,7 +1143,7 @@ arrayField !replicateFunction !elementParser =
       !ndim <- int32Parser
       !_hasNull <- int32Parser
       !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-      let !elementColInfo = ColumnInfo elementTypeOid encodingContext
+      let !elementColInfo = FieldInfo elementTypeOid encodingContext
       when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
       if ndim == 0
         then pure mempty
@@ -1181,7 +1181,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
         !ndim <- int32Parser
         !_hasNull <- int32Parser
         !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-        let !elementColInfo = ColumnInfo elementTypeOid encodingContext
+        let !elementColInfo = FieldInfo elementTypeOid encodingContext
         when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
         unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
         -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all

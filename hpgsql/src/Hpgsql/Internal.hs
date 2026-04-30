@@ -139,7 +139,7 @@ import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnString (..))
-import Hpgsql.Encoding (ColumnInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
+import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
@@ -1279,7 +1279,7 @@ consumeStreamingResults rp conn qryId = S.effect $ do
     Just (Middle3 (RowDescription coltypes)) -> do
       encodingContext <- readMVar conn.encodingContext
       let numResultColumns = length coltypes
-          mkColInfo oid = ColumnInfo oid encodingContext
+          mkColInfo oid = FieldInfo oid encodingContext
           colInfos = map mkColInfo coltypes
       !rowparser <- case rp of
         ApplicativeRowDecoder (RowDecoder rparser rtypecheck expectedNumCols) -> do
