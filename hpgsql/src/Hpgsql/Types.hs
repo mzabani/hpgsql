@@ -2,6 +2,7 @@ module Hpgsql.Types
   ( Aeson (..),
     PgJson, -- Do not export ctor
     PGArray (..),
+    (:.) (..),
     pgJsonByteString,
   )
 where
@@ -14,9 +15,10 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
-import Data.Typeable (Typeable)
+import Data.Typeable (Proxy (..), Typeable)
+import Hpgsql (FromPgRow (..))
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), ToPgField (..), arrayField, toPgVectorField)
+import Hpgsql.Encoding (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, toPgVectorField)
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid, lookupTypeByOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
@@ -38,6 +40,27 @@ instance forall a. (ToPgField a) => ToPgField (PGArray a) where
 
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
   fieldDecoder = PGArray <$> arrayField replicateM fieldDecoder
+
+-- | A way to compose two rows.
+data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
+
+infixr 3 :.
+
+instance forall a b. (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
+  rowEncoder =
+    let !re1 = rowEncoder @a
+        !re2 = rowEncoder @b
+     in RowEncoder
+          { toPgParams = \(a :. b) -> re1.toPgParams a ++ re2.toPgParams b,
+            toTypeOids = \_ -> re1.toTypeOids (Proxy @a) ++ re2.toTypeOids (Proxy @b),
+            toBinaryCopyBytes = \encCtx ->
+              let !toBytes1 = re1.toBinaryCopyBytes encCtx
+                  !toBytes2 = re2.toBinaryCopyBytes encCtx
+               in \(a :. b) -> toBytes1 a <> toBytes2 b
+          }
+
+instance (FromPgRow a, FromPgRow b) => FromPgRow (a :. b) where
+  rowDecoder = (:.) <$> rowDecoder <*> rowDecoder
 
 -- | A JSON type that does not incur the costs of deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates

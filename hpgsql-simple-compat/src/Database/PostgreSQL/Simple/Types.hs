@@ -55,9 +55,9 @@ import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
-import Hpgsql.Encoding (ToPgField (..), (:.) (..))
+import Hpgsql.Encoding (ToPgField (..))
 import qualified Hpgsql.Encoding as Hpgsql
-import Hpgsql.Types (PGArray (..))
+import Hpgsql.Types (PGArray (..), (:.) (..))
 
 -- | A placeholder for the SQL @NULL@ value.
 data Null = Null

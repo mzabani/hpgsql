@@ -32,7 +32,6 @@ module Hpgsql.Encoding
     EncodingContext (..),
     FieldDecoder (..), -- TODO: Can we export ctor?
     RowDecoder (..), -- TODO: Can we export ctor?
-    (:.) (..), -- Move to Types.hs?
     singleField,
     genericFromPgRow,
     genericToPgRow,
@@ -704,27 +703,6 @@ instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgF
 --     toPgParams = \xs -> concatMap toPgParams xs
 --     , toTypeOids = \_ -> concatMap (\)
 --   } $ \cols -> map (\v encodingContext -> let typOid = toTypeOid (Proxy @a) encodingContext in (typOid, toPgField encodingContext v)) cols
-
--- | A way to compose rows.
-data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
-
-infixr 3 :.
-
-instance forall a b. (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
-  rowEncoder =
-    let !re1 = rowEncoder @a
-        !re2 = rowEncoder @b
-     in RowEncoder
-          { toPgParams = \(a :. b) -> re1.toPgParams a ++ re2.toPgParams b,
-            toTypeOids = \_ -> re1.toTypeOids (Proxy @a) ++ re2.toTypeOids (Proxy @b),
-            toBinaryCopyBytes = \encCtx ->
-              let !toBytes1 = re1.toBinaryCopyBytes encCtx
-                  !toBytes2 = re2.toBinaryCopyBytes encCtx
-               in \(a :. b) -> toBytes1 a <> toBytes2 b
-          }
-
-instance (FromPgRow a, FromPgRow b) => FromPgRow (a :. b) where
-  rowDecoder = (:.) <$> rowDecoder <*> rowDecoder
 
 -- | The OID for `Data.Int`, which is machine dependent.
 haskellIntOid :: Oid

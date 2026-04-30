@@ -12,10 +12,7 @@
 - Connecting with a password
 - Double-check licensing and authorship in cabal files and READMEs
 - Add a test to exercise interruption safety with a COPY statement
-- Document that hpgsql-simple-compat may throw runtime errors even if it compiles! Applications must be tested!
-- untypedFieldEncoder is used for enums, but do we even need `LowerCasedPgEnum` anymore?
 - Document all thread and interruption safety notes in all functions!
-- Write a guide to migrate from postgresql-simple
 
 ## Less important:
 - Experiment with TCP NoDelay
