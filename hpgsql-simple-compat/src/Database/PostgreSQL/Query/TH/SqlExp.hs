@@ -4,8 +4,11 @@ module Database.PostgreSQL.Query.TH.SqlExp
   )
 where
 
-import qualified Hpgsql.Query
-import Language.Haskell.TH.Quote
+import Hpgsql.Query (sql)
+import Language.Haskell.TH.Quote (QuasiQuoter)
 
+-- | Quasiquoter for SQL expressions. Returns a 'SqlBuilder' (which is an alias
+-- for hpgsql's 'Hpgsql.Query.Query'). Supports @#{}@ for parameter interpolation
+-- and @^{}@ for query fragment embedding.
 sqlExp :: QuasiQuoter
-sqlExp = Hpgsql.Query.sql
+sqlExp = sql

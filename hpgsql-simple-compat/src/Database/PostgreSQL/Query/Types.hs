@@ -22,7 +22,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.List as L
-import Database.PostgreSQL.Query.SqlBuilder (SqlBuilder (..), ToSqlBuilder (..), builderResultPure)
+import Database.PostgreSQL.Query.SqlBuilder (ToSqlBuilder (..))
 import Database.PostgreSQL.Simple.Internal (Connection)
 import Hpgsql.InternalTypes (Query)
 import Hpgsql.Query (escapeIdentifier)
@@ -50,7 +50,7 @@ instance IsString FN where
       f a b = not $ a == '.' || b == '.'
 
 instance ToSqlBuilder FN where
-  toSqlBuilder fn = SqlBuilder $ \_ _ -> pure $ builderResultPure (fnToQuery fn)
+  toSqlBuilder = fnToQuery
 
 -- | Convert a 'FN' to a 'Query' by quoting each part and joining with dots.
 fnToQuery :: FN -> Query

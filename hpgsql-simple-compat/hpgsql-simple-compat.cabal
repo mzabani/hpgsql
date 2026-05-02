@@ -87,6 +87,7 @@ library
     , text
     , aeson
     , attoparsec
+    , haskell-src-meta
     , hpgsql
     , hashable
     , mtl
