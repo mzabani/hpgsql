@@ -1,10 +1,3 @@
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------

@@ -1,7 +1,3 @@
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 
 module Database.PostgreSQL.Simple.HpgsqlUtils
   ( toHpgsqlQuery,

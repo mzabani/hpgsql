@@ -1,6 +1,3 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE RecordWildCards #-}
 
 -----------------------------------------------------------------------------
 

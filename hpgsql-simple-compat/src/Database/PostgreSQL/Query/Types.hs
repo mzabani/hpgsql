@@ -1,5 +1,3 @@
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Database.PostgreSQL.Query.Types
   ( -- * Auxiliary types
@@ -38,7 +36,8 @@ FN ["user","name"]
 
 -}
 newtype FN = FN [Text]
-  deriving (Ord, Eq, Show, Semigroup, Monoid)
+  deriving stock (Ord, Eq, Show)
+  deriving newtype (Semigroup, Monoid)
 
 instance IsString FN where
   fromString s =
@@ -74,7 +73,7 @@ type MonadPostgres m = HasPostgres m
 newtype PgMonadT m a = PgMonadT
   { unPgMonadT :: ReaderT Connection m a
   }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans, MonadFail)
+  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadTrans, MonadFail)
 
 instance (MonadIO m) => HasPostgres (PgMonadT m) where
   withPGConnection action = do

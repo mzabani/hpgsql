@@ -1,5 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
 -- Module:      Database.PostgreSQL.Simple.Time.Internal.Parser

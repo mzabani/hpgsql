@@ -1,13 +1,3 @@
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 
 -- |
 -- Module:      Database.PostgreSQL.Simple.FromField

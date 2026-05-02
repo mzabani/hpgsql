@@ -1,5 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ViewPatterns #-}
 
 ------------------------------------------------------------------------------
 -- Module:      Database.PostgreSQL.Simple.Time.Internal.Printer

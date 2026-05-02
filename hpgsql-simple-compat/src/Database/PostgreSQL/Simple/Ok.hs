@@ -1,6 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveFunctor      #-}
-{-# LANGUAGE CPP                #-}
 
 ------------------------------------------------------------------------------
 -- |

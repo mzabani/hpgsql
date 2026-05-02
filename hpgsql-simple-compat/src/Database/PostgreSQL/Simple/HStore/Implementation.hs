@@ -1,7 +1,3 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE ViewPatterns #-}
 
 ------------------------------------------------------------------------------
 
@@ -72,7 +68,9 @@ class ToHStoreText a where
   toHStoreText :: a -> HStoreText
 
 -- | Represents escape text, ready to be the key or value to a hstore value
-newtype HStoreText = HStoreText Builder deriving (Typeable, Semigroup, Monoid)
+newtype HStoreText = HStoreText Builder
+  deriving stock (Typeable)
+  deriving newtype (Semigroup, Monoid)
 
 instance ToHStoreText HStoreText where
   toHStoreText = id

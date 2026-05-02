@@ -1,5 +1,3 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 ------------------------------------------------------------------------------
 

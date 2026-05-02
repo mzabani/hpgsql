@@ -1,6 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE OverloadedStrings  #-}
-{-# LANGUAGE RecordWildCards    #-}
 ------------------------------------------------------------------------------
 -- |
 -- Module:      Database.PostgreSQL.Simple.Errors

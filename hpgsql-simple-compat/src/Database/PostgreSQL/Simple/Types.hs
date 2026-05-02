@@ -1,10 +1,3 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeApplications #-}
 
 ------------------------------------------------------------------------------
 
@@ -173,7 +166,8 @@ instance ToPgField (Binary ByteString) where
 
 -- | Wrap text for use as sql identifier, i.e. a table or column name.
 newtype Identifier = Identifier {fromIdentifier :: Text}
-  deriving (Eq, Ord, Read, Show, Typeable, IsString)
+  deriving stock (Eq, Ord, Read, Show, Typeable)
+  deriving newtype (IsString)
 
 instance ToField Identifier where
   toField (Identifier ident) = EscapeIdentifier $ encodeUtf8 ident

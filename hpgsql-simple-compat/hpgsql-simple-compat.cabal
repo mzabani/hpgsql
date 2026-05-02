@@ -100,11 +100,41 @@ library
     , vector
 
   default-extensions:
-    BangPatterns
-    DoAndIfThenElse
-    OverloadedStrings
-    TypeOperators
-    ViewPatterns
+      CPP
+      BangPatterns
+      ConstraintKinds
+      DataKinds
+      DefaultSignatures
+      DeriveAnyClass
+      DeriveFunctor
+      DeriveGeneric
+      DerivingStrategies
+      DerivingVia
+      DuplicateRecordFields
+      LambdaCase
+      FlexibleContexts
+      FlexibleInstances
+      GADTs
+      GeneralizedNewtypeDeriving
+      InstanceSigs
+      MultiParamTypeClasses
+      MultiWayIf
+      NamedFieldPuns
+      NumericUnderscores
+      OverloadedRecordDot
+      OverloadedStrings
+      RankNTypes
+      RecordWildCards
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      TypeFamilies
+      TypeFamilyDependencies
+      TypeOperators
+      QuasiQuotes
+      TemplateHaskell
+      ViewPatterns
 
   ghc-options: -O1 -Wall -fno-warn-name-shadowing
 
