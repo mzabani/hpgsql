@@ -433,6 +433,9 @@ data InternalConnectionState = InternalConnectionState
     -- regardless of what happens.
     -- When such a thing happens, this field is True.
     mustIssueRollbackBeforeNextCommand :: Bool,
+    -- | How did we end up with a TQueue inside an object that
+    -- is already a TVar? This is unnecessary and could live out of
+    -- InternalConnectionState.
     notificationsReceived :: !(TQueue NotificationResponse),
     preparedStatementNames :: Set String,
     transactionStatusBeforeCurrentPipeline :: !TransactionStatus

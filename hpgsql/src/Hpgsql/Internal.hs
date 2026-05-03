@@ -143,7 +143,7 @@ import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEnco
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
-import Hpgsql.Msgs (AuthenticationOk, BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
+import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
 import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
@@ -239,8 +239,7 @@ data InternalConnectOrCancelRequest a where
 
 internalConnectOrCancel :: InternalConnectOrCancelRequest a -> ConnectOpts -> ConnString -> DiffTime -> IO a
 internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..} conntimeout = do
-  -- TODO: Proper exception rethrowing when we fail to connect
-  sockOrTimeout <- timeout (fromInteger $ diffTimeToPicoseconds conntimeout `div` 1_000_000) $ getConnectedSocket Nothing
+  sockOrTimeout <- timeout (fromInteger $ diffTimeToPicoseconds conntimeout `div` 1_000_000) getConnectedSocket
   case sockOrTimeout of
     Nothing -> throwIrrecoverableError "Could not connect in the supplied timeout"
     -- TODO: It's still possible for an asynchronous exception to interrupt this before the `onException` handler is installed
@@ -276,16 +275,24 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
           Socket.close sock
         Connect -> do
           -- TODO: Send encoding and other things with "options"?
+          debugPrint "Sending startup message"
           nonAtomicSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user, database, options}
-          void $ receiveNextMsgUnsafe hpgConnPartialDoNotReturn (msgParser @AuthenticationOk)
+          AuthenticationResponse authMethod <- receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure hpgConnPartialDoNotReturn (msgParser @Msgs.AuthenticationResponse) $ \case
+            Right knownAuthMsg -> pure knownAuthMsg
+            Left unknownAuthMsg -> throwIrrecoverableError $ "Received unknown authentication message from PostgreSQL. This is probably an authentication method unsupported by hpgsql. More details about the message: " ++ show unknownAuthMsg
+          case authMethod of
+            AuthOk -> pure ()
+            AuthCleartextPassword -> do
+              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage password
+              receiveAuthOkOrThrow hpgConnPartialDoNotReturn
+            _ -> throwIrrecoverableError $ "Hpgsql does not yet support authenticating with method " ++ show authMethod
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
-          -- TODO: Throw informative error for unimplemented authentication methods
           case errorOrBackendKeyData of
             Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Socket connected but postgresql threw an error during connection startup handshake", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
             Right backendKeyData -> do
               readyForQueryOrError <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @ReadyForQuery <|> Left <$> msgParser @ErrorResponse
               case readyForQueryOrError of
-                Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "Some postgresql error happened while connecting", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
+                Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "A postgresql error happened while connecting", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
                 Right ReadyForQuery {} -> pure ()
               debugPrint $ "Connected with backend PID " ++ show (backendPid backendKeyData)
               let finalConn = hpgConnPartialDoNotReturn {connPid = backendPid backendKeyData, cancelSecretKey = backendSecretKey backendKeyData}
@@ -296,33 +303,40 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
     receiveNextMsgUnsafe :: (Show a) => HPgConnection -> PgMsgParser a -> IO a
     receiveNextMsgUnsafe conn parser = receiveNextMsgWithMaskedContinuation conn parser pure
 
+    receiveAuthOkOrThrow :: HPgConnection -> IO ()
+    receiveAuthOkOrThrow conn = do
+      authMsg <- receiveNextMsgUnsafe conn (Right <$> msgParser @AuthenticationResponse <|> Left <$> msgParser @ErrorResponse)
+      case authMsg of
+        Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "A postgresql error happened while connecting", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
+        Right (AuthenticationResponse authMethod) ->
+          unless (authMethod == AuthOk) $ throwIrrecoverableError "Failed to authenticate user."
+
     -- TODO: Get ParameterStatus and set client_encoding to UTF8 if it isn't
-    getConnectedSocket resolvedAddr = do
-      addrInfo <- case resolvedAddr of
-        Just addrInfo -> pure addrInfo
-        Nothing ->
-          case connectOrCancel of
-            CancelNotConnect _ addrInfo -> pure addrInfo
-            Connect ->
-              if "/" `List.isInfixOf` hostname
-                then
-                  pure
-                    AddrInfo
-                      { addrFlags = [],
-                        addrFamily = Socket.AF_UNIX,
-                        addrSocketType = Socket.Stream,
-                        addrProtocol = Socket.defaultProtocol,
-                        addrAddress = Socket.SockAddrUnix $ List.dropWhileEnd (== '/') hostname ++ "/.s.PGSQL." ++ show port,
-                        addrCanonName = Nothing
-                      }
-                else do
-                  addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
-                  case addrInfos of
-                    [] -> throwIrrecoverableError "Could not resolve address"
-                    addrInfo : _ -> pure addrInfo
+    getConnectedSocket = do
+      addrInfo <- case connectOrCancel of
+        CancelNotConnect _ addrInfo -> pure addrInfo
+        Connect ->
+          if "/" `List.isInfixOf` hostname
+            then
+              pure
+                AddrInfo
+                  { addrFlags = [],
+                    addrFamily = Socket.AF_UNIX,
+                    addrSocketType = Socket.Stream,
+                    addrProtocol = Socket.defaultProtocol,
+                    addrAddress = Socket.SockAddrUnix $ List.dropWhileEnd (== '/') hostname ++ "/.s.PGSQL." ++ show port,
+                    addrCanonName = Nothing
+                  }
+            else do
+              addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
+              case addrInfos of
+                [] -> throwIrrecoverableError "Could not resolve address"
+                addrInfo : _ -> pure addrInfo
+      -- TODO: It's still possible for an asynchronous exception to interrupt this before the `onException` handler is installed
       sock <- Socket.openSocket addrInfo
-      Socket.connect sock (Socket.addrAddress addrInfo)
-      pure (sock, addrInfo)
+      flip onException (Socket.close sock) $ do
+        Socket.connect sock (Socket.addrAddress addrInfo)
+        pure (sock, addrInfo)
 
 -- | Fetches custom types from postgres and refreshes this connection's
 -- internal typeInfo cache with them.
@@ -442,7 +456,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
   -- always the first byte of a valid Message while keeping this function
   -- interruptible.
   -- This means we can't extract a message partially from the internal buffer,
-  -- even in face of asynchronous exceptions.
+  -- due to the presence of asynchronous exceptions.
   -- So we append to the buffer up until it has been fully fetched,
   -- and then extract it from the buffer in one piece.
   currentBuf <- receiveUntilBufferHasAtLeast 5

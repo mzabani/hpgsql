@@ -23,7 +23,7 @@ in
       pg_ctl -l "$out/pg_ctl_init.log" start
       scripts/wait-for-pg-ready.sh
       # Create things needed by tests
-      psql -c 'CREATE EXTENSION citext'
+      psql -c "CREATE EXTENSION citext; CREATE USER user_pass WITH PASSWORD 'hpgsql-password'"
 
       ${hpgsql-tests}/bin/hpgsql-tests ${hspecArgs}
 

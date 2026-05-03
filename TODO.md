@@ -9,7 +9,8 @@
 - Double-check our tests don't import Internal modules except for very specific things
     - Otherwise we might accidentally not be exposing functions in public modules
 - Read https://www.iankduncan.com/engineering/2024-01-26-records-of-effects, think about it.
-- Connecting with a password
+- Connecting with a password with md5
+- Replacing `String` with `Text` in public facing APIs, except maybe for error messages?
 - Double-check licensing and authorship in cabal files and READMEs
 - Add a test to exercise interruption safety with a COPY statement
 - Document all thread and interruption safety notes in all functions!

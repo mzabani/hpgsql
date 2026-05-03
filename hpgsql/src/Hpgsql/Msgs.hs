@@ -1,4 +1,4 @@
-module Hpgsql.Msgs (AuthenticationOk (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), Sync (..), parsePgMessage) where
+module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), PasswordMessage (..), Sync (..), parsePgMessage) where
 
 -- Many types are defined in Hpgsql.InternalTypes and re-exported here.
 
@@ -22,7 +22,7 @@ import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8)
 import Data.Word (Word8)
-import Hpgsql.Builder (BinaryField, Builder)
+import Hpgsql.Builder (BinaryField, Builder, builderLength)
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
 import Hpgsql.TypeInfo (Oid (..))
@@ -71,7 +71,13 @@ nulTerminatedCStringParser = do
   Parsec.skip (== 0)
   pure $ decodeUtf8 stringWithoutNul
 
-data AuthenticationOk = AuthenticationOk
+newtype AuthenticationResponse = AuthenticationResponse AuthenticationMethod
+  deriving stock (Show)
+
+data AuthenticationMethod = AuthOk | AuthKerberosV5 | AuthCleartextPassword | AuthMD5Password | AuthGSS | AuthGSSContinue | AuthSSPI | AuthSASL | AuthSASLContinue | AuthSASLFinal
+  deriving stock (Eq, Show)
+
+newtype PasswordMessage = PasswordMessage String
   deriving stock (Show)
 
 data BackendKeyData = BackendKeyData {backendPid :: Int32, backendSecretKey :: Int32}
@@ -129,9 +135,18 @@ data Sync = Sync
 data Terminate = Terminate
   deriving stock (Show)
 
-instance FromPgMessage AuthenticationOk where
-  msgParser = PgMsgParser $ \c _restOfMsg -> case c of
-    'R' -> Just AuthenticationOk
+instance FromPgMessage AuthenticationResponse where
+  msgParser = PgMsgParser $ \c restOfMsg -> case c of
+    'R' -> case LBS.length restOfMsg of
+      4 ->
+        case Cereal.decodeLazy @Int32 restOfMsg of
+          Right 0 -> Just $ AuthenticationResponse AuthOk
+          Right 2 -> Just $ AuthenticationResponse AuthKerberosV5
+          Right 3 -> Just $ AuthenticationResponse AuthCleartextPassword
+          Right 7 -> Just $ AuthenticationResponse AuthGSS
+          Right 9 -> Just $ AuthenticationResponse AuthSSPI
+          _ -> Nothing
+      _ -> Nothing -- We don't care too much about parsing every possible response yet
     _ -> Nothing
 
 instance FromPgMessage BackendKeyData where
@@ -225,6 +240,12 @@ instance FromPgMessage ParseComplete where
   msgParser = PgMsgParser $ \c _ -> case c of
     '1' -> Just ParseComplete
     _ -> Nothing
+
+instance ToPgMessage PasswordMessage where
+  toPgMessage (PasswordMessage password) =
+    let passwordBs = nulTermCString password
+        msgLen = builderLength passwordBs + 4
+     in Builder.char7 'p' <> Builder.int32BE msgLen <> passwordBs
 
 instance ToPgMessage Query where
   toPgMessage (Query bs) =

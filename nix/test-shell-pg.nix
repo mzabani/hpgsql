@@ -12,10 +12,14 @@ pkgs.mkShell {
     export PGUSER="postgres"
     trap "pg_ctl stop" EXIT ERR
     scripts/init-pg-cluster.sh ./conf/test-db
-    pg_ctl start
+    pg_ctl start || {
+      mkdir -p failed-test-db-logs
+      cp "$PGDATA/log" failed-test-db-logs/ -R
+      exit 1
+    }
     scripts/wait-for-pg-ready.sh
 
     # Create things needed by tests
-    psql -c 'CREATE EXTENSION citext'
+    psql -c "CREATE EXTENSION citext; CREATE USER user_pass WITH PASSWORD 'hpgsql-password'"
   '';
 }
