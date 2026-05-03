@@ -2,7 +2,7 @@
 
 Once you clone this repository, you will need [Nix](https://nixos.org/download/) and optionally [direnv](https://direnv.net/). Then you can run `direnv allow` or `nix-shell` in the project's root and you will have everything you need to build, run tests and benchmarks, locally.
 
-I recommend you run `run list` to see what's available, but I'll paste a sample here as of 2026-05-22 as well:
+I recommend you run `run list` to see what's available, but I'll paste a sample here as of 2026-04-22 as well:
 ```shell
 $ run list
 Commands:
@@ -21,6 +21,12 @@ Commands:
 You don't need to install and configure PostgreSQL yourself: all the commands start temporary instances of PostgreSQL as necessary, and stop them at the end, including e.g. `run tests`.
 
 But you can run `pg_ctl start` and then `psql postgres` to play with a local instance. Use `pg_ctl stop` to stop it.
+
+For example:
+
+```shell
+$ run tests -- --match Pipelining
+```
 
 ## CI pipeline
 

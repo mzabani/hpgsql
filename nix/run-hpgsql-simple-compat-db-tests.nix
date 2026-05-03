@@ -25,7 +25,7 @@ in
       scripts/wait-for-pg-ready.sh
 
       # Create things needed by tests
-      psql -c "CREATE EXTENSION citext; CREATE USER user_pass WITH PASSWORD 'hpgsql-password'"
+      psql -c "CREATE EXTENSION citext; CREATE USER user_pass WITH PASSWORD 'hpgsql-password'; SET password_encryption = 'md5'; CREATE USER user_md5 WITH PASSWORD 'hpgsql-password'"
 
       ${hpgsql-simple-compat-tests}/bin/hpgsql-simple-compat-tests ${hspecArgs}
 

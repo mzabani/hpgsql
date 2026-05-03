@@ -32,7 +32,7 @@ f val = do
 
 ### Current status
 
-Hpgsql is in active development, is new and has not been used in Production yet. Compared to postgresql-simple, it lacks a lot of the authentication methods that libpq provides, including using encrypted connections and at the moment even md5-password-protected auth.
+Hpgsql is in active development, is new and has not been used in Production yet. It currently lacks (at least) many of the authentication methods that libpq provides; for now only cleartext and MD5 password auth are supported, and only unencrypted connections.
 
 ### Migrating from postgresql-simple
 

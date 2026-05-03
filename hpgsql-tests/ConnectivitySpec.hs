@@ -25,6 +25,9 @@ spec = do
     it
       "Connecting with unencrypted password"
       connectingWithUnencryptedPassword
+    it
+      "Connecting with MD5 password"
+      connectingWithMD5Password
 
 connectingToNonExistingDb :: IO ()
 connectingToNonExistingDb = do
@@ -51,3 +54,12 @@ connectingWithUnencryptedPassword = do
     cancelAnyRunningStatement conn False -- This requires connecting again, so it's a reasonable test
     query1 conn "SELECT current_user"
   connectedUser `shouldBe` ("user_pass" :: String)
+
+connectingWithMD5Password :: IO ()
+connectingWithMD5Password = do
+  hpgsqlConnInfo <- testConnInfo
+  connect hpgsqlConnInfo {user = "user_md5", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
+  Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_md5", password = "hpgsql-password"} 10 $ \conn -> do
+    cancelAnyRunningStatement conn False -- This requires connecting again, so it's a reasonable test
+    query1 conn "SELECT current_user"
+  connectedUser `shouldBe` ("user_md5" :: String)

@@ -283,7 +283,10 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
           case authMethod of
             AuthOk -> pure ()
             AuthCleartextPassword -> do
-              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage password
+              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage authMethod user password
+              receiveAuthOkOrThrow hpgConnPartialDoNotReturn
+            AuthMD5Password _ -> do
+              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage authMethod user password
               receiveAuthOkOrThrow hpgConnPartialDoNotReturn
             _ -> throwIrrecoverableError $ "Hpgsql does not yet support authenticating with method " ++ show authMethod
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
@@ -309,7 +312,9 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..}
       case authMsg of
         Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "A postgresql error happened while connecting", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
         Right (AuthenticationResponse authMethod) ->
-          unless (authMethod == AuthOk) $ throwIrrecoverableError "Failed to authenticate user."
+          case authMethod of
+            AuthOk -> pure ()
+            _ -> throwIrrecoverableError "Failed to authenticate user."
 
     -- TODO: Get ParameterStatus and set client_encoding to UTF8 if it isn't
     getConnectedSocket = do
