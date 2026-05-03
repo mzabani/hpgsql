@@ -8,6 +8,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Int (Int32)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import DbUtils
   ( aroundConn,
     irrecoverableErrorMustContain,
@@ -23,7 +24,7 @@ import Hpgsql.Pipeline (pipeline, pipelineCmd, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
 import Hpgsql.Transaction (transactionStatus)
 import Hpgsql.Types (Only (..))
-import Streaming (Of (..))
+import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
 import System.Mem (performGC)
 import System.Timeout (timeout)
@@ -40,7 +41,6 @@ spec = do
         it
           "Exercise interruption safety"
           exerciseInterruptionSafety
-
         it
           "Query interruption is semantics-preserving inside explicit transaction"
           interruptingQueryInsideTransactionPreservesSemantics
@@ -85,6 +85,10 @@ spec = do
         it
           ("Can send query after BINARY COPY thread killed - useTimeout " ++ show useTimeout)
           (sendQueryAfterBinaryCopyKilled useTimeout)
+
+      it
+        "Exercise COPY interruption safety"
+        exerciseCopyInterruptionSafety
 
 -- | A function that behaves just like `timeout` except that `myThreadId` inside the time-limited
 -- action will be the same as the calling thread's if `useTimeout` is true (because it will use `timeout`)
@@ -252,6 +256,22 @@ exerciseInterruptionSafety conn = do
       -- putStrLn $ "Killing thread, time: " ++ show i
       cancel queryAsync
     execute conn "SELECT 1" `shouldReturn` 1
+
+-- | Massively exercise sending an asynchronous exception to a COPY FROM STDIN
+-- that is actively sending data to the backend.
+exerciseCopyInterruptionSafety :: HPgConnection -> IO ()
+exerciseCopyInterruptionSafety conn = do
+  execute_ conn "CREATE UNLOGGED TABLE copy_stress_test (str TEXT)"
+  let veryLongTxtString :: Text = Text.pack $ take 100 $ repeat 'x'
+      rowStream :: Stream (Of (Only Text)) IO () = S.replicate 100_000_000 (Only veryLongTxtString)
+  forM_ [0_001 :: Int .. 2_000] $ \i -> do
+    withAsync (copyFromS conn [sql|COPY copy_stress_test FROM STDIN WITH (FORMAT BINARY)|] rowStream) $ \queryAsync -> do
+      threadDelay i
+      -- putStrLn $ "Killing thread, time: " ++ show i
+      cancel queryAsync
+    execute conn "SELECT 1" `shouldReturn` 1
+  execute conn "SELECT 1" `shouldReturn` 1
+  execute_ conn "DROP TABLE copy_stress_test"
 
 -- | Inside an explicit transaction, cancelling an interrupted query would
 -- make the entire transaction fail because of the error. We want interruption
