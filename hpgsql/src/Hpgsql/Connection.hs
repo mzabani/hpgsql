@@ -1,6 +1,7 @@
 module Hpgsql.Connection
   ( ConnString (..),
     parseConnString,
+    ResetConnectionOpts (..),
     libpqConnString,
   )
 where
@@ -35,7 +36,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
-import Hpgsql.InternalTypes (ConnString (..))
+import Hpgsql.InternalTypes (ConnString (..), ResetConnectionOpts (..))
 import Network.URI
   ( URI (..),
     URIAuth (..),
@@ -43,6 +44,11 @@ import Network.URI
     unEscapeString,
   )
 import Prelude hiding (takeWhile)
+
+-- | Parses a libpq compatible connection string.
+parseConnString :: Text -> Either String ConnString
+parseConnString =
+  parseOnly (connStringParser <* endOfInput)
 
 -- | Renders a libpq compatible connection string.
 -- TODO: Copy tests from codd!
@@ -67,10 +73,6 @@ libpqConnString ConnString {..} =
         "'"
           <> Text.replace "'" "\\'" (Text.replace "\\" "\\\\" un)
           <> "'"
-
-parseConnString :: Text -> Either String ConnString
-parseConnString =
-  parseOnly (connStringParser <* endOfInput)
 
 -- | Parser that consumes any kind of Unicode space character, including \t, \n, \r, \f, \v.
 skipAllWhiteSpace :: Parser ()

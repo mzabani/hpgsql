@@ -6,7 +6,7 @@ module Hpgsql.InternalTypes
     IrrecoverableHpgsqlError (..),
     ErrorDetail (..),
     NotificationResponse (..),
-    PoolCleanup (..),
+    ResetConnectionOpts (..),
     TransactionStatus (..),
     EncodingContext (..), -- re-exported from Hpgsql.TypeInfo
     throwIrrecoverableError,
@@ -304,7 +304,7 @@ data ErrorDetail
 data NotificationResponse = NotificationResponse {notifierPid :: !Int32, channelName :: !Text, notifPayload :: !Text}
   deriving stock (Eq, Show)
 
-data PoolCleanup = PoolCleanup
+data ResetConnectionOpts = ResetConnectionOpts
   { -- | Runs `RESET ALL` and `RESET ROLE` on the connection. Defaults to True.
     resetAll :: Bool,
     -- | Runs `UNLISTEN *` on the connection and clears the internal queue of notifications. Defaults to True.

@@ -8,8 +8,8 @@ import DbUtils
     testConnInfo,
   )
 import Hpgsql
+import Hpgsql.Connection (resetConnectionState)
 import Hpgsql.Notification (NotificationResponse (..), getNotification, getNotificationNonBlocking)
-import Hpgsql.Pool (beforeReturningToPool)
 import Hpgsql.Query (sql)
 import System.Timeout (timeout)
 import Test.Hspec
@@ -32,9 +32,9 @@ spec = do
     xit
       "getNotification blocks and works even after orphaned query"
       getNotificationBlocksAndWorksEvenAfterOrphanedQuery
-  aroundConn $ describe "beforeReturningToPool" $ do
+  aroundConn $ describe "resetConnectionState" $ do
     it
-      "Pending notification is cleared by beforeReturningToPool"
+      "Pending notification is cleared by resetConnectionState"
       pendingNotifClearedByBeforeReturningToPool
     it
       "Bad transaction state means exception"
@@ -110,11 +110,11 @@ pendingNotifClearedByBeforeReturningToPool :: HPgConnection -> IO ()
 pendingNotifClearedByBeforeReturningToPool conn = do
   execute_ conn "LISTEN test_chan"
   execute_ conn "NOTIFY test_chan, 'hello'"
-  beforeReturningToPool conn Nothing
+  resetConnectionState conn Nothing
   -- 100ms should be plenty of time to receive a notification if there was one
   timeout 100_000 (getNotification conn) `shouldReturn` Nothing
 
 badTransactionStateMeansException :: HPgConnection -> IO ()
 badTransactionStateMeansException conn = do
   execute_ conn "BEGIN"
-  beforeReturningToPool conn Nothing `shouldThrow` irrecoverableErrorWithMsg "transaction was left in an invalid state"
+  resetConnectionState conn Nothing `shouldThrow` irrecoverableErrorWithMsg "transaction was left in an invalid state"

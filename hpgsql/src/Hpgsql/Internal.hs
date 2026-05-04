@@ -51,7 +51,7 @@ module Hpgsql.Internal
     copyFromS,
 
     -- * Pool
-    beforeReturningToPool,
+    resetConnectionState,
 
     -- * Transaction
     transactionStatus,
@@ -141,7 +141,7 @@ import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnString (..))
 import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
-import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PoolCleanup (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
+import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), ResetConnectionOpts (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
@@ -374,14 +374,16 @@ getParameterStatus HPgConnection {parameterStatusMap} paramName = Map.lookup par
 getBackendPid :: HPgConnection -> Int32
 getBackendPid HPgConnection {connPid} = connPid
 
--- | Run this function before putting the connection back into a pool
--- to run some health checks and reset some forms of connection state.
-beforeReturningToPool ::
+-- | Resets many forms of connection state in an attempt to make it
+-- as similar as possible to a newly opened connection. It can be useful to
+-- run this before e.g. putting a connection back into a connection pool.
+-- Check `ResetConnectionOpts` for more details.
+resetConnectionState ::
   HPgConnection ->
   -- | Pass `Nothing` to use defaults.
-  Maybe PoolCleanup ->
+  Maybe ResetConnectionOpts ->
   IO ()
-beforeReturningToPool conn@HPgConnection {internalConnectionState} mCleanOpts = do
+resetConnectionState conn@HPgConnection {internalConnectionState} mCleanOpts = do
   STM.atomically $ do
     st <- STM.readTVar internalConnectionState
     when (isLeft $ connectionReadyForNewPipeline st) $ throwIrrecoverableError "There are still active queries in progress. Make sure to close this connection with `closeForcefully` or consume all existing queries' results"
@@ -394,7 +396,7 @@ beforeReturningToPool conn@HPgConnection {internalConnectionState} mCleanOpts = 
   executeMany_ conn $ (if unlistenAll cleanOpts then ["UNLISTEN *"] else []) ++ (if resetAll cleanOpts then ["RESET ALL", "RESET ROLE"] else [])
   when (unlistenAll cleanOpts) clearInternalNotificationQueue
   where
-    cleanOpts = fromMaybe PoolCleanup {resetAll = True, unlistenAll = True, checkTransactionState = True} mCleanOpts
+    cleanOpts = fromMaybe ResetConnectionOpts {resetAll = True, unlistenAll = True, checkTransactionState = True} mCleanOpts
     clearInternalNotificationQueue = STM.atomically $ do
       st <- STM.readTVar internalConnectionState
       emptyQueue <- STM.newTQueue

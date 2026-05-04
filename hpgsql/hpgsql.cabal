@@ -35,7 +35,6 @@ library
       Hpgsql.Notification
       Hpgsql.Parsing
       Hpgsql.Pipeline
-      Hpgsql.Pool
       Hpgsql.Query
       Hpgsql.Time
       Hpgsql.Transaction
