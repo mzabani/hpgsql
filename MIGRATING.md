@@ -4,9 +4,12 @@ Even if your application compiles with hpgsql-simple-compat, **you must test eve
 
 > [!INFO]
 > You should start by swapping all of "postgresql-simple", "postgresql-libpq", and "postgresql-query" in your cabal files by "hpgsql-simple-compat".
+> hpgsql-simple-compat isn't on Hackage, but it's in this repository as the top-level folder "hpgsql-simple-compat".
 > Then try to compile your project. It's unlikely it'll build, but start with that.
 
 You can also add "hpgsql" to your cabal files, and then you can start migrating your queries one at a time by using the imports from "Hpgsql.*", and taking an `HPgConnection` from the hpgsql-simple-compat connection with the `Database.PostgreSQL.Simple.hpgConn` function.
+
+Then, you will likely run into many errors. What follows is a very incomplete list. Reporting what errors you got really helps improve this.
 
 If you are compiling your project, some things you might run into:
 
