@@ -9,6 +9,7 @@ import DbUtils
   )
 import Hpgsql
 import Hpgsql.Cancellation (cancelActiveStatement)
+import Hpgsql.Connection (connect, withConnection)
 import Hpgsql.Query (sql)
 import Hpgsql.Types (Only (..))
 import Test.Hspec

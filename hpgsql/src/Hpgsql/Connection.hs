@@ -1,7 +1,15 @@
 module Hpgsql.Connection
-  ( ConnString (..),
+  ( connect,
+    connectOpts,
+    defaultConnectOpts,
+    withConnection,
+    withConnectionOpts,
+    closeGracefully,
+    closeForcefully,
+    ConnString (..),
     parseConnString,
     ResetConnectionOpts (..),
+    resetConnectionState,
     libpqConnString,
   )
 where
@@ -36,6 +44,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
+import Hpgsql.Internal (closeGracefully, closeForcefully, connect, connectOpts, defaultConnectOpts, resetConnectionState, withConnection, withConnectionOpts)
 import Hpgsql.InternalTypes (ConnString (..), ResetConnectionOpts (..))
 import Network.URI
   ( URI (..),

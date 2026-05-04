@@ -84,16 +84,7 @@
 -- * "Hpgsql.Copy" for @COPY@ protocol support.
 -- * "Hpgsql.Pool" for connection pool utilities.
 module Hpgsql
-  ( -- * Connection
-    connect,
-    connectOpts,
-    defaultConnectOpts,
-    withConnection,
-    withConnectionOpts,
-    closeGracefully,
-    closeForcefully,
-
-    -- * Query
+  ( -- * Query
     query,
     queryWith,
     queryMWith,

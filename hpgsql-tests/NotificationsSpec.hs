@@ -8,7 +8,7 @@ import DbUtils
     testConnInfo,
   )
 import Hpgsql
-import Hpgsql.Connection (resetConnectionState)
+import Hpgsql.Connection (resetConnectionState, withConnection)
 import Hpgsql.Notification (NotificationResponse (..), getNotification, getNotificationNonBlocking)
 import Hpgsql.Query (sql)
 import System.Timeout (timeout)

@@ -39,6 +39,7 @@ import qualified Hasql.Encoders as HasqlEnc
 import qualified Hasql.Session as HasqlSess
 import qualified Hasql.Statement as HasqlStmt
 import qualified Hpgsql
+import qualified Hpgsql.Connection
 import Hpgsql.Connection (libpqConnString)
 import qualified Hpgsql.Copy
 import qualified Hpgsql.Query as Hpgsql
@@ -204,7 +205,7 @@ main = do
         it ("hpgsql Tuple List (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
+              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
                 Hpgsql.queryWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
         it ("hasql Tuple List (" ++ show n ++ " rows)") $
           void $
@@ -220,7 +221,7 @@ main = do
         it ("hpgsql Record List (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Record List (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
+              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
                 Hpgsql.queryWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
         it ("hasql Record List (" ++ show n ++ " rows)") $
           void $
@@ -239,7 +240,7 @@ main = do
         it ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
+              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
                 res <- Hpgsql.querySWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
                 S.effects res
         it ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
@@ -257,7 +258,7 @@ main = do
         it ("hpgsql Record Stream (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Record Stream (" ++ show n ++ " rows)") $ do
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.closeGracefully $ \conn -> do
+              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
                 res <- Hpgsql.querySWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
                 S.effects res
         it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
@@ -275,7 +276,7 @@ main = do
     describe "COPY FROM STDIN" $ do
       (conn, pgSimpleConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
-        conn <- Hpgsql.connect hpgsqlConnInfo 10
+        conn <- Hpgsql.Connection.connect hpgsqlConnInfo 10
         pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
         pure (conn, pgSimpleConn)
       let createCopyBenchTable :: (IsString s) => s
@@ -336,7 +337,7 @@ withMultipleConnections n acquireConn closeConn f = do
 hpgsqlConnect :: IO Hpgsql.HPgConnection
 hpgsqlConnect = do
   hpgsqlConnInfo <- testConnInfo
-  Hpgsql.connect hpgsqlConnInfo 10
+  Hpgsql.Connection.connect hpgsqlConnInfo 10
 
 pgSimpleConnect :: IO PGSimple.Connection
 pgSimpleConnect = do

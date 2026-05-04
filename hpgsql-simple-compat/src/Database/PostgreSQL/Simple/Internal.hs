@@ -246,7 +246,7 @@ connectPostgreSQL connstr = do
   case Hpgsql.Connection.parseConnString (TE.decodeUtf8 connstr) of
     Left err -> error err
     Right connStr -> do
-      hpgConn <- mapHpgsqlErrors $ Hpgsql.connect connStr 30
+      hpgConn <- mapHpgsqlErrors $ Hpgsql.Connection.connect connStr 30
       pure $ Connection {..}
 
 -- | Turns a 'ConnectInfo' data structure into a libpq connection string.
@@ -324,7 +324,7 @@ disconnectedError :: SqlError
 disconnectedError = fatalError "connection disconnected"
 
 close :: Connection -> IO ()
-close Connection {..} = mapHpgsqlErrors $ Hpgsql.closeGracefully hpgConn
+close Connection {..} = mapHpgsqlErrors $ Hpgsql.Connection.closeGracefully hpgConn
 
 newTempName :: Connection -> IO Query
 newTempName Connection {..} = do

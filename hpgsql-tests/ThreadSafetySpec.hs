@@ -19,6 +19,7 @@ import DbUtils
   )
 import Hpgsql
 import Hpgsql.Cancellation (cancelActiveStatement)
+import Hpgsql.Connection (withConnection)
 import Hpgsql.Copy (copyFromS, putCopyData, withCopy)
 import Hpgsql.Pipeline (pipeline, pipelineCmd, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
