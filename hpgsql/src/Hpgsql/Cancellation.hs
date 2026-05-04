@@ -1,6 +1,6 @@
 module Hpgsql.Cancellation
-  ( cancelAnyRunningStatement,
+  ( cancelActiveStatement,
   )
 where
 
-import Hpgsql.Internal (cancelAnyRunningStatement)
+import Hpgsql.Internal (cancelActiveStatement)

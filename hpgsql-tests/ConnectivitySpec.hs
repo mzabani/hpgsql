@@ -8,7 +8,7 @@ import DbUtils
     testConnInfo,
   )
 import Hpgsql
-import Hpgsql.Cancellation (cancelAnyRunningStatement)
+import Hpgsql.Cancellation (cancelActiveStatement)
 import Hpgsql.Query (sql)
 import Hpgsql.Types (Only (..))
 import Test.Hspec
@@ -51,7 +51,7 @@ connectingWithUnencryptedPassword = do
   hpgsqlConnInfo <- testConnInfo
   connect hpgsqlConnInfo {user = "user_pass", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
   Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_pass", password = "hpgsql-password"} 10 $ \conn -> do
-    cancelAnyRunningStatement conn False -- This requires connecting again, so it's a reasonable test
+    cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
     query1 conn "SELECT current_user"
   connectedUser `shouldBe` ("user_pass" :: String)
 
@@ -60,6 +60,6 @@ connectingWithMD5Password = do
   hpgsqlConnInfo <- testConnInfo
   connect hpgsqlConnInfo {user = "user_md5", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
   Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_md5", password = "hpgsql-password"} 10 $ \conn -> do
-    cancelAnyRunningStatement conn False -- This requires connecting again, so it's a reasonable test
+    cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
     query1 conn "SELECT current_user"
   connectedUser `shouldBe` ("user_md5" :: String)

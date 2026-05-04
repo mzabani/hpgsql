@@ -67,7 +67,7 @@ module Hpgsql.Internal
     getBackendPid,
 
     -- * Misc
-    cancelAnyRunningStatement,
+    cancelActiveStatement,
 
     -- * Infrastructure (not re-exported publicly)
     connectionReadyForNewPipeline,
@@ -982,7 +982,7 @@ waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
       -- Unless of course the transaction was interrupted by an asynchronous exception, in
       -- which case it's fine to cancel because we're about to ROLLBACK anyway.
       let onlyDrainNotCancel = txnStatusBeforePipeline == TransInTrans && not mustIssueRollback
-      cancelAnyRunningStatement conn onlyDrainNotCancel
+      cancelActiveStatement conn onlyDrainNotCancel
       -- After draining, we ROLLBACK if we must. A failed command still leaves
       -- the need for "ROLLBACK", after all.
       when (mustIssueRollback && not (null queriesToDrain)) $ do
@@ -1056,12 +1056,12 @@ waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
 -- and usable state after this function returns, although keep in mind that cancelling a
 -- query inside a transaction is equivalent to that query throwing an error, so this
 -- can put transactions in an error state.
-cancelAnyRunningStatement ::
+cancelActiveStatement ::
   HPgConnection ->
   -- | If True, this won't send cancellation requests to postgres and will just drain orphaned/interrupted queries until they complete, if any.
   Bool ->
   IO ()
-cancelAnyRunningStatement conn@HPgConnection {connOpts} onlyDrainNotCancel = do
+cancelActiveStatement conn@HPgConnection {connOpts} onlyDrainNotCancel = do
   -- Drain results of orphaned queries if necessary
   queriesToDrain <- acquireOwnershipOfOrphanedQueries conn
   -- Acquire control-msg lock when draining to avoid a race condition where

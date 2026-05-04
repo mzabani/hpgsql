@@ -18,7 +18,7 @@ import DbUtils
     withRollback,
   )
 import Hpgsql
-import Hpgsql.Cancellation (cancelAnyRunningStatement)
+import Hpgsql.Cancellation (cancelActiveStatement)
 import Hpgsql.Copy (copyFromS, putCopyData, withCopy)
 import Hpgsql.Pipeline (pipeline, pipelineCmd, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
@@ -73,8 +73,8 @@ spec = do
           "Assumptions about ThreadId behaviour"
           assumptionsAboutThreadIdBehaviour
         it
-          "cancelAnyRunningStatement does not require any queries to be running and is idempotent"
-          cancelAnyRunningStatementIsIdempotent
+          "cancelActiveStatement does not require any queries to be running and is idempotent"
+          cancelActiveStatementIsIdempotent
 
     -- Tests below cannot run in parallel to itself for whatever reasons
     aroundConn $ do
@@ -186,12 +186,12 @@ assumptionsAboutThreadIdBehaviour _conn = do
   map show thousandThreadIds2 `shouldNotContain` [show thisThreadId]
   length (nubOrd $ map show thousandThreadIds ++ map show thousandThreadIds2) `shouldBe` 2000
 
-cancelAnyRunningStatementIsIdempotent :: HPgConnection -> IO ()
-cancelAnyRunningStatementIsIdempotent conn = do
-  cancelAnyRunningStatement conn False
-  cancelAnyRunningStatement conn False
-  cancelAnyRunningStatement conn False
-  cancelAnyRunningStatement conn False
+cancelActiveStatementIsIdempotent :: HPgConnection -> IO ()
+cancelActiveStatementIsIdempotent conn = do
+  cancelActiveStatement conn False
+  cancelActiveStatement conn False
+  cancelActiveStatement conn False
+  cancelActiveStatement conn False
   execute_ conn "SELECT 1"
 
 sendQueriesConcurrently :: HPgConnection -> IO ()
@@ -215,7 +215,7 @@ cancelStreamingQueryThenTryToConsumeResults conn = do
   firstTwoElems `shouldBe` [Only 1, Only 2]
   thirdAndFourthElems `shouldBe` [Only 3, Only 4]
   fifthAndSixthElems `shouldBe` [Only 5, Only 6]
-  cancelAnyRunningStatement conn False
+  cancelActiveStatement conn False
   -- Consuming the stream now will do what? For now it:
   -- 1. Might not throw if the query finished running in the server. Change 100000000 to 5 to see this test fail.
   -- 2. Might throw with "canceling statement due to user request", like in this test.
@@ -239,7 +239,7 @@ queryCancellationInTheFuture = do
   forM_ [1 :: Int .. 1_000] $
     const $
       withConnection hpgsqlConnInfo 10 $ \conn -> do
-        cancelAnyRunningStatement conn False
+        cancelActiveStatement conn False
         execute conn "select true" `shouldReturn` 1
 
 -- | Massively exercise sending an asynchronous exception to a query
@@ -335,7 +335,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation1 cancelQueryExplicitly conn = d
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
-  when cancelQueryExplicitly $ cancelAnyRunningStatement conn False
+  when cancelQueryExplicitly $ cancelActiveStatement conn False
   execute conn "select true" `shouldReturn` 1
   queryWith rowDecoder conn "select 37" `shouldReturn` [Only (37 :: Int)]
 
@@ -347,7 +347,7 @@ queryThatErrorsDueToBadFromPgFieldImplementation2 cancelQueryExplicitly conn = d
   -- We have automatic cancellation when the same thread (see Note [`timeout` uses the same ThreadId]) tries to run
   -- a query before finishing to consume the results of an earlier query,
   -- but we don't promise users they can do this after an IrrecoverableHpgsqlError.
-  when cancelQueryExplicitly $ cancelAnyRunningStatement conn False
+  when cancelQueryExplicitly $ cancelActiveStatement conn False
   -- modifyMVar_ _globalDebugLock $ const (pure True)
   -- putStrLn "AAAAAAAAAAAAA"
   execute conn "select true" `shouldReturn` 1
