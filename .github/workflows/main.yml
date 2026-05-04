@@ -31,8 +31,8 @@ jobs:
       with:
         nix_path: nixpkgs=channel:nixos-unstable
         extra_nix_config: |
-          substituters = https://cache.nixos.org https://mzabani.cachix.org https://cache.iog.io
-          trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+          substituters = https://cache.nixos.org https://mzabani.cachix.org
+          trusted-public-keys = mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
     - name: Build hpgsql
       run: nix-build --no-out-link -A hpgsql
@@ -79,24 +79,14 @@ jobs:
       with:
         nix_path: nixpkgs=channel:nixos-unstable
         extra_nix_config: |
-          substituters = https://cache.nixos.org https://mzabani.cachix.org https://cache.iog.io
-          trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ= mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+          substituters = https://cache.nixos.org https://mzabani.cachix.org
+          trusted-public-keys = mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
     - name: Install basic software
       run: nix-env -iA coreutils -f ./nix/nixpkgs.nix # for the timeout CLI
 
     - name: List locales
       run: locale -a
-
-    - name: Print some possibly useful limits
-      run: |
-        # According to https://doc.owncloud.com/server/next/admin_manual/troubleshooting/path_filename_length.html
-        # Macs do have an undocumented limit of 1024 bytes for file paths.
-        # If this is true, then it can explain some not-so-occasional test failures
-        # we see for Mac. So we print this here, and a few other interesting limits.
-        getconf NAME_MAX /
-        getconf PATH_MAX /
-        ulimit -n # Max number of open file descriptors
 
     - name: Build hpgsql
       run: nix-build --no-out-link -A hpgsql
@@ -106,10 +96,6 @@ jobs:
 
     - name: Run tests
       run: |
-        # Postgres-version dependent tests for each possible version next
-        # We test the last version with the vanilla nixpkgs-built derivation,
-        # not the IOHK one. We assume differences in the codebase regarding different
-        # postgres versions aren't enough to make it worth testing every version here too.
         # We don't run these concurrently because Nix does not have a sandbox in Macs, so it's
         # not worth the risk.
         timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18
