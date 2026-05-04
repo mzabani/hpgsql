@@ -1,6 +1,6 @@
 module Hpgsql.InternalTypes
   ( -- * Simple types
-    ConnString (..),
+    ConnectionString (..),
     ConnectOpts (..),
     PostgresError (..),
     IrrecoverableHpgsqlError (..),
@@ -241,7 +241,7 @@ renumberParamsFrom frags renumberFrom =
 -- ------------------------------------------------------------------
 
 -- TODO: Switch to Text as the default in record fields
-data ConnString = ConnString
+data ConnectionString = ConnectionString
   { hostname :: String,
     port :: Word16,
     user :: String,
@@ -251,7 +251,7 @@ data ConnString = ConnString
   }
   deriving stock (Eq)
 
-instance Show ConnString where
+instance Show ConnectionString where
   show _ = "ConnectionString"
 
 data ConnectOpts = ConnectOpts
@@ -451,7 +451,7 @@ data HPgConnection = HPgConnection
     recvBuffer :: !(MVar LBS.ByteString),
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     socketMutex :: !Mutex,
-    originalConnStr :: !ConnString,
+    originalConnStr :: !ConnectionString,
     connectedTo :: !AddrInfo,
     encodingContext :: !(MVar EncodingContext),
     parameterStatusMap :: !(MVar (Map Text Text)),

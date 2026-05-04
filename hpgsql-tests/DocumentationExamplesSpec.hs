@@ -14,7 +14,7 @@ import Data.Vector (Vector)
 import qualified Database.PostgreSQL.Simple as PGSimple
 import DbUtils (aroundConn, testConnInfo, withRollback)
 import Hpgsql
-import Hpgsql.Connection (libpqConnString)
+import Hpgsql.Connection (renderLibpqConnectionString)
 import Hpgsql.Pipeline (pipeline1, pipelineCmd_, pipelineSWith, runPipeline)
 import Hpgsql.Query (sql, sqlPrep)
 import Hpgsql.Transaction (transactionStatus, withTransaction)
@@ -80,7 +80,7 @@ postgresqlSimpleOnExceptionLogsErrorToDatabaseExample :: IO ()
 postgresqlSimpleOnExceptionLogsErrorToDatabaseExample = do
   connInfo <- testConnInfo
   bracket
-    (PGSimple.connectPostgreSQL (libpqConnString connInfo))
+    (PGSimple.connectPostgreSQL (renderLibpqConnectionString connInfo))
     PGSimple.close
     $ \conn -> do
       let logErrorToDatabase :: IO ()
@@ -148,7 +148,7 @@ postgresqlSimpleWithTransactionExample :: IO ()
 postgresqlSimpleWithTransactionExample = do
   connInfo <- testConnInfo
   bracket
-    (PGSimple.connectPostgreSQL (libpqConnString connInfo))
+    (PGSimple.connectPostgreSQL (renderLibpqConnectionString connInfo))
     PGSimple.close
     $ \conn -> do
       let runSomeQuery :: IO ()

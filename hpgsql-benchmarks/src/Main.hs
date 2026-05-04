@@ -40,7 +40,7 @@ import qualified Hasql.Session as HasqlSess
 import qualified Hasql.Statement as HasqlStmt
 import qualified Hpgsql
 import qualified Hpgsql.Connection
-import Hpgsql.Connection (libpqConnString)
+import Hpgsql.Connection (renderLibpqConnectionString)
 import qualified Hpgsql.Copy
 import qualified Hpgsql.Query as Hpgsql
 import qualified Hpgsql.Types as Hpgsql
@@ -99,13 +99,13 @@ data HasqlBenchRow = HasqlBenchRow
   deriving stock (Generic, Show, Eq)
   deriving anyclass (NFData)
 
-testConnInfo :: IO Hpgsql.ConnString
+testConnInfo :: IO Hpgsql.ConnectionString
 testConnInfo = do
   portStr <- getEnv "PGPORT"
   hostname <- getEnv "PGHOST"
   database <- getEnv "PGDATABASE"
   user <- getEnv "PGUSER"
-  pure Hpgsql.ConnString {user, database, hostname, port = read portStr, password = "", options = ""}
+  pure Hpgsql.ConnectionString {user, database, hostname, port = read portStr, password = "", options = ""}
 
 superForce :: (NFData a) => IO a -> IO a
 superForce vio = vio >>= evaluate . force
@@ -277,7 +277,7 @@ main = do
       (conn, pgSimpleConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
         conn <- Hpgsql.Connection.connect hpgsqlConnInfo 10
-        pgSimpleConn <- PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
+        pgSimpleConn <- PGSimple.connectPostgreSQL (renderLibpqConnectionString hpgsqlConnInfo)
         pure (conn, pgSimpleConn)
       let createCopyBenchTable :: (IsString s) => s
           createCopyBenchTable = "CREATE UNLOGGED TABLE copy_bench (id INT4 NOT NULL, name TEXT NOT NULL, item TEXT NOT NULL, value FLOAT8 NOT NULL)"
@@ -342,10 +342,10 @@ hpgsqlConnect = do
 pgSimpleConnect :: IO PGSimple.Connection
 pgSimpleConnect = do
   hpgsqlConnInfo <- testConnInfo
-  PGSimple.connectPostgreSQL (libpqConnString hpgsqlConnInfo)
+  PGSimple.connectPostgreSQL (renderLibpqConnectionString hpgsqlConnInfo)
 
 hasqlConnect :: IO HasqlConn.Connection
 hasqlConnect = do
   hpgsqlConnInfo <- testConnInfo
   either (\e -> error $ "hasql connection failed: " ++ show e) id
-    <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (libpqConnString hpgsqlConnInfo)))]
+    <$> HasqlConn.acquire [HasqlSetting.connection (HasqlConnSetting.string (decodeUtf8 (renderLibpqConnectionString hpgsqlConnInfo)))]

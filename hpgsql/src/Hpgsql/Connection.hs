@@ -6,11 +6,11 @@ module Hpgsql.Connection
     withConnectionOpts,
     closeGracefully,
     closeForcefully,
-    ConnString (..),
-    parseConnString,
+    ConnectionString (..),
+    parseLibpqConnectionString,
     ResetConnectionOpts (..),
     resetConnectionState,
-    libpqConnString,
+    renderLibpqConnectionString,
   )
 where
 
@@ -44,8 +44,8 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
-import Hpgsql.Internal (closeGracefully, closeForcefully, connect, connectOpts, defaultConnectOpts, resetConnectionState, withConnection, withConnectionOpts)
-import Hpgsql.InternalTypes (ConnString (..), ResetConnectionOpts (..))
+import Hpgsql.Internal (closeForcefully, closeGracefully, connect, connectOpts, defaultConnectOpts, resetConnectionState, withConnection, withConnectionOpts)
+import Hpgsql.InternalTypes (ConnectionString (..), ResetConnectionOpts (..))
 import Network.URI
   ( URI (..),
     URIAuth (..),
@@ -55,14 +55,13 @@ import Network.URI
 import Prelude hiding (takeWhile)
 
 -- | Parses a libpq compatible connection string.
-parseConnString :: Text -> Either String ConnString
-parseConnString =
+parseLibpqConnectionString :: Text -> Either String ConnectionString
+parseLibpqConnectionString =
   parseOnly (connStringParser <* endOfInput)
 
 -- | Renders a libpq compatible connection string.
--- TODO: Copy tests from codd!
-libpqConnString :: ConnString -> ByteString
-libpqConnString ConnString {..} =
+renderLibpqConnectionString :: ConnectionString -> ByteString
+renderLibpqConnectionString ConnectionString {..} =
   ByteString.intercalate " " $
     map (\(kw, v) -> kw <> "=" <> v) mixedKwvps
   where
@@ -110,8 +109,8 @@ eitherToMay (Right v) = Just v
 
 -- | Parses a URI with scheme 'postgres' or 'postgresql', as per https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING.
 -- The difference here is that URIs with a query string or with a fragment are not allowed.
-uriConnParser :: Text -> Either String ConnString
-uriConnParser line = runIdentity $ runExceptT @String @_ @ConnString $ do
+uriConnParser :: Text -> Either String ConnectionString
+uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
   case parseURI (Text.unpack line) of
     Nothing -> throwE "Connection string is not a URI"
     Just URI {..} -> do
@@ -149,7 +148,7 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnString $ do
               let (unEscapeString . trimLast '@' -> user, unEscapeString . trimLast '@' . trimFirst ':' -> password) =
                     break (== ':') uriUserInfo
               pure
-                ConnString
+                ConnectionString
                   { hostname =
                       unEscapeString $
                         unescapeIPv6 uriRegName,
@@ -172,7 +171,7 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnString $ do
       Nothing -> s
       Just (t, lastChar) -> if lastChar == c then Text.unpack t else s
 
-keywordValueConnParser :: Text -> Either String ConnString
+keywordValueConnParser :: Text -> Either String ConnectionString
 keywordValueConnParser line = runIdentity $ runExceptT $ do
   kvs <-
     sortOn fst
@@ -180,7 +179,7 @@ keywordValueConnParser line = runIdentity $ runExceptT $ do
         (singleKeyVal `Parsec.sepBy` takeWhile1 Char.isSpace)
         (Text.strip line)
         "Invalid connection string"
-  ConnString
+  ConnectionString
     <$> getVal "host" Nothing txtToString kvs
     <*> getVal "port" (Just 5432) Parsec.decimal kvs
     <*> getVal "user" Nothing txtToString kvs
@@ -234,7 +233,7 @@ keywordValueConnParser line = runIdentity $ runExceptT $ do
 -- | Parses a string in one of libpq allowed formats. See https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING.
 -- The difference here is that only a subset of all connection parameters are allowed.
 -- I wish this function existed in postgresql-simple or some form of it in postgresql-libpq, but if it does I couldn't find it.
-connStringParser :: Parser ConnString
+connStringParser :: Parser ConnectionString
 connStringParser = do
   connStr <-
     Parsec.takeWhile1 (const True)

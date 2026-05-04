@@ -15,7 +15,7 @@
 -- >
 -- > main :: IO ()
 -- > main = do
--- >   let connstr = ConnString
+-- >   let connstr = ConnectionString
 -- >         { hostname = "localhost"
 -- >         , port     = 5432
 -- >         , user     = "postgres"
@@ -111,7 +111,7 @@ module Hpgsql
     -- * Type re-exports
     HPgConnection, -- Do not export constructor
     Query, -- Do not export constructor
-    ConnString (..),
+    ConnectionString (..),
     ConnectOpts (..),
     PostgresError (..),
     IrrecoverableHpgsqlError (..),
@@ -125,5 +125,5 @@ where
 
 import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), RowDecoder (..))
 import Hpgsql.Internal
-import Hpgsql.InternalTypes (ConnString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), TransactionStatus (..))
+import Hpgsql.InternalTypes (ConnectionString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), TransactionStatus (..))
 import Hpgsql.Query (Query)

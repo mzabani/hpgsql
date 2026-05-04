@@ -14,19 +14,19 @@ import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Hpgsql (ConnString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
+import Hpgsql (ConnectionString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
 import Hpgsql.Connection (defaultConnectOpts, withConnection, withConnectionOpts)
 import System.Environment (getEnv)
 import System.Mem (performGC)
 import Test.Hspec
 
-testConnInfo :: IO ConnString
+testConnInfo :: IO ConnectionString
 testConnInfo = do
   portStr <- getEnv "PGPORT"
   hostname <- getEnv "PGHOST"
   database <- getEnv "PGDATABASE"
   user <- getEnv "PGUSER"
-  pure ConnString {user, database, hostname, port = read portStr, password = "", options = ""}
+  pure ConnectionString {user, database, hostname, port = read portStr, password = "", options = ""}
 
 aroundConn :: SpecWith HPgConnection -> Spec
 aroundConn = around $ \act -> do

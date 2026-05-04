@@ -140,7 +140,7 @@ import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
-import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnString (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), ResetConnectionOpts (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
+import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectionString (..), ConnectOpts (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), ResetConnectionOpts (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
@@ -215,11 +215,11 @@ fullTransactionStatus sttv = do
 transactionStatus :: HPgConnection -> IO TransactionStatus
 transactionStatus conn = snd <$> STM.atomically (fullTransactionStatus conn.internalConnectionState)
 
-connect :: ConnString -> DiffTime -> IO HPgConnection
+connect :: ConnectionString -> DiffTime -> IO HPgConnection
 connect =
   connectOpts defaultConnectOpts
 
-connectOpts :: ConnectOpts -> ConnString -> DiffTime -> IO HPgConnection
+connectOpts :: ConnectOpts -> ConnectionString -> DiffTime -> IO HPgConnection
 connectOpts =
   internalConnectOrCancel
     Connect
@@ -236,8 +236,8 @@ data InternalConnectOrCancelRequest a where
   Connect :: InternalConnectOrCancelRequest HPgConnection
   CancelNotConnect :: CancelRequest -> AddrInfo -> InternalConnectOrCancelRequest ()
 
-internalConnectOrCancel :: InternalConnectOrCancelRequest a -> ConnectOpts -> ConnString -> DiffTime -> IO a
-internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnString {..} conntimeout = do
+internalConnectOrCancel :: InternalConnectOrCancelRequest a -> ConnectOpts -> ConnectionString -> DiffTime -> IO a
+internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionString {..} conntimeout = do
   sockOrTimeout <- timeout (fromInteger $ diffTimeToPicoseconds conntimeout `div` 1_000_000) getConnectedSocket
   case sockOrTimeout of
     Nothing -> throwIrrecoverableError "Could not connect in the supplied timeout"
@@ -428,13 +428,13 @@ whenNotClosed conn f = do
   isClosed <- readMVar conn.socketClosed
   unless isClosed f
 
-withConnection :: ConnString -> DiffTime -> (HPgConnection -> IO a) -> IO a
+withConnection :: ConnectionString -> DiffTime -> (HPgConnection -> IO a) -> IO a
 withConnection connstr conntimeout f = bracketOnError (connect connstr conntimeout) closeForcefully $ \conn -> do
   res <- f conn
   closeGracefully conn
   pure res
 
-withConnectionOpts :: ConnectOpts -> ConnString -> DiffTime -> (HPgConnection -> IO a) -> IO a
+withConnectionOpts :: ConnectOpts -> ConnectionString -> DiffTime -> (HPgConnection -> IO a) -> IO a
 withConnectionOpts connOpts connstr conntimeout f = bracketOnError (connectOpts connOpts connstr conntimeout) closeForcefully $ \conn -> do
   res <- f conn
   closeGracefully conn

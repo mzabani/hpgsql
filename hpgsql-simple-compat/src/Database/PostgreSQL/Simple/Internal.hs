@@ -243,7 +243,7 @@ connectPostgreSQL :: ByteString -> IO Connection
 connectPostgreSQL connstr = do
   connectionObjects <- newMVar (IntMap.empty)
   connectionTempNameCounter <- newIORef 0
-  case Hpgsql.Connection.parseConnString (TE.decodeUtf8 connstr) of
+  case Hpgsql.Connection.parseLibpqConnectionString (TE.decodeUtf8 connstr) of
     Left err -> error err
     Right connStr -> do
       hpgConn <- mapHpgsqlErrors $ Hpgsql.Connection.connect connStr 30
