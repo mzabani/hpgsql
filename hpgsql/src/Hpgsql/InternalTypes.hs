@@ -236,18 +236,13 @@ renumberParamsFrom frags renumberFrom =
             _ -> Nothing
         )
 
--- ------------------------------------------------------------------
--- Simple types
--- ------------------------------------------------------------------
-
--- TODO: Switch to Text as the default in record fields
 data ConnectionString = ConnectionString
-  { hostname :: String,
+  { hostname :: Text,
     port :: Word16,
-    user :: String,
-    password :: String,
-    database :: String,
-    options :: String
+    user :: Text,
+    password :: Text,
+    database :: Text,
+    options :: Text
   }
   deriving stock (Eq)
 

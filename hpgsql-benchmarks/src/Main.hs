@@ -24,6 +24,7 @@ import qualified Data.ByteString.Char8 as BS8
 import Data.Int (Int32, Int64)
 import Data.String (IsString)
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time (Day, UTCTime)
 import qualified Database.PostgreSQL.Simple as PGSimple
@@ -102,9 +103,9 @@ data HasqlBenchRow = HasqlBenchRow
 testConnInfo :: IO Hpgsql.ConnectionString
 testConnInfo = do
   portStr <- getEnv "PGPORT"
-  hostname <- getEnv "PGHOST"
-  database <- getEnv "PGDATABASE"
-  user <- getEnv "PGUSER"
+  hostname <- Text.pack <$> getEnv "PGHOST"
+  database <- Text.pack <$> getEnv "PGDATABASE"
+  user <- Text.pack <$> getEnv "PGUSER"
   pure Hpgsql.ConnectionString {user, database, hostname, port = read portStr, password = "", options = ""}
 
 superForce :: (NFData a) => IO a -> IO a

@@ -132,6 +132,7 @@ import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import qualified Data.Serialize as Cereal
 import qualified Data.Set as Set
 import Data.Text (Text)
+import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
@@ -275,17 +276,17 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
         Connect -> do
           -- TODO: Send encoding and other things with "options"?
           debugPrint "Sending startup message"
-          nonAtomicSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user, database, options}
+          nonAtomicSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user = Text.unpack user, database = Text.unpack database, options = Text.unpack options}
           AuthenticationResponse authMethod <- receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure hpgConnPartialDoNotReturn (msgParser @Msgs.AuthenticationResponse) $ \case
             Right knownAuthMsg -> pure knownAuthMsg
             Left unknownAuthMsg -> throwIrrecoverableError $ "Received unknown authentication message from PostgreSQL. This is probably an authentication method unsupported by hpgsql. More details about the message: " ++ show unknownAuthMsg
           case authMethod of
             AuthOk -> pure ()
             AuthCleartextPassword -> do
-              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage authMethod user password
+              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage authMethod (Text.unpack user) (Text.unpack password)
               receiveAuthOkOrThrow hpgConnPartialDoNotReturn
             AuthMD5Password _ -> do
-              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage authMethod user password
+              nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage authMethod (Text.unpack user) (Text.unpack password)
               receiveAuthOkOrThrow hpgConnPartialDoNotReturn
             _ -> throwIrrecoverableError $ "Hpgsql does not yet support authenticating with method " ++ show authMethod
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
@@ -320,7 +321,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
       addrInfo <- case connectOrCancel of
         CancelNotConnect _ addrInfo -> pure addrInfo
         Connect ->
-          if "/" `List.isInfixOf` hostname
+          if "/" `Text.isInfixOf` hostname
             then
               pure
                 AddrInfo
@@ -328,11 +329,11 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
                     addrFamily = Socket.AF_UNIX,
                     addrSocketType = Socket.Stream,
                     addrProtocol = Socket.defaultProtocol,
-                    addrAddress = Socket.SockAddrUnix $ List.dropWhileEnd (== '/') hostname ++ "/.s.PGSQL." ++ show port,
+                    addrAddress = Socket.SockAddrUnix $ Text.unpack (Text.dropWhileEnd (== '/') hostname) ++ "/.s.PGSQL." ++ show port,
                     addrCanonName = Nothing
                   }
             else do
-              addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just hostname) (Just $ show port)
+              addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just $ Text.unpack hostname) (Just $ show port)
               case addrInfos of
                 [] -> throwIrrecoverableError "Could not resolve address"
                 addrInfo : _ -> pure addrInfo

@@ -73,10 +73,10 @@ renderLibpqConnectionString ConnectionString {..} =
           Just
             ("dbname", quote database),
           Just ("password", quote password),
-          Just ("port", quote (show port)),
-          if null options then Nothing else Just ("options", quote options)
+          Just ("port", quote (Text.pack $ show port)),
+          if Text.null options then Nothing else Just ("options", quote options)
         ]
-    quote (Text.pack -> un) =
+    quote un =
       encodeUtf8 $
         "'"
           <> Text.replace "'" "\\'" (Text.replace "\\" "\\\\" un)
@@ -124,10 +124,10 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
             "Connection string must contain at least user and host"
         Just URIAuth {..} -> do
           let database =
-                unEscapeString $ trimFirst '/' uriPath
+                Text.pack $ unEscapeString $ trimFirst '/' uriPath
               hasQueryString = not $ null uriQuery
               hasFragment = not $ null uriFragment
-          when (null database) $
+          when (Text.null database) $
             throwE
               "Connection string must contain a database name"
           when (hasQueryString || hasFragment) $
@@ -145,12 +145,12 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
             Nothing ->
               throwE "Invalid port in connection string"
             Just parsedPort -> do
-              let (unEscapeString . trimLast '@' -> user, unEscapeString . trimLast '@' . trimFirst ':' -> password) =
+              let (Text.pack . unEscapeString . trimLast '@' -> user, Text.pack . unEscapeString . trimLast '@' . trimFirst ':' -> password) =
                     break (== ':') uriUserInfo
               pure
                 ConnectionString
                   { hostname =
-                      unEscapeString $
+                      Text.pack $ unEscapeString $
                         unescapeIPv6 uriRegName,
                     port = parsedPort,
                     user,
@@ -206,7 +206,7 @@ keywordValueConnParser line = runIdentity $ runExceptT $ do
               <> Text.unpack key
               <> "' found in connection string."
 
-    txtToString = Text.unpack <$> Parsec.takeText
+    txtToString = Parsec.takeText
     parseOrFail parser txt errorMsg =
       case parseOnly (parser <* endOfInput) txt of
         Left _ -> throwE errorMsg

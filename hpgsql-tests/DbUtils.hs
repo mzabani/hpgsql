@@ -23,9 +23,9 @@ import Test.Hspec
 testConnInfo :: IO ConnectionString
 testConnInfo = do
   portStr <- getEnv "PGPORT"
-  hostname <- getEnv "PGHOST"
-  database <- getEnv "PGDATABASE"
-  user <- getEnv "PGUSER"
+  hostname <- Text.pack <$> getEnv "PGHOST"
+  database <- Text.pack <$> getEnv "PGDATABASE"
+  user <- Text.pack <$> getEnv "PGUSER"
   pure ConnectionString {user, database, hostname, port = read portStr, password = "", options = ""}
 
 aroundConn :: SpecWith HPgConnection -> Spec
