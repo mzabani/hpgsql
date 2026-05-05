@@ -32,7 +32,7 @@ import Data.Text (Text)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
-import Data.Time.LocalTime.Compat (LocalTime)
+import Data.Time.LocalTime.Compat (LocalTime, TimeOfDay)
 import Data.Typeable (Typeable)
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
@@ -104,6 +104,8 @@ instance ToField UTCTime
 instance ToField ZonedTime
 
 instance ToField LocalTime
+
+instance ToField TimeOfDay
 
 instance ToField Char
 

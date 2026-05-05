@@ -121,8 +121,14 @@ spec = parallel $ do
       "CI Text text decoding"
       ciTextTextDecoding
     it
+      "TimeOfDay values round-trip"
+      timeOfDayRoundTrip
+    it
       "LocalTime values round-trip"
       localTimeRoundTrip
+    it
+      "TimeOfDay text decoding"
+      timeOfDayTextDecoding
     it
       "LocalTime text decoding"
       localTimeTextDecoding
@@ -539,6 +545,15 @@ ciTextTextDecoding conn = hedgehog $ do
         (fromString $ "SELECT '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext")
   res === [(CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))]
 
+timeOfDayRoundTrip :: HPgConnection -> PropertyT IO ()
+timeOfDayRoundTrip conn = hedgehog $ do
+  let genTimeOfDay = do
+        timeOfDayMicros <- Gen.integral $ Gen.linear 0 86_399_999_999
+        pure $ timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
+  row <- Gen.forAll $ (,,,,,,,,,) <$> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay
+  res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res === [row]
+
 localTimeRoundTrip :: HPgConnection -> PropertyT IO ()
 localTimeRoundTrip conn = hedgehog $ do
   let genLocalTime = do
@@ -551,6 +566,51 @@ localTimeRoundTrip conn = hedgehog $ do
         pure $ LocalTime localDay localTimeOfDay
   row <- Gen.forAll $ (,,,,,,,,,) <$> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime
   res <- liftIO $ queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res === [row]
+
+timeOfDayTextDecoding :: HPgConnection -> PropertyT IO ()
+timeOfDayTextDecoding conn = hedgehog $ do
+  let genTimeOfDay = do
+        timeOfDayMicros <- Gen.integral $ Gen.linear 0 86_399_999_999
+        pure $ timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
+  row <- Gen.forAll $ (,,,,,,,,,) <$> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay
+  let (t1, t2, t3, t4, t5, t6, t7, t8, t9, t10) = row
+  res <-
+    liftIO $
+      query
+        conn
+        ( fromString $
+            "SELECT '"
+              <> iso8601Show t1
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t2
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t3
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t4
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t5
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t6
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t7
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t8
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t9
+              <> "'::time"
+              <> ", '"
+              <> iso8601Show t10
+              <> "'::time"
+        )
   res === [row]
 
 localTimeTextDecoding :: HPgConnection -> PropertyT IO ()

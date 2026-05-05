@@ -4,7 +4,15 @@
 -- We started with that and later came up with our own from scratch, though.
 -- We thank them for their great work.
 module Hpgsql.TypeInfo
-  ( boolOid,
+  ( EncodingContext (..),
+    Oid (..),
+    TransactionStatus (..),
+    TypeInfo (..),
+    builtinPgTypesMap,
+    buildTypeInfoCache,
+    lookupTypeByName,
+    lookupTypeByOid,
+    boolOid,
     byteaOid,
     charOid,
     nameOid,
@@ -86,14 +94,6 @@ module Hpgsql.TypeInfo
     _jsonOid,
     _jsonbOid,
     _varcharOid,
-    EncodingContext (..),
-    Oid (..),
-    TransactionStatus (..),
-    TypeInfo (..),
-    builtinPgTypesMap,
-    buildTypeInfoCache,
-    lookupTypeByName,
-    lookupTypeByOid,
   )
 where
 

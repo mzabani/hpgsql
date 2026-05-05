@@ -1,8 +1,10 @@
 - Write documentation
 - Add a bunch more types and instances
-  - TimeOfDay
   - hstore
   - PGRange?
+- Get rid of Time.hs? Move Unbounded to Types.hs?
+- Move TransactionStatus out of TypeInfo.hs?
+- Rename Parsing.hs to ParsingInternal.hs?
 - `run format-hs`, check all is formatted in CI as the last step
 - Write a FromRow instance in hpgsql-simple-compat that checks number of fields and decodes a row of arbitrary length
   - Can the Applicative RowDecoder also know about remaining fields? Ordering is fine in Applicative, it's just sequencing that isn't.- Review all exposed functions per module, move more to Internal modules
