@@ -25,7 +25,7 @@ But you can run `pg_ctl start` and then `psql postgres` to play with a local ins
 For example:
 
 ```shell
-$ run tests -- --match Pipelining
+$ run tests -- --match Pipelining # No need to start postgres as it happens automatically
 ```
 
 ## CI pipeline
