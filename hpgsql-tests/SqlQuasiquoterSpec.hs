@@ -15,7 +15,7 @@ import qualified Hedgehog.Range as Range
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
-import Hpgsql.Parsing (ParsingOpts (..), parseSql)
+import Hpgsql.ParsingInternal (ParsingOpts (..), parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
 import Hpgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
 import Hpgsql.Types (Only (..))

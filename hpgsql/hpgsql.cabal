@@ -33,7 +33,7 @@ library
       Hpgsql.Encoding.RowDecoderMonadic
       Hpgsql.InternalTypes
       Hpgsql.Notification
-      Hpgsql.Parsing
+      Hpgsql.ParsingInternal
       Hpgsql.Pipeline
       Hpgsql.Query
       Hpgsql.Time
