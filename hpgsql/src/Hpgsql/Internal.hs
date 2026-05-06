@@ -274,9 +274,9 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
           void $ tryJust (\err -> if isResourceVanishedError err then Just () else Nothing) $ socketWaitRead (socket hpgConnPartialDoNotReturn)
           Socket.close sock
         Connect -> do
-          -- TODO: Send encoding and other things with "options"?
           debugPrint "Sending startup message"
-          nonAtomicSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user = Text.unpack user, database = Text.unpack database, options = Text.unpack options}
+          -- We set the client_encoding to UTF8 at connection time
+          nonAtomicSendMsg hpgConnPartialDoNotReturn $ StartupMessage {user = Text.unpack user, database = Text.unpack database, options = "-c client_encoding=UTF8 " <> Text.unpack options}
           AuthenticationResponse authMethod <- receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure hpgConnPartialDoNotReturn (msgParser @Msgs.AuthenticationResponse) $ \case
             Right knownAuthMsg -> pure knownAuthMsg
             Left unknownAuthMsg -> throwIrrecoverableError $ "Received unknown authentication message from PostgreSQL. This is probably an authentication method unsupported by hpgsql. More details about the message: " <> Text.pack (show unknownAuthMsg)
@@ -316,7 +316,6 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
             AuthOk -> pure ()
             _ -> throwIrrecoverableError "Failed to authenticate user."
 
-    -- TODO: Get ParameterStatus and set client_encoding to UTF8 if it isn't
     getConnectedSocket = do
       addrInfo <- case connectOrCancel of
         CancelNotConnect _ addrInfo -> pure addrInfo
@@ -513,6 +512,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               Text.hPutStrLn stderr $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
               pure (bufferWithoutMsg, Nothing)
             Just (Right3 (ParameterStatus {..})) -> do
+              when (parameterName == "client_encoding" && parameterValue /= "UTF8") $ throwIrrecoverableError $ "Postgres sent us a change of client_encoding to not UTF8, and Hpgsql only supports UTF8. The encoding postgres sent us is " <> parameterValue
               modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
               pure (bufferWithoutMsg, Nothing)
             Nothing ->

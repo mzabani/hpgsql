@@ -24,6 +24,9 @@ spec = do
       "Connecting with connect-time options"
       connectingWithConnectTimeOptions
     it
+      "Connecting and change to unsupported client_encoding"
+      connectingAndChangeToUnsupportedClientEncoding
+    it
       "Connecting with unencrypted password"
       connectingWithUnencryptedPassword
     it
@@ -46,6 +49,16 @@ connectingWithConnectTimeOptions = do
     query conn "SELECT current_setting('my.random_setting')" `shouldReturn` [Only ("7" :: Text)]
     execute_ conn "RESET ALL"
     query conn "SELECT current_setting('my.random_setting')" `shouldReturn` [Only ("4" :: Text)]
+
+connectingAndChangeToUnsupportedClientEncoding :: IO ()
+connectingAndChangeToUnsupportedClientEncoding = do
+  hpgsqlConnInfo <- testConnInfo
+  withConnection hpgsqlConnInfo 10 $ \conn -> do
+    query conn "SELECT current_setting('client_encoding')" `shouldReturn` [Only ("UTF8" :: Text)]
+    execute_ conn "RESET ALL"
+    query conn "SELECT current_setting('client_encoding')" `shouldReturn` [Only ("UTF8" :: Text)]
+    execute_ conn "SET client_encoding='SQL_ASCII'"
+      `shouldThrow` irrecoverableErrorWithMsg "Postgres sent us a change of client_encoding to not UTF8, and Hpgsql only supports UTF8"
 
 connectingWithUnencryptedPassword :: IO ()
 connectingWithUnencryptedPassword = do

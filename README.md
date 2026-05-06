@@ -97,4 +97,4 @@ Hpgsql's CI pipeline runs tests against all major supported versions of PostgreS
 
 It also runs hpgsql-simple-compat's (the API-compatible fork of postgresql-simple that uses Hpgsql internally) test suite, which is a slightly modified subset of postgresql-simple's own test suite.
 
-My hope is that you can have a reasonable level of assurance that your contributions aren't breaking things.
+My hope is that you can have a reasonable level of assurance that your contributions are sound.

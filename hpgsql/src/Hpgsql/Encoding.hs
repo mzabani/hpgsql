@@ -549,7 +549,6 @@ instance ToPgField Text where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just textOid,
-        -- TODO: What about client_encoding?
         toPgField = \_ -> \t ->
           let bs = encodeUtf8 t
            in NotNull bs
@@ -559,7 +558,6 @@ instance ToPgField LT.Text where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just textOid,
-        -- TODO: What about client_encoding?
         toPgField = \_ -> \t ->
           let bs = LBS.toStrict $ LT.encodeUtf8 t
            in NotNull bs
@@ -570,7 +568,6 @@ instance ToPgField String where
     let fe = fieldEncoder @Text
      in FieldEncoder
           { toTypeOid = \_ -> Just textOid,
-            -- TODO: What about client_encoding?
             toPgField = \encCtx -> fe.toPgField encCtx . Text.pack
           }
 
@@ -968,21 +965,20 @@ instance FromPgField LBS.ByteString where
 
 instance FromPgField Text where
   fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
-    Just bs -> Right $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
+    Just bs -> Right $ decodeUtf8 bs
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField LT.Text where
   fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
-    Just bs -> Right $ LT.fromStrict $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf8 in our connections!
+    Just bs -> Right $ LT.fromStrict $ decodeUtf8 bs
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
 
 instance FromPgField String where
   fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
-    -- \| This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
     -- connection option).
-    Just bs -> Right $ Text.unpack $ decodeUtf8 bs -- TODO: Ensure we set client_encoding=utf in our connections!
+    Just bs -> Right $ Text.unpack $ decodeUtf8 bs
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
 
