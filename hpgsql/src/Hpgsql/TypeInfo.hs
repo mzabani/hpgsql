@@ -6,7 +6,6 @@
 module Hpgsql.TypeInfo
   ( EncodingContext (..),
     Oid (..),
-    TransactionStatus (..),
     TypeInfo (..),
     builtinPgTypesMap,
     buildTypeInfoCache,
@@ -101,16 +100,6 @@ import Data.Int (Int32)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
-
-data TransactionStatus
-  = -- | A command is in progress
-    TransActive
-  | -- | Not inside a transaction
-    TransIdle
-  | -- | Inside a transaction, but no command running
-    TransInTrans
-  | TransInError
-  deriving stock (Eq, Show)
 
 newtype Oid = Oid Int32
   deriving stock (Show)

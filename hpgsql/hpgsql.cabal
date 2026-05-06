@@ -48,6 +48,7 @@ library
       Hpgsql.Networking
       Hpgsql.QueryInternal
       Hpgsql.SimpleParser
+      Hpgsql.TransactionStatusInternal
       Paths_hpgsql
   autogen-modules:
       Paths_hpgsql

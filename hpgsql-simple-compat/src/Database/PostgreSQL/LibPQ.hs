@@ -3,7 +3,8 @@ module Database.PostgreSQL.LibPQ (fname, transactionStatus, Column (..), Connect
 import Data.ByteString (ByteString)
 import qualified Hpgsql
 import qualified Hpgsql.Transaction
-import Hpgsql.TypeInfo (Oid (..), TransactionStatus (..))
+import Hpgsql.Transaction (TransactionStatus (..))
+import Hpgsql.TypeInfo (Oid (..))
 
 data Connection = Connection {hpgConn :: Hpgsql.HPgConnection}
 

@@ -1,4 +1,4 @@
-module Hpgsql.Transaction (IsolationLevel (..), ReadWriteMode (..), begin, commit, rollback, withTransaction, withTransactionMode, beginMode, transactionStatus) where
+module Hpgsql.Transaction (withTransaction, withTransactionMode, begin, beginMode, commit, rollback, transactionStatus, IsolationLevel (..), ReadWriteMode (..), TransactionStatus (..)) where
 
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), bracketWithError, throw, tryAny)
@@ -6,7 +6,7 @@ import Control.Monad (unless)
 import Hpgsql.Internal (execute_, fullTransactionStatus, transactionStatus)
 import Hpgsql.InternalTypes (HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError)
 import Hpgsql.Query (Query)
-import Hpgsql.TypeInfo (TransactionStatus (..))
+import Hpgsql.TransactionStatusInternal (TransactionStatus (..))
 
 -- The types and constructors here have matching names to postgresql-simple where
 -- I thought sameness would be convenient. The implementation is of course our
