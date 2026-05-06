@@ -11,6 +11,7 @@
 --
 -- > {-# LANGUAGE QuasiQuotes #-}
 -- > import Hpgsql
+-- > import Hpgsql.Connection (withConnection, ConnectionString(..))
 -- > import Hpgsql.Query (sql)
 -- >
 -- > main :: IO ()
@@ -40,7 +41,7 @@
 --
 -- Values interpolated with @#{}@ are sent as query parameters, so they are safe from SQL injection.
 --
--- To embed a 'Query' fragment (e.g. a dynamic table name or a sub-query), use @^{}@:
+-- To embed a 'Query' fragment (e.g. an identifier or a sub-query), use @^{}@:
 --
 -- > let tableName = escapeIdentifier "users"
 -- > rows <- query conn [sql|SELECT * FROM ^{tableName}|]
@@ -48,6 +49,8 @@
 -- You can also use 'Hpgsql.Query.mkQuery' with dollar-numbered query arguments:
 --
 -- > query conn (mkQuery "SELECT * FROM users WHERE age BETWEEN $1 AND $2" (18 :: Int, 60 :: Int))
+--
+-- And finally, you can use the @[sqlPrep|...|]@ quasiquoter to build prepared statements.
 --
 -- = Fetching results
 --
@@ -65,24 +68,24 @@
 --
 -- To define your own encoder and decoder instances, take a look at "Hpgsql.Encoding".
 --
---
 -- = Handling errors
 --
 -- - Hpgsql is interruption-safe (with one exception for COPY inside transactions; see "Hpgsql.Copy"), so a query can be interrupted by asynchronous exceptions and you should still be able to run new queries on the same connection without any other side-effects. Naturally, it is up to you to determine which queries ran or not to completion, since they might have side-effects.
 -- - Hpgsql will throw either `PostgresError` or `IrrecoverableHpgsqlError`, and:
---   - If you receive a `IrrecoverableHpgsqlError`, Hpgsql makes no promises about which statements ran to completion and what connection state is, and you should `closeForcefully` the connection without running any other queries. These errors should only be thrown for "obvious" developer mistakes from which usually there would be no way to proceed, anyway.
---   - If you receive a `PostgresError` exception, postgres and Hpgsql's states are synced and you can issue new queries afterwards.
+--    - If you receive a `IrrecoverableHpgsqlError`, Hpgsql makes no promises about which statements ran to completion and what connection state is, and you should `closeForcefully` the connection without running any other queries. These errors should only be thrown for "obvious" developer mistakes from which usually there would be no way to proceed, anyway.
+--    - If you receive a `PostgresError` exception, postgres and Hpgsql's states are synced and you can issue new queries afterwards.
 --
 -- = What's in this module
 --
--- This module re-exports the essentials: connecting, querying, and the core types.
+-- This module re-exports some of the essentials: querying and the core types.
 -- For more functionality, see:
 --
+-- * "Hpgsql.Connection" for connecting and connection state resetting.
+-- * "Hpgsql.Copy" for @COPY@ protocol support.
+-- * "Hpgsql.Pipeline" for pipelined queries.
 -- * "Hpgsql.Query" for the @sql@ and @sqlPrep@ quasiquoters.
 -- * "Hpgsql.Transaction" for transaction management.
--- * "Hpgsql.Pipeline" for pipelined queries.
--- * "Hpgsql.Copy" for @COPY@ protocol support.
--- * "Hpgsql.Pool" for connection pool utilities.
+-- * "Hpgsql.Types" for extra types that might be useful.
 module Hpgsql
   ( -- * Query
     query,
@@ -125,5 +128,5 @@ where
 
 import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), RowDecoder (..))
 import Hpgsql.Internal
-import Hpgsql.InternalTypes (ConnectionString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), TransactionStatus (..))
+import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), TransactionStatus (..))
 import Hpgsql.Query (Query)

@@ -880,6 +880,7 @@ executeMany_ :: HPgConnection -> [Query] -> IO ()
 executeMany_ conn qry = void $ executeMany conn qry
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
+--
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
 -- consumed completely (up to the last row or a postgres error) before you are able
@@ -888,6 +889,7 @@ queryS :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryS = querySWith rowDecoder
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
+--
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
 -- consumed completely (up to the last row or a postgres error) before you are able
@@ -896,8 +898,10 @@ querySWith :: RowDecoder a -> HPgConnection -> Query -> IO (Stream (Of a) IO ())
 querySWith rparser conn qry = join $ runPipeline conn $ pipelineSWith rparser qry
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
+--
 -- Prefer to use 'queryS' and 'querySWith', because 'RowDecoder' can typecheck PostgreSQL results
 -- even when no rows are returned by queries, and 'RowDecoderMonadic' cannot.
+--
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
 -- consumed completely (up to the last row or a postgres error) before you are able
@@ -1147,9 +1151,11 @@ acquireOwnershipOfOrphanedQueries conn = do
         Nothing -> pure True
         Just tid -> (`elem` [ThreadDied, ThreadFinished]) <$> threadStatus tid
 
+-- | Fetches any number of rows by streaming them directly from the socket.
 pipelineS :: (FromPgRow a) => Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineS = pipelineSWith rowDecoder
 
+-- | Fetches any number of rows by streaming them directly from the socket, with a custom row decoder.
 pipelineSWith :: RowDecoder a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
@@ -1174,9 +1180,11 @@ pipelineSMWith rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQuer
             pure $ consumeStreamingResults (MonadicRowDecoder rowparser) conn (fromMaybe (error "pipelineSMWith internal bug: no mLastQry") mLastQry)
     )
 
+-- | Fetches any number of rows from a query.
 pipeline :: (FromPgRow a) => Query -> Pipeline (IO [a])
 pipeline = pipelineWith rowDecoder
 
+-- | Fetches any number of rows from a query with a custom row decoder.
 pipelineWith :: RowDecoder a -> Query -> Pipeline (IO [a])
 pipelineWith rowparser q = (S.toList_ =<<) <$> pipelineSWith rowparser q
 
@@ -1185,9 +1193,13 @@ pipelineWith rowparser q = (S.toList_ =<<) <$> pipelineSWith rowparser q
 pipelineM :: RowDecoderMonadic a -> Query -> Pipeline (IO [a])
 pipelineM rowparser q = (S.toList_ =<<) <$> pipelineSMWith rowparser q
 
+-- | Fetch exactly one row (not zero, not more than one) or throw
+-- an exception otherwise.
 pipeline1 :: (FromPgRow a) => Query -> Pipeline (IO a)
 pipeline1 = pipeline1With rowDecoder
 
+-- | Fetch exactly one row (not zero, not more than one) or throw
+-- an exception otherwise.
 pipeline1With :: RowDecoder a -> Query -> Pipeline (IO a)
 pipeline1With rowparser q = (toSingleRow =<<) <$> pipelineWith rowparser q
   where
@@ -1198,9 +1210,11 @@ pipeline1With rowparser q = (toSingleRow =<<) <$> pipelineWith rowparser q
         [singleRow] -> pure singleRow
         _ -> throwIrrecoverableErrorWithStatement queryBs "Expected exactly one row in query/pipeline1 call, but got more than one."
 
+-- | Fetch one or zero rows (not more than one) or throw an exception otherwise.
 pipelineMay :: (FromPgRow a) => Query -> Pipeline (IO (Maybe a))
 pipelineMay = pipelineMayWith rowDecoder
 
+-- | Fetch one or zero rows (not more than one) or throw an exception otherwise.
 pipelineMayWith :: RowDecoder a -> Query -> Pipeline (IO (Maybe a))
 pipelineMayWith rowparser q = (toMaybeRow =<<) <$> pipelineWith rowparser q
   where
@@ -1211,6 +1225,7 @@ pipelineMayWith rowparser q = (toMaybeRow =<<) <$> pipelineWith rowparser q
         [singleRow] -> pure $ Just singleRow
         _ -> throwIrrecoverableErrorWithStatement queryBs "Expected zero or one row in query/pipelineMay call, but got more than one."
 
+-- | Returns the count of affected rows of the given query.
 pipelineCmd :: Query -> Pipeline (IO Int64)
 pipelineCmd = pipelineCmdInternal . breakQueryIntoStatements
 
@@ -1230,6 +1245,7 @@ pipelineCmdInternal qs =
 
 -- | Runs a pipeline of statements, that is, sends multiple SQL statements in a single round-trip
 -- to the server.
+--
 -- Note on thread safety: the thread that runs this must be the thread that consumes the
 -- results of every query in the supplied pipeline _in order_, until all
 -- query results are consumed or an error occurs.
@@ -1322,9 +1338,15 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           Left err -> throwPostgresError qText err
           Right _cmdComplete -> pure mempty
 
+-- | Fetches any number of rows from a query.
+--
+-- > query conn "SELECT * FROM table"
 query :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO [a]
 query = queryWith (rowDecoder @a)
 
+-- | Fetches any number of rows from a query with a custom row decoder.
+--
+-- > queryWith rowDecoder conn "SELECT * FROM table"
 queryWith :: RowDecoder a -> HPgConnection -> Query -> IO [a]
 queryWith rparser conn qry = join $ runPipeline conn $ pipelineWith rparser qry
 
@@ -1333,31 +1355,57 @@ queryWith rparser conn qry = join $ runPipeline conn $ pipelineWith rparser qry
 queryMWith :: RowDecoderMonadic a -> HPgConnection -> Query -> IO [a]
 queryMWith rparser conn qry = join $ runPipeline conn $ pipelineM rparser qry
 
+-- | Fetch exactly one row (not zero, not more than one) or throw
+-- an exception otherwise.
 query1 :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO a
 query1 = query1With rowDecoder
 
+-- | Fetch exactly one row (not zero, not more than one) or throw
+-- an exception otherwise.
 query1With :: RowDecoder a -> HPgConnection -> Query -> IO a
 query1With rparser conn q = join $ runPipeline conn $ pipeline1With rparser q
 
+-- | Fetch one or zero rows (not more than one) or throw an exception otherwise.
 queryMay :: forall a. (FromPgRow a) => HPgConnection -> Query -> IO (Maybe a)
 queryMay = queryMayWith rowDecoder
 
+-- | Fetch one or zero rows (not more than one) or throw an exception otherwise.
 queryMayWith :: RowDecoder a -> HPgConnection -> Query -> IO (Maybe a)
 queryMayWith rparser conn q = join $ runPipeline conn $ pipelineMayWith rparser q
 
--- | Note on interruption safety: if this is interrupted by an asynchronous
+-- | Runs a COPY FROM STDIN statement, giving you the ability to pass a
+-- row-inserting function.
+--
+-- > withCopy_ conn "COPY employee FROM STDIN WITH (FORMAT CSV)" $ do
+-- >    putCopyData conn "5,Dracula\n"
+-- >    putCopyData conn "6,The Grinch\n"
+--
+-- You can also use `copyFromS` for binary COPY.
+--
+-- Note on interruption safety: if this is interrupted by an asynchronous
 -- exception while running inside a transaction, hpgsql will throw an exception
 -- on the next statement. This happens because hpgsql would change semantics if
 -- it aborted the COPY statement - because it would abort the entire transaction -,
--- and it couldn't "complete" the COPY either.
+-- and it couldn't "complete" the COPY either due to the risk of not all rows
+-- having been inserted.
 withCopy_ :: HPgConnection -> Query -> IO a -> IO Int64
 withCopy_ conn copyQ copyFn = fst <$> withCopy conn copyQ copyFn
 
--- | Note on interruption safety: if this is interrupted by an asynchronous
+-- | Runs a COPY FROM STDIN statement, giving you the ability to pass a
+-- row-inserting function.
+--
+-- > withCopy conn "COPY employee FROM STDIN WITH (FORMAT CSV)" $ do
+-- >    putCopyData conn "5,Dracula\n"
+-- >    putCopyData conn "6,The Grinch\n"
+--
+-- You can also use `copyFromS` for binary COPY.
+--
+-- Note on interruption safety: if this is interrupted by an asynchronous
 -- exception while running inside a transaction, hpgsql will throw an exception
 -- on the next statement. This happens because hpgsql would change semantics if
 -- it aborted the COPY statement - because it would abort the entire transaction -,
--- and it couldn't "complete" the COPY either.
+-- and it couldn't "complete" the COPY either due to the risk of not all rows
+-- having been inserted.
 withCopy :: HPgConnection -> Query -> IO a -> IO (Int64, a)
 withCopy conn copyQ copyFn = withCopyInternal conn copyQ $ \qryId -> do
   ret <- copyFn
@@ -1390,9 +1438,14 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
       void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
       copyFn qryId
 
--- | Copies rows into a table.
+-- | Copies rows into a table with the binary COPY protocol.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
 -- Returns the Stream's result and the count of inserted rows.
+--
+-- > let rows :: Stream (Of Employee) IO ()
+-- >     rows = someStreamOfEmployees
+-- > copyFromS conn "COPY employee FROM STDIN WITH (FORMAT BINARY)" rows
+--
 -- Note on interruption safety: if this is interrupted by an asynchronous
 -- exception while running inside a transaction, hpgsql will throw an exception
 -- on the next statement. This happens because hpgsql would change semantics if
@@ -1427,14 +1480,20 @@ copyFromS conn copyQ allRows =
     count <- copyEndInternal conn qryId
     pure (count, ret)
 
--- | Copies rows into a table.
+-- | Copies rows into a table with the binary COPY protocol.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
--- Returns the count of inserted rows.
+-- Returns the Stream's result and the count of inserted rows.
+--
+-- > let rows :: [Employee]
+-- >     rows = someListOfEmployees
+-- > copyFrom conn "COPY employee FROM STDIN WITH (FORMAT BINARY)" rows
+--
 -- Note on interruption safety: if this is interrupted by an asynchronous
 -- exception while running inside a transaction, hpgsql will throw an exception
 -- on the next statement. This happens because hpgsql would change semantics if
 -- it aborted the COPY statement - because it would abort the entire transaction -,
--- and it couldn't "complete" the COPY either.
+-- and it couldn't "complete" the COPY either due to the risk of not all rows
+-- having been inserted.
 copyFrom :: (ToPgRow r) => HPgConnection -> Query -> [r] -> IO Int64
 copyFrom conn copyQ rows = fst <$> copyFromS conn copyQ (S.each rows)
 
