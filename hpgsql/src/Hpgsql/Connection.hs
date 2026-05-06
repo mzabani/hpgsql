@@ -150,8 +150,9 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
               pure
                 ConnectionString
                   { hostname =
-                      Text.pack $ unEscapeString $
-                        unescapeIPv6 uriRegName,
+                      Text.pack $
+                        unEscapeString $
+                          unescapeIPv6 uriRegName,
                     port = parsedPort,
                     user,
                     password,

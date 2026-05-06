@@ -1,4 +1,3 @@
-
 module Database.PostgreSQL.Simple.HpgsqlUtils
   ( toHpgsqlQuery,
     toHpgsqlRowParams,

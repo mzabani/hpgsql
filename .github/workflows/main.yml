@@ -15,7 +15,6 @@ defaults:
     shell: bash # Implies `set -eo pipefail`, among other things. See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsshell
 
 env:
-  CI: 1
   HPGSQL_THREADED: +threaded
 
 jobs:
@@ -63,9 +62,6 @@ jobs:
     - name: Run hpgsql-simple-compat tests
       run: |
         scripts/ci/run-tests-and-annotate-with-error.sh local/hpgsql-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg18
-
-    - name: Run hlint and `cabal check`
-      run: nix-shell --run 'hlint . && cd hpgsql && cabal check && cd -'
 
   build-aarch64-darwin:
     runs-on: macos-14
@@ -116,3 +112,33 @@ jobs:
     - name: Run hpgsql-simple-compat tests
       run: |
         scripts/ci/run-tests-and-annotate-with-error.sh local/hpgsql-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg18
+
+  lint-format-and-cabal-checks:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        submodules: recursive
+
+    - uses: cachix/install-nix-action@526118121621777ccd86f79b04685a9319637641 # 31.3.30
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+        extra_nix_config: |
+          substituters = https://cache.nixos.org https://mzabani.cachix.org
+          trusted-public-keys = mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+
+    - name: Run hlint and `cabal check`
+      run: nix-shell --run 'hlint . && cd hpgsql && cabal check && cd -'
+
+    - name: Check code is formatted
+      run: |
+        nix-shell --run 'run format-hs'
+        if [ -n "$(git diff --name-only)" ]; then
+          echo "The following files are not properly formatted:"
+          git diff --name-only
+          echo ""
+          echo "Run 'run format-hs' locally and commit the changes."
+          exit 1
+        fi
+

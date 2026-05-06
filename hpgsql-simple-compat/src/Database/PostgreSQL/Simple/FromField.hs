@@ -1,4 +1,3 @@
-
 -- |
 -- Module:      Database.PostgreSQL.Simple.FromField
 -- Copyright:   (c) 2011 MailRank, Inc.
@@ -120,7 +119,7 @@ import Database.PostgreSQL.Simple.Ok (Ok (..))
 import Database.PostgreSQL.Simple.TypeInfo as TI
 import Database.PostgreSQL.Simple.TypeInfo.Types (fromHpgsqlTypeInfo)
 import Database.PostgreSQL.Simple.Types (Binary (..))
-import Hpgsql.Encoding (FieldInfo (..), EncodingContext (..), FromPgField (..))
+import Hpgsql.Encoding (EncodingContext (..), FieldInfo (..), FromPgField (..))
 import qualified Hpgsql.Encoding as Hpgsql
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid, lookupTypeByOid)

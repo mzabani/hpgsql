@@ -1,4 +1,3 @@
-
 -- |
 -- Module:      Database.PostgreSQL.Simple.Time.Internal.Parser
 -- Copyright:   (c) 2012-2015 Leon P Smith

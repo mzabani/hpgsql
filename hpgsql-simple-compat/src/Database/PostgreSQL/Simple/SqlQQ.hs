@@ -1,19 +1,20 @@
 ------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+
 -- |
 -- Module:      Database.PostgreSQL.Simple.SqlQQ
 -- Copyright:   (c) 2011-2012 Leon P Smith
 -- License:     BSD3
 -- Maintainer:  Leon P Smith <leon@melding-monads.com>
 -- Stability:   experimental
---
-------------------------------------------------------------------------------
-
 module Database.PostgreSQL.Simple.SqlQQ (sql) where
+
+import Data.Char
+import Data.String
 import Database.PostgreSQL.Simple.Types (Query)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
-import Data.Char
-import Data.String
 
 -- | 'sql' is a quasiquoter that eases the syntactic burden
 -- of writing big sql statements in Haskell source code.  For example:
@@ -48,37 +49,37 @@ import Data.String
 --
 -- Also note that this will not work if the substring @|]@ is contained
 -- in the query.
-
 sql :: QuasiQuoter
-sql = QuasiQuoter
-    { quotePat  = error "Database.PostgreSQL.Simple.SqlQQ.sql: quasiquoter used in pattern context"
-    , quoteType = error "Database.PostgreSQL.Simple.SqlQQ.sql: quasiquoter used in type context"
-    , quoteExp  = sqlExp
-    , quoteDec  = error "Database.PostgreSQL.Simple.SqlQQ.sql: quasiquoter used in declaration context"
+sql =
+  QuasiQuoter
+    { quotePat = error "Database.PostgreSQL.Simple.SqlQQ.sql: quasiquoter used in pattern context",
+      quoteType = error "Database.PostgreSQL.Simple.SqlQQ.sql: quasiquoter used in type context",
+      quoteExp = sqlExp,
+      quoteDec = error "Database.PostgreSQL.Simple.SqlQQ.sql: quasiquoter used in declaration context"
     }
 
 sqlExp :: String -> Q Exp
-sqlExp = appE [| fromString :: String -> Query |] . stringE . minimizeSpace
+sqlExp = appE [|fromString :: String -> Query|] . stringE . minimizeSpace
 
 minimizeSpace :: String -> String
 minimizeSpace = drop 1 . reduceSpace
   where
-    needsReduced []          = False
-    needsReduced ('-':'-':_) = True
-    needsReduced (x:_)       = isSpace x
+    needsReduced [] = False
+    needsReduced ('-' : '-' : _) = True
+    needsReduced (x : _) = isSpace x
 
     reduceSpace xs =
-        case dropWhile isSpace xs of
-          [] -> []
-          ('-':'-':ys) -> reduceSpace (dropWhile (/= '\n') ys)
-          ys -> ' ' : insql ys
+      case dropWhile isSpace xs of
+        [] -> []
+        ('-' : '-' : ys) -> reduceSpace (dropWhile (/= '\n') ys)
+        ys -> ' ' : insql ys
 
-    insql ('\'':xs)            = '\'' : instring xs
+    insql ('\'' : xs) = '\'' : instring xs
     insql xs | needsReduced xs = reduceSpace xs
-    insql (x:xs)               = x : insql xs
-    insql []                   = []
+    insql (x : xs) = x : insql xs
+    insql [] = []
 
-    instring ('\'':'\'':xs) = '\'':'\'': instring xs
-    instring ('\'':xs)      = '\'': insql xs
-    instring (x:xs)         = x : instring xs
-    instring []             = error "Database.PostgreSQL.Simple.SqlQQ.sql: string literal not terminated"
+    instring ('\'' : '\'' : xs) = '\'' : '\'' : instring xs
+    instring ('\'' : xs) = '\'' : insql xs
+    instring (x : xs) = x : instring xs
+    instring [] = error "Database.PostgreSQL.Simple.SqlQQ.sql: string literal not terminated"

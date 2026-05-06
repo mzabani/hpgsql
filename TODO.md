@@ -3,7 +3,8 @@
   - hstore
   - PGRange?
 - Get rid of Time.hs? Move Unbounded to Types.hs?
-- `run format-hs`, check all is formatted in CI as the last step
+- Set client_encoding to utf8, error if it's not
+- Support escapeIdentifier taking schema-qualified objects
 - Write a FromRow instance in hpgsql-simple-compat that checks number of fields and decodes a row of arbitrary length
   - Can the Applicative RowDecoder also know about remaining fields? Ordering is fine in Applicative, it's just sequencing that isn't.- Review all exposed functions per module, move more to Internal modules
 - Double-check our tests don't import Internal modules except for very specific things

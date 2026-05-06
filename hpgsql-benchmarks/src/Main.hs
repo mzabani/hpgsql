@@ -40,8 +40,8 @@ import qualified Hasql.Encoders as HasqlEnc
 import qualified Hasql.Session as HasqlSess
 import qualified Hasql.Statement as HasqlStmt
 import qualified Hpgsql
-import qualified Hpgsql.Connection
 import Hpgsql.Connection (renderLibpqConnectionString)
+import qualified Hpgsql.Connection
 import qualified Hpgsql.Copy
 import qualified Hpgsql.Query as Hpgsql
 import qualified Hpgsql.Types as Hpgsql

@@ -52,12 +52,8 @@ format-hs:
     readarray -d '' FILES < <(git ls-files -z '*.hs')
 
     for f in "${FILES[@]}"; do
-        if [ "$f" = "src/Codd/Internal.hs" ]; then
-            echo "Skipping \"$f\" because of some fourmolu bug"
-        else
-            echo "Formatting $f..."
-            fourmolu --mode inplace "$f"
-        fi
+        echo "Formatting $f..."
+        fourmolu --mode inplace "$f"
     done
 
 ##

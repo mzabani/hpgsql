@@ -3,8 +3,8 @@
 module QuasiQuoters (testQuasiQuoters) where
 
 import Common
-import Data.Maybe (catMaybes)
 import Data.List (intersperse)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Database.PostgreSQL.Query.Functions (pgQuery)
 import Database.PostgreSQL.Query.TH.SqlExp (sqlExp)
@@ -64,17 +64,20 @@ testSqlExpDynamicQuery TestEnv {..} = do
       minage = Just (10 :: Int)
       maxage = Just (50 :: Int)
       ord = "u.name" :: FN
-      condlist = catMaybes
-        [ fmap (\a -> [sqlExp|u.name LIKE #{a}|]) name
-        , fmap (\a -> [sqlExp|u.age > #{a}|]) minage
-        , fmap (\a -> [sqlExp|u.age < #{a}|]) maxage
-        ]
+      condlist =
+        catMaybes
+          [ fmap (\a -> [sqlExp|u.name LIKE #{a}|]) name,
+            fmap (\a -> [sqlExp|u.age > #{a}|]) minage,
+            fmap (\a -> [sqlExp|u.age < #{a}|]) maxage
+          ]
       conds = case condlist of
         [] -> ""
-        _  -> " WHERE " <> foldr1 (<>) (intersperse " AND " condlist)
-  res <- runPgMonadT conn $
-    pgQuery [sqlExp|SELECT u.id, u.name, u.age FROM users AS u ^{conds} ORDER BY ^{fnToQuery ord}|]
+        _ -> " WHERE " <> foldr1 (<>) (intersperse " AND " condlist)
+  res <-
+    runPgMonadT conn $
+      pgQuery [sqlExp|SELECT u.id, u.name, u.age FROM users AS u ^{conds} ORDER BY ^{fnToQuery ord}|]
 
-  res @?= [ (3 :: Int, "Peyton Manning" :: Text, 45 :: Int)
-          , (1, "Simon Peyton Jones", 30)
-          ]
+  res
+    @?= [ (3 :: Int, "Peyton Manning" :: Text, 45 :: Int),
+          (1, "Simon Peyton Jones", 30)
+        ]

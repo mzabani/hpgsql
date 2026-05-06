@@ -1,4 +1,3 @@
-
 module Database.PostgreSQL.Query.Types
   ( -- * Auxiliary types
     FN (..),
@@ -15,26 +14,24 @@ where
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Reader (MonadReader (..), ReaderT (..))
 import Control.Monad.Trans (MonadTrans)
+import qualified Data.List as L
 import Data.String (IsString (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import qualified Data.List as L
 import Database.PostgreSQL.Query.SqlBuilder (ToSqlBuilder (..))
 import Database.PostgreSQL.Simple.Internal (Connection)
 import Hpgsql.InternalTypes (Query)
 import Hpgsql.Query (escapeIdentifier)
 
-{- | Dot-separated field name. Each element in nested list will be
-properly quoted and separated by dot.
-
->>> "user.name" :: FN
-FN ["user","name"]
-
->>> ("user" <> "name") :: FN
-FN ["user","name"]
-
--}
+-- | Dot-separated field name. Each element in nested list will be
+-- properly quoted and separated by dot.
+--
+-- >>> "user.name" :: FN
+-- FN ["user","name"]
+--
+-- >>> ("user" <> "name") :: FN
+-- FN ["user","name"]
 newtype FN = FN [Text]
   deriving stock (Ord, Eq, Show)
   deriving newtype (Semigroup, Monoid)

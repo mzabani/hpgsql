@@ -1,4 +1,3 @@
-
 module Database.PostgreSQL.Query.SqlBuilder.Class
   ( ToSqlBuilder (..),
   )

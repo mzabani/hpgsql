@@ -1,4 +1,16 @@
 ------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+{-# LANGUAGE OverloadedStrings #-}
+------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+{-# LANGUAGE QuasiQuotes #-}
+------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+{-# LANGUAGE RecordWildCards #-}
+------------------------------------------------------------------------------
+------------------------------------------------------------------------------
+{-# LANGUAGE ViewPatterns #-}
+
 -- |
 -- Module:      GenTypeInfo
 -- Copyright:   (c) 2011-2012 Leon P Smith
@@ -24,55 +36,51 @@
 -- @
 -- runghc -itools tools/GenTypeInfo.hs
 -- @
-------------------------------------------------------------------------------
-
-{-# LANGUAGE OverloadedStrings, QuasiQuotes, ViewPatterns, RecordWildCards #-}
-
 module GenBuiltinTypes where
 
-import Prelude hiding ((++), concat)
+import Prelude hiding (concat, (++))
 
-import           StringsQQ
-import           Control.Arrow((&&&))
-import           Control.Applicative
-import           Control.Exception(bracket)
-import           Database.PostgreSQL.Simple
-import           Database.PostgreSQL.Simple.FromRow
-import           Database.PostgreSQL.Simple.Ok
-import           Database.PostgreSQL.Simple.Types(Oid(..))
-import           Database.PostgreSQL.Simple.SqlQQ
+import Control.Applicative
+import Control.Arrow ((&&&))
+import Control.Exception (bracket)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Builder as Blaze
 import qualified Data.ByteString.Char8 as B8
-import           Data.ByteString(ByteString)
-import qualified Data.ByteString.Lazy  as L
-import qualified Data.ByteString.Builder            as Blaze
-import           Data.String
-import           Data.List ( sort, intersperse )
+import qualified Data.ByteString.Lazy as L
+import Data.List (intersperse, sort)
 import qualified Data.Map as Map
+import Data.String
+import Database.PostgreSQL.Simple
+import Database.PostgreSQL.Simple.FromRow
+import Database.PostgreSQL.Simple.Ok
+import Database.PostgreSQL.Simple.SqlQQ
+import Database.PostgreSQL.Simple.Types (Oid (..))
+import StringsQQ
 
 import Data.Monoid
 
-(++) :: Monoid a => a -> a -> a
+(++) :: (Monoid a) => a -> a -> a
 (++) = mappend
 infixr 5 ++
 
-concat :: Monoid a => [a] -> a
+concat :: (Monoid a) => [a] -> a
 concat = mconcat
 
 data TypeInfo = TypeInfo
-    { typoid      :: Oid
-    , typcategory :: Char
-    , typdelim    :: Char
-    , typname     :: ByteString
-    , typelem     :: Oid
-    , rngsubtype  :: Maybe Oid
-    }
+  { typoid :: Oid,
+    typcategory :: Char,
+    typdelim :: Char,
+    typname :: ByteString,
+    typelem :: Oid,
+    rngsubtype :: Maybe Oid
+  }
 
-instance FromRow TypeInfo where 
-    fromRow = TypeInfo <$> field <*> field <*> field <*> field <*> field <*> field
+instance FromRow TypeInfo where
+  fromRow = TypeInfo <$> field <*> field <*> field <*> field <*> field <*> field
 
-type NameMap   = Map.Map B8.ByteString TypeInfo
+type NameMap = Map.Map B8.ByteString TypeInfo
 
-type OidMap    = Map.Map Oid TypeInfo
+type OidMap = Map.Map Oid TypeInfo
 
 type TypeName = (B8.ByteString, B8.ByteString)
 
@@ -81,7 +89,8 @@ type TypeNames = [TypeName]
 -- Note that the following syntax is "pgName <whitespace> hsName",  though
 -- they default to the same thing if there is only one identifier
 typeNames :: TypeNames
-typeNames = [typenames|
+typeNames =
+  [typenames|
 bool
 bytea
 char
@@ -204,126 +213,199 @@ withPostgreSQL = bracket (connectPostgreSQL connectionString) close
 
 getTypeInfos :: TypeNames -> IO (OidMap, NameMap)
 getTypeInfos typnames = withPostgreSQL $ \conn -> do
-    infos <- query conn [sql| 
+  infos <-
+    query
+      conn
+      [sql| 
          WITH types AS 
             (SELECT oid, typcategory, typdelim, typname, typelem
                FROM pg_type WHERE typname IN ?)
             SELECT types.*, rngsubtype FROM types LEFT JOIN pg_range ON oid = rngtypid
-      |] (Only (In (sort (map pg typnames))))
-    loop conn (oidMap infos) (nameMap infos) infos
+      |]
+      (Only (In (sort (map pg typnames))))
+  loop conn (oidMap infos) (nameMap infos) infos
   where
-    oidMap  = Map.fromList . map (typoid  &&& id)
+    oidMap = Map.fromList . map (typoid &&& id)
     nameMap = Map.fromList . map (typname &&& id)
     loop conn oids names infos = do
-      let unknowns = [ x | x <- map typelem infos ++
-                                  [ x | Just x <- map rngsubtype infos ],
-                           x /= Oid 0,
-                           not (Map.member x oids) ]
+      let unknowns =
+            [ x
+            | x <-
+                map typelem infos
+                  ++ [x | Just x <- map rngsubtype infos],
+              x /= Oid 0,
+              not (Map.member x oids)
+            ]
       case unknowns of
-        []    -> return (oids, names)
-        (_:_) -> do
-           infos' <- query conn [sql|
+        [] -> return (oids, names)
+        (_ : _) -> do
+          infos' <-
+            query
+              conn
+              [sql|
              WITH types AS 
                (SELECT oid, typcategory, typdelim, typname, typelem
                   FROM pg_type WHERE oid IN ?)
                SELECT types.*, rngsubtype 
                  FROM types LEFT JOIN pg_range ON oid = rngtypid
-             |] (Only (In (sort unknowns)))
-           let oids'  = oids  `Map.union` oidMap  infos'
-               names' = names `Map.union` nameMap infos'
-           loop conn oids' names' infos'
+             |]
+              (Only (In (sort unknowns)))
+          let oids' = oids `Map.union` oidMap infos'
+              names' = names `Map.union` nameMap infos'
+          loop conn oids' names' infos'
 
 main = do
   (oidmap, namemap) <- getTypeInfos typeNames
-  L.writeFile "src/Database/PostgreSQL/Simple/TypeInfo/Static.hs"
-              (Blaze.toLazyByteString (renderFile oidmap namemap typeNames))
-
+  L.writeFile
+    "src/Database/PostgreSQL/Simple/TypeInfo/Static.hs"
+    (Blaze.toLazyByteString (renderFile oidmap namemap typeNames))
 
 showOid (Oid n) = show n
 
 renderOid :: NameMap -> TypeName -> Blaze.Builder
-renderOid byName name
-  = case Map.lookup (pg name) byName of
-      Nothing -> error (B8.unpack (pg name))
-      Just (showOid . typoid -> n) -> fromString n
-                              ++ fromString (replicate (4 - length n) ' ')
+renderOid byName name =
+  case Map.lookup (pg name) byName of
+    Nothing -> error (B8.unpack (pg name))
+    Just (showOid . typoid -> n) ->
+      fromString n
+        ++ fromString (replicate (4 - length n) ' ')
 
 renderElem :: OidMap -> Oid -> Blaze.Builder
 renderElem byOid elemOid
   | elemOid == Oid 0 = "Nothing"
   | otherwise = case Map.lookup elemOid byOid of
-                  Nothing -> error ("oid not found: " ++ show elemOid)
-                  Just x  -> "Just " ++ bs (typname x)
+      Nothing -> error ("oid not found: " ++ show elemOid)
+      Just x -> "Just " ++ bs (typname x)
 
 renderTypeInfo :: OidMap -> TypeInfo -> TypeName -> Blaze.Builder
 renderTypeInfo byOid info name
   | typcategory info == 'A' || typname info == "_record" =
-     let (Just typelem_info)    = Map.lookup (typelem info) byOid
-         typelem_hs_name =
-             case lookup (typname typelem_info) typeNames of
-               Nothing -> error (   "type not found: "
-                                 ++ B8.unpack( typname typelem_info)
-                                 ++ " (typelem of " ++ B8.unpack (typname info)
-                                 ++ ")")
-               Just x  -> x
-      in concat
-           [ "\n"
-           , bs (hs name), " :: TypeInfo\n"
-           , bs (hs name), " =  Array {\n"
-           , "    typoid      = ", bs (hs name), "Oid,\n"
-           , "    typcategory = '", bs $ B8.singleton (typcategory info), "',\n"
-           , "    typdelim    = '", bs $ B8.singleton (typdelim info), "',\n"
-           , "    typname     = \"", bs (typname info), "\",\n"
-           , "    typelem     = ", bs typelem_hs_name, "\n"
-           , "  }\n"
-           , "\n"
-           , bs (hs name), "Oid :: Oid\n"
-           , bs (hs name), "Oid = ", fromString (show (typoid info)), "\n"
-           , "{-# INLINE ", bs (hs name), "Oid #-}"
-           , "\n"
-           ]
+      let (Just typelem_info) = Map.lookup (typelem info) byOid
+          typelem_hs_name =
+            case lookup (typname typelem_info) typeNames of
+              Nothing ->
+                error
+                  ( "type not found: "
+                      ++ B8.unpack (typname typelem_info)
+                      ++ " (typelem of "
+                      ++ B8.unpack (typname info)
+                      ++ ")"
+                  )
+              Just x -> x
+       in concat
+            [ "\n",
+              bs (hs name),
+              " :: TypeInfo\n",
+              bs (hs name),
+              " =  Array {\n",
+              "    typoid      = ",
+              bs (hs name),
+              "Oid,\n",
+              "    typcategory = '",
+              bs $ B8.singleton (typcategory info),
+              "',\n",
+              "    typdelim    = '",
+              bs $ B8.singleton (typdelim info),
+              "',\n",
+              "    typname     = \"",
+              bs (typname info),
+              "\",\n",
+              "    typelem     = ",
+              bs typelem_hs_name,
+              "\n",
+              "  }\n",
+              "\n",
+              bs (hs name),
+              "Oid :: Oid\n",
+              bs (hs name),
+              "Oid = ",
+              fromString (show (typoid info)),
+              "\n",
+              "{-# INLINE ",
+              bs (hs name),
+              "Oid #-}",
+              "\n"
+            ]
   | typcategory info == 'R' =
-      let (Just rngsubtype_oid)  = rngsubtype info
+      let (Just rngsubtype_oid) = rngsubtype info
           (Just rngsubtype_info) = Map.lookup rngsubtype_oid byOid
           rngsubtype_hs_name =
-              case lookup (typname rngsubtype_info) typeNames of
-                Nothing -> error (   "type not found: "
-                                  ++ B8.unpack (typname rngsubtype_info)
-                                  ++ " (rngsubtype of "
-                                  ++ B8.unpack (typname info) ++ ")")
-                Just x  -> x
+            case lookup (typname rngsubtype_info) typeNames of
+              Nothing ->
+                error
+                  ( "type not found: "
+                      ++ B8.unpack (typname rngsubtype_info)
+                      ++ " (rngsubtype of "
+                      ++ B8.unpack (typname info)
+                      ++ ")"
+                  )
+              Just x -> x
        in concat
-           [ "\n"
-           , bs (hs name), " :: TypeInfo\n"
-           , bs (hs name), " =  Range {\n"
-           , "    typoid      = ", bs (hs name), "Oid,\n"
-           , "    typcategory = '", bs $ B8.singleton (typcategory info), "',\n"
-           , "    typdelim    = '", bs $ B8.singleton (typdelim info), "',\n"
-           , "    typname     = \"", bs (typname info), "\",\n"
-           , "    rngsubtype  = ", bs rngsubtype_hs_name, "\n"
-           , "  }\n"
-           , "\n"
-           , bs (hs name), "Oid :: Oid\n"
-           , bs (hs name), "Oid = ", fromString (show (typoid info)), "\n"
-           , "{-# INLINE ", bs (hs name), "Oid #-}"
-           , "\n"
-           ]
+            [ "\n",
+              bs (hs name),
+              " :: TypeInfo\n",
+              bs (hs name),
+              " =  Range {\n",
+              "    typoid      = ",
+              bs (hs name),
+              "Oid,\n",
+              "    typcategory = '",
+              bs $ B8.singleton (typcategory info),
+              "',\n",
+              "    typdelim    = '",
+              bs $ B8.singleton (typdelim info),
+              "',\n",
+              "    typname     = \"",
+              bs (typname info),
+              "\",\n",
+              "    rngsubtype  = ",
+              bs rngsubtype_hs_name,
+              "\n",
+              "  }\n",
+              "\n",
+              bs (hs name),
+              "Oid :: Oid\n",
+              bs (hs name),
+              "Oid = ",
+              fromString (show (typoid info)),
+              "\n",
+              "{-# INLINE ",
+              bs (hs name),
+              "Oid #-}",
+              "\n"
+            ]
   | otherwise =
-         concat
-           [ "\n"
-           , bs (hs name), " :: TypeInfo\n"
-           , bs (hs name), " =  Basic {\n"
-           , "    typoid      = ", bs (hs name), "Oid,\n"
-           , "    typcategory = '", bs $ B8.singleton (typcategory info), "',\n"
-           , "    typdelim    = '", bs $ B8.singleton (typdelim info), "',\n"
-           , "    typname     = \"", bs (typname info), "\"\n"
-           , "  }\n"
-           , "\n"
-           , bs (hs name), "Oid :: Oid\n"
-           , bs (hs name), "Oid = ", fromString (show (typoid info)), "\n"
-           , "{-# INLINE ", bs (hs name), "Oid #-}"
-           , "\n"
-           ]
+      concat
+        [ "\n",
+          bs (hs name),
+          " :: TypeInfo\n",
+          bs (hs name),
+          " =  Basic {\n",
+          "    typoid      = ",
+          bs (hs name),
+          "Oid,\n",
+          "    typcategory = '",
+          bs $ B8.singleton (typcategory info),
+          "',\n",
+          "    typdelim    = '",
+          bs $ B8.singleton (typdelim info),
+          "',\n",
+          "    typname     = \"",
+          bs (typname info),
+          "\"\n",
+          "  }\n",
+          "\n",
+          bs (hs name),
+          "Oid :: Oid\n",
+          bs (hs name),
+          "Oid = ",
+          fromString (show (typoid info)),
+          "\n",
+          "{-# INLINE ",
+          bs (hs name),
+          "Oid #-}",
+          "\n"
+        ]
 
 -- FIXME:  add in any names that we need that we didn't specify, (i.e.
 --         the "unknowns" in getTypeInfos
@@ -338,7 +420,8 @@ pg = fst
 hs = snd
 
 renderFile :: OidMap -> NameMap -> TypeNames -> Blaze.Builder
-renderFile byOid byName names = ([longstring|
+renderFile byOid byName names =
+  ( [longstring|
 ------------------------------------------------------------------------------
 -- |
 -- Module:      Database.PostgreSQL.Simple.TypeInfo
@@ -359,9 +442,17 @@ renderFile byOid byName names = ([longstring|
 module Database.PostgreSQL.Simple.TypeInfo.Static
      ( TypeInfo(..)
      , staticTypeInfo
-|] ++ concat [ "     , " ++ bs (hs name) ++ "\n"
-            ++ "     , " ++ bs (hs name) ++ "Oid\n"
-             | name <- names ] ++ [longstring|
+|]
+      ++ concat
+        [ "     , "
+            ++ bs (hs name)
+            ++ "\n"
+            ++ "     , "
+            ++ bs (hs name)
+            ++ "Oid\n"
+        | name <- names
+        ]
+      ++ [longstring|
      ) where
 
 import Database.PostgreSQL.LibPQ (Oid(..))
@@ -369,13 +460,23 @@ import Database.PostgreSQL.Simple.TypeInfo.Types
 
 staticTypeInfo :: Oid -> Maybe TypeInfo
 staticTypeInfo (Oid x) = case x of
-|] ++ concat [concat [ "    ", renderOid byName name,
-                                  " -> Just ", bs (hs name), "\n"
-                     ]
-             | name <- names ]
-   ++ [longstring|
+|]
+      ++ concat
+        [ concat
+            [ "    ",
+              renderOid byName name,
+              " -> Just ",
+              bs (hs name),
+              "\n"
+            ]
+        | name <- names
+        ]
+      ++ [longstring|
     _ -> Nothing
 |]
-   ++ concat [ renderTypeInfo byOid typeInfo name
-             | name <- getNames byName names
-             ,  let (Just typeInfo) = Map.lookup (pg name) byName])
+      ++ concat
+        [ renderTypeInfo byOid typeInfo name
+        | name <- getNames byName names,
+          let (Just typeInfo) = Map.lookup (pg name) byName
+        ]
+  )

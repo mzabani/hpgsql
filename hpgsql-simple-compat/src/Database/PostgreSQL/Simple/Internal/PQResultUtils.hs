@@ -1,5 +1,7 @@
+------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
+
 -- |
 -- Module:      Database.PostgreSQL.Simple.Internal.PQResultUtils
 -- Copyright:   (c) 2011 MailRank, Inc.
@@ -7,10 +9,4 @@
 -- License:     BSD3
 -- Maintainer:  Leon P Smith <leon@melding-monads.com>
 -- Stability:   experimental
---
-------------------------------------------------------------------------------
-
-
-module Database.PostgreSQL.Simple.Internal.PQResultUtils
-    () where
-
+module Database.PostgreSQL.Simple.Internal.PQResultUtils () where

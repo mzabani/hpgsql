@@ -1,4 +1,7 @@
 ------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------
+
 -- |
 -- Module:      Database.PostgreSQL.Simple.HStore
 -- Copyright:   (c) 2013 Leon P Smith
@@ -17,20 +20,17 @@
 -- @CREATE EXTENSION hstore@.  See
 -- <https://www.postgresql.org/docs/9.5/static/contrib.html> for more
 -- information.
---
-------------------------------------------------------------------------------
-
 module Database.PostgreSQL.Simple.HStore
-     ( HStoreList(..)
-     , HStoreMap(..)
-     , ToHStore(..)
-     , HStoreBuilder
-     , toBuilder
-     , toLazyByteString
-     , hstore
-     , parseHStoreList
-     , ToHStoreText(..)
-     , HStoreText
-     ) where
+  ( HStoreList (..),
+    HStoreMap (..),
+    ToHStore (..),
+    HStoreBuilder,
+    toBuilder,
+    toLazyByteString,
+    hstore,
+    parseHStoreList,
+    ToHStoreText (..),
+    HStoreText,
+  ) where
 
 import Database.PostgreSQL.Simple.HStore.Implementation

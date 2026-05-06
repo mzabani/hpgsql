@@ -13,7 +13,7 @@ import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Hpgsql (ConnectionString (..), ConnectOpts (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
+import Hpgsql (ConnectOpts (..), ConnectionString (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
 import Hpgsql.Connection (defaultConnectOpts, withConnection, withConnectionOpts)
 import System.Environment (getEnv)
 import System.Mem (performGC)

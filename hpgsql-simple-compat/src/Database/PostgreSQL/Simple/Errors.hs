@@ -1,4 +1,7 @@
 ------------------------------------------------------------------------------
+
+----------------------------------------------------------
+
 -- |
 -- Module:      Database.PostgreSQL.Simple.Errors
 -- Copyright:   (c) 2012-2013 Leonid Onokhov, Joey Adams
@@ -10,22 +13,21 @@
 --  Currently only parses integrity violation errors (class 23).
 --
 -- /Note: Success of parsing may depend on language settings./
-----------------------------------------------------------
 module Database.PostgreSQL.Simple.Errors
-       ( ConstraintViolation(..)
-       , constraintViolation
-       , constraintViolationE
-       , catchViolation
-       , isSerializationError
-       , isNoActiveTransactionError
-       , isFailedTransactionError
-       )
-       where
+  ( ConstraintViolation (..),
+    constraintViolation,
+    constraintViolationE,
+    catchViolation,
+    isSerializationError,
+    isNoActiveTransactionError,
+    isFailedTransactionError,
+  )
+where
 
 import Control.Exception as E
 
 import Data.Attoparsec.ByteString.Char8
-import Data.ByteString       (ByteString)
+import Data.ByteString (ByteString)
 import Data.Typeable
 
 import Database.PostgreSQL.Simple.Internal
@@ -43,23 +45,22 @@ import Database.PostgreSQL.Simple.Internal
 -- `ERROR: duplicate key value violates unique constraint "users_login_key"`
 
 data ConstraintViolation
-   = NotNullViolation ByteString
-   -- ^ The field is a column name
-   | ForeignKeyViolation ByteString ByteString
-   -- ^ Table name and name of violated constraint
-   | UniqueViolation ByteString
-   -- ^ Name of violated constraint
-   | CheckViolation ByteString ByteString
-   -- ^ Relation name (usually table), constraint name
-   | ExclusionViolation ByteString
-   -- ^ Name of the exclusion violation constraint
-   deriving (Show, Eq, Ord, Typeable)
+  = -- | The field is a column name
+    NotNullViolation ByteString
+  | -- | Table name and name of violated constraint
+    ForeignKeyViolation ByteString ByteString
+  | -- | Name of violated constraint
+    UniqueViolation ByteString
+  | -- | Relation name (usually table), constraint name
+    CheckViolation ByteString ByteString
+  | -- | Name of the exclusion violation constraint
+    ExclusionViolation ByteString
+  deriving (Show, Eq, Ord, Typeable)
 
 -- Default instance should be enough
 instance Exception ConstraintViolation where
   toException = postgresqlExceptionToException
   fromException = postgresqlExceptionFromException
-
 
 -- | Tries to convert 'SqlError' to 'ConstrainViolation', checks sqlState and
 -- succeeds only if able to parse sqlErrorMsg.
@@ -77,8 +78,8 @@ constraintViolation e =
     "23514" -> uncurry CheckViolation <$> parseMaybe parseQ2 msg
     "23P01" -> ExclusionViolation <$> parseMaybe parseQ1 msg
     _ -> Nothing
-  where msg = sqlErrorMsg e
-
+  where
+    msg = sqlErrorMsg e
 
 -- | Like constraintViolation, but also packs original SqlError.
 --
@@ -86,7 +87,6 @@ constraintViolation e =
 -- >   where
 -- >     handler (_, UniqueViolation "user_login_key") = ...
 -- >     handler (e, _) = throwIO e
---
 constraintViolationE :: SqlError -> Maybe (SqlError, ConstraintViolation)
 constraintViolationE e = fmap ((,) e) $ constraintViolation e
 
@@ -98,17 +98,20 @@ constraintViolationE e = fmap ((,) e) $ constraintViolation e
 -- >     catcher _ (UniqueViolation "user_login_key") = ...
 -- >     catcher e _ = throwIO e
 catchViolation :: (SqlError -> ConstraintViolation -> IO a) -> IO a -> IO a
-catchViolation f m = E.catch m
-                     (\e -> maybe (throwIO e) (f e) $ constraintViolation e)
+catchViolation f m =
+  E.catch
+    m
+    (\e -> maybe (throwIO e) (f e) $ constraintViolation e)
 
 -- Parsers just try to extract quoted strings from error messages, number
 -- of quoted strings depend on error type.
 scanTillQuote :: Parser ByteString
 scanTillQuote = scan False go
-  where go True _ = Just False -- escaped character
-        go False '"' = Nothing -- end parse
-        go False '\\' = Just True -- next one is escaped
-        go _ _ = Just False
+  where
+    go True _ = Just False -- escaped character
+    go False '"' = Nothing -- end parse
+    go False '\\' = Just True -- next one is escaped
+    go _ _ = Just False
 
 parseQ1 :: Parser ByteString
 parseQ1 = scanTillQuote *> char '"' *> scanTillQuote <* char '"'
@@ -134,4 +137,4 @@ isFailedTransactionError :: SqlError -> Bool
 isFailedTransactionError = isSqlState "25P02"
 
 isSqlState :: ByteString -> SqlError -> Bool
-isSqlState s SqlError{..} = sqlState == s
+isSqlState s SqlError {..} = sqlState == s

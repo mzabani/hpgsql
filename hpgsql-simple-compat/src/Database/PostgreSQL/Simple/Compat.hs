@@ -1,23 +1,22 @@
 -- | This is a module of its own, partly because it uses the CPP extension,
 -- which doesn't play well with backslash-broken string literals.
 module Database.PostgreSQL.Simple.Compat
-    ( mask
-    , (<>)
-    , unsafeDupablePerformIO
-    , toByteString
-    , scientificBuilder
-    , toPico
-    , fromPico
-    ) where
+  ( mask,
+    (<>),
+    unsafeDupablePerformIO,
+    toByteString,
+    scientificBuilder,
+    toPico,
+    fromPico,
+  ) where
 
 import qualified Control.Exception as E
-import Data.ByteString         (ByteString)
-import Data.ByteString.Lazy    (toStrict)
+import Data.ByteString (ByteString)
 import Data.ByteString.Builder (Builder, toLazyByteString)
+import Data.ByteString.Lazy (toStrict)
+import Data.Fixed (Fixed (MkFixed), Pico)
 import Data.Text.Lazy.Builder.Scientific (scientificBuilder)
 import System.IO.Unsafe (unsafeDupablePerformIO)
-import Data.Fixed (Pico)
-import Data.Fixed (Fixed(MkFixed))
 
 -- | Like 'E.mask', but backported to base before version 4.3.0.
 --
