@@ -15,7 +15,7 @@ import qualified Database.PostgreSQL.Simple as PGSimple
 import DbUtils (aroundConn, testConnInfo, withRollback)
 import Hpgsql
 import Hpgsql.Connection (renderLibpqConnectionString)
-import Hpgsql.Pipeline (pipeline1, pipelineCmd_, pipelineSWith, runPipeline)
+import Hpgsql.Pipeline (pipeline1, pipelineExec_, pipelineSWith, runPipeline)
 import Hpgsql.Query (sql, sqlPrep)
 import Hpgsql.Transaction (transactionStatus, withTransaction)
 import Hpgsql.Types (Only (..))
@@ -131,7 +131,7 @@ veryMixedPipeline conn = withRollback conn $ do
         (updateTbl :: IO (), aggRes :: IO (Only Int), largeResults) <-
           runPipeline conn $
             (,,)
-              <$> pipelineCmd_ [sql|UPDATE tbl SET val=#{val}|]
+              <$> pipelineExec_ [sql|UPDATE tbl SET val=#{val}|]
               <*> pipeline1 [sql|SELECT SUM(val) FROM tbl|]
               <*> pipelineSWith
                 (rowDecoder @(Vector Int, Vector Text))

@@ -19,7 +19,7 @@ f val = do
   (updateTbl :: IO (), aggRes :: IO (Only Int), largeResults) <-
     runPipeline conn $
       (,,)
-        <$> pipelineCmd_ [sql|UPDATE tbl SET val=#{val}|]
+        <$> pipelineExec_ [sql|UPDATE tbl SET val=#{val}|]
         <*> pipeline1 [sql|SELECT SUM(val) FROM tbl|]
         <*> pipelineSWith
           (rowDecoder @(Vector Int, Vector Text))

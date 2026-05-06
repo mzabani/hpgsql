@@ -21,7 +21,7 @@ import Hpgsql
 import Hpgsql.Cancellation (cancelActiveStatement)
 import Hpgsql.Connection (withConnection)
 import Hpgsql.Copy (copyFromS, putCopyData, withCopy)
-import Hpgsql.Pipeline (pipeline, pipelineCmd, pipelineWith, runPipeline)
+import Hpgsql.Pipeline (pipeline, pipelineExec, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
 import Hpgsql.Transaction (transactionStatus)
 import Hpgsql.Types (Only (..))
@@ -117,12 +117,12 @@ sendQueryAfterThreadKilled useTimeout conn = do
   didNotFinish `shouldBe` Nothing
   didNotFinish2 <- emulatedTimeout 300_000 $ queryWith (rowDecoder @(Only ())) conn [sql|SELECT pg_sleep(999)|]
   didNotFinish2 `shouldBe` Nothing
-  didNotFinish3 <- emulatedTimeout 300_000 $ runPipeline conn (traverse pipelineCmd [[sql|SELECT pg_sleep(5)|], [sql|SELECT 37|]]) >>= sequenceA
+  didNotFinish3 <- emulatedTimeout 300_000 $ runPipeline conn (traverse pipelineExec [[sql|SELECT pg_sleep(5)|], [sql|SELECT 37|]]) >>= sequenceA
   case didNotFinish3 of
     Just _ -> expectationFailure "didNotFinish3 was supposed to have been killed before finishing"
     Nothing -> pure ()
   didNotFinish4 <- emulatedTimeout 300_000 $ do
-    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineWith (rowDecoder @(Only ())) [sql|SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout|] <*> pipelineCmd [sql|SELECT pg_sleep(5)|]
+    (firstCmd, secondCmd) <- runPipeline conn $ (,) <$> pipelineWith (rowDecoder @(Only ())) [sql|SELECT pg_sleep(0.3) -- About the same amount as the emulatedTimeout|] <*> pipelineExec [sql|SELECT pg_sleep(5)|]
     void firstCmd
     secondCmd
   case didNotFinish4 of

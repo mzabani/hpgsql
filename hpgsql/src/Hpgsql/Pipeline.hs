@@ -9,7 +9,7 @@
 -- >   (updateTbl :: IO (), aggRes :: IO (Only Int), largeResults) <-
 -- >     runPipeline conn $
 -- >       (,,)
--- >         <$> pipelineCmd_ [sql|UPDATE tbl SET val=#{val}|]
+-- >         <$> pipelineExec_ [sql|UPDATE tbl SET val=#{val}|]
 -- >         <*> pipeline1 [sql|SELECT SUM(val) FROM tbl|]
 -- >         <*> pipelineSWith
 -- >           (rowDecoder @(Vector Int, Vector Text))
@@ -35,11 +35,11 @@ module Hpgsql.Pipeline
     pipelineSMWith,
     pipeline,
     pipelineWith,
-    pipelineCmd,
-    pipelineCmd_,
+    pipelineExec,
+    pipelineExec_,
     pipeline1,
     pipeline1With,
   )
 where
 
-import Hpgsql.Internal (Pipeline, pipeline, pipeline1, pipeline1With, pipelineCmd, pipelineCmd_, pipelineS, pipelineSMWith, pipelineSWith, pipelineWith, runPipeline)
+import Hpgsql.Internal (Pipeline, pipeline, pipeline1, pipeline1With, pipelineExec, pipelineExec_, pipelineS, pipelineSMWith, pipelineSWith, pipelineWith, runPipeline)

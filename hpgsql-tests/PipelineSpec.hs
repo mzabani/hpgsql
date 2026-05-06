@@ -14,7 +14,7 @@ import Hedgehog
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import Hpgsql
-import Hpgsql.Pipeline (pipeline, pipeline1, pipelineCmd, pipelineCmd_, pipelineS, pipelineSWith, pipelineWith, runPipeline)
+import Hpgsql.Pipeline (pipeline, pipeline1, pipelineExec, pipelineExec_, pipelineS, pipelineSWith, pipelineWith, runPipeline)
 import Hpgsql.Query (nonPreparedStatement, preparedStatement, sql)
 import Hpgsql.Types (Only (..))
 import qualified Streaming.Prelude as S
@@ -120,12 +120,12 @@ runVariedPipelines conn = hedgehog $ do
             <*> pipelineSWith rp1 qry1
             <*> pipelineSWith rp2 (prepFn prep2 qry2)
             <*> pipelineSWith rp3 qry3
-            <*> pipelineCmd qry1
-            <*> pipelineCmd qry2
-            <*> pipelineCmd (prepFn prep3 qry3)
-            <*> pipelineCmd (prepFn prep1 countQry1)
-            <*> pipelineCmd (prepFn prep2 countQry2)
-            <*> pipelineCmd (prepFn prep3 countQry3)
+            <*> pipelineExec qry1
+            <*> pipelineExec qry2
+            <*> pipelineExec (prepFn prep3 qry3)
+            <*> pipelineExec (prepFn prep1 countQry1)
+            <*> pipelineExec (prepFn prep2 countQry2)
+            <*> pipelineExec (prepFn prep3 countQry3)
       listRes1 >>= check1
       listRes2 >>= check2
       listRes3 >>= check3
@@ -151,13 +151,13 @@ runVariedPipelinesWithError conn = hedgehog $ do
         (,,,,,,,,)
           <$> pipelineWith rp1 qry1
           <*> pipelineSWith rp1 qry1
-          <*> pipelineCmd qry1
-          <*> pipelineCmd countQry1
-          <*> pipelineCmd errStmt
+          <*> pipelineExec qry1
+          <*> pipelineExec countQry1
+          <*> pipelineExec errStmt
           <*> pipelineWith rp1 qry1
           <*> pipelineSWith rp1 qry1
-          <*> pipelineCmd qry1
-          <*> pipelineCmd countQry1
+          <*> pipelineExec qry1
+          <*> pipelineExec countQry1
     listRes1 >>= check1
     streamRes1 >>= Streaming.toList_ >>= check1
     countRes1 >>= (`shouldBe` expectedLen1)
@@ -171,7 +171,7 @@ runVariedPipelinesWithError conn = hedgehog $ do
 
 runPipelineWithMultipleStatements :: HPgConnection -> IO ()
 runPipelineWithMultipleStatements conn = do
-  (resultsOfFirstStmt, resultsOfSecondStmt, resultsOfLastStmt, createTbl) <- runPipeline conn $ (,,,) <$> pipelineWith (rowDecoder @(Int, Int)) "SELECT 1, 2 WHERE FALSE" <*> pipelineSWith (rowDecoder @(Int, Int)) "SELECT 3, 4 FROM generate_series(1,2)" <*> pipelineSWith (rowDecoder @(Int64, Bool)) "SELECT x, FALSE FROM generate_series(1,3) subq(x)" <*> pipelineCmd "CREATE table test_table()"
+  (resultsOfFirstStmt, resultsOfSecondStmt, resultsOfLastStmt, createTbl) <- runPipeline conn $ (,,,) <$> pipelineWith (rowDecoder @(Int, Int)) "SELECT 1, 2 WHERE FALSE" <*> pipelineSWith (rowDecoder @(Int, Int)) "SELECT 3, 4 FROM generate_series(1,2)" <*> pipelineSWith (rowDecoder @(Int64, Bool)) "SELECT x, FALSE FROM generate_series(1,3) subq(x)" <*> pipelineExec "CREATE table test_table()"
   resultsOfFirstStmt `shouldReturn` []
   (resultsOfSecondStmt >>= S.toList_) `shouldReturn` [(3, 4), (3, 4)]
   (resultsOfLastStmt >>= S.toList_) `shouldReturn` [(1, False), (2, False), (3, False)]
@@ -182,7 +182,7 @@ runPipelineErrorSemantics :: HPgConnection -> IO ()
 runPipelineErrorSemantics conn = do
   -- It's impossible to fetch query results of queries if even one earlier query in
   -- the same pipeline failed. But we expect a good error message.
-  (errCmd, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 1/0" <*> pipelineCmd "SELECT 3, 4" <*> pipelineCmd "SELECT 1"
+  (errCmd, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineExec "SELECT 1/0" <*> pipelineExec "SELECT 3, 4" <*> pipelineExec "SELECT 1"
   errCmd `shouldThrow` pgErrorMustContain "SELECT 1/0" [(ErrorCode, "22012")]
   cmd2 `shouldThrow` irrecoverableErrorWithMsg "Another query in the same pipeline threw an error"
   cmd3 `shouldThrow` irrecoverableErrorWithMsg "Another query in the same pipeline threw an error"
@@ -192,14 +192,14 @@ runPipelineErrorSemanticsUnsupportedCaseStillBehavesWell conn = do
   -- In case it's not a postgres error in a pipelined statement and rather a user error,
   -- we don't promise anything to users, but we test that Hpgsql at least won't deadlock
   -- or do something gnarly, and preferrably we throw an informative exception.
-  (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowDecoder @(Only Bool)) "SELECT 1" <*> pipelineWith (rowDecoder @(Int, Int)) "SELECT 3, 4"
+  (goodCmd, parserErrCmd, otherCmd) <- runPipeline conn $ (,,) <$> pipelineExec "SELECT 3,4" <*> pipelineWith (rowDecoder @(Only Bool)) "SELECT 1" <*> pipelineWith (rowDecoder @(Int, Int)) "SELECT 3, 4"
   goodCmd `shouldReturn` 1
   parserErrCmd `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
   otherCmd `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that."
 
 runPipelineErrorSemanticsQueriesConsumedOutOfOrder :: HPgConnection -> IO ()
 runPipelineErrorSemanticsQueriesConsumedOutOfOrder conn = do
-  (cmd1, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineCmd "SELECT 3,4" <*> pipelineWith (rowDecoder @(Only Bool)) "SELECT TRUE" <*> pipelineWith (rowDecoder @(Int, Int)) "SELECT 3, 4"
+  (cmd1, cmd2, cmd3) <- runPipeline conn $ (,,) <$> pipelineExec "SELECT 3,4" <*> pipelineWith (rowDecoder @(Only Bool)) "SELECT TRUE" <*> pipelineWith (rowDecoder @(Int, Int)) "SELECT 3, 4"
   cmd1 `shouldReturn` 1
   cmd3 `shouldThrow` irrecoverableErrorWithMsg "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that."
   -- We don't promise users that they can consume a statement at
@@ -209,7 +209,7 @@ runPipelineErrorSemanticsQueriesConsumedOutOfOrder conn = do
 
 runPipelineRunsInImplicitTransaction :: HPgConnection -> IO ()
 runPipelineRunsInImplicitTransaction conn = do
-  cmds <- runPipeline conn (traverse pipelineCmd ["CREATE TABLE test()", "SELECT 3, 4", "SELECT (1/0)=42"])
+  cmds <- runPipeline conn (traverse pipelineExec ["CREATE TABLE test()", "SELECT 3, 4", "SELECT (1/0)=42"])
   sequenceA cmds `shouldThrow` pgErrorMustContain "SELECT (1/0)=42" [(ErrorCode, "22012")] -- Division by zero
   execute conn "SELECT COUNT(*) FROM test" `shouldThrow` pgErrorMustContain "SELECT COUNT(*) FROM test" [(ErrorCode, "42P01"), (ErrorHumanReadableMsg, "relation \"test\" does not exist")]
 

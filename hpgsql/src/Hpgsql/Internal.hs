@@ -34,8 +34,8 @@ module Hpgsql.Internal
     pipelineSMWith,
     pipeline,
     pipelineWith,
-    pipelineCmd,
-    pipelineCmd_,
+    pipelineExec,
+    pipelineExec_,
     pipeline1,
     pipeline1With,
     pipelineMay,
@@ -103,7 +103,7 @@ module Hpgsql.Internal
     timeDebugNonBlockingOperation,
     whenNotClosed,
     chunkBuildersBySize,
-    pipelineCmdInternal,
+    pipelineExecInternal,
     pipelineM,
     withCopyInternal,
     copyEndInternal,
@@ -872,7 +872,7 @@ consumeResultsIgnoreRows conn qryId = do
 -- queries in order.
 executeMany :: HPgConnection -> [Query] -> IO [Int64]
 executeMany conn qs = do
-  sent <- runPipeline conn $ traverse pipelineCmd qs
+  sent <- runPipeline conn $ traverse pipelineExec qs
   sequenceA sent
 
 -- | Apply any number of SQL statements that can be row-returning or count-returning.
@@ -1006,7 +1006,7 @@ waitUntilPipelineIsReadyForNewQuery conn lockAcquireStm f = do
         --   drain it.
         --    - The next query won't try to cancel it because of txnStatusBeforePipeline,
         --      being TransInStrans, so it will only drain the ROLLBACK, which is great.
-        join $ runPipelineInternal conn (pipelineCmd_ "ROLLBACK") $ do
+        join $ runPipelineInternal conn (pipelineExec_ "ROLLBACK") $ do
           st <- STM.readTVar conn.internalConnectionState
           STM.writeTVar conn.internalConnectionState st {mustIssueRollbackBeforeNextCommand = False}
 
@@ -1226,21 +1226,21 @@ pipelineMayWith rowparser q = (toMaybeRow =<<) <$> pipelineWith rowparser q
         _ -> throwIrrecoverableErrorWithStatement queryBs "Expected zero or one row in query/pipelineMay call, but got more than one."
 
 -- | Returns the count of affected rows of the given query.
-pipelineCmd :: Query -> Pipeline (IO Int64)
-pipelineCmd = pipelineCmdInternal . breakQueryIntoStatements
+pipelineExec :: Query -> Pipeline (IO Int64)
+pipelineExec = pipelineExecInternal . breakQueryIntoStatements
 
-pipelineCmd_ :: Query -> Pipeline (IO ())
-pipelineCmd_ = fmap void . pipelineCmdInternal . breakQueryIntoStatements
+pipelineExec_ :: Query -> Pipeline (IO ())
+pipelineExec_ = fmap void . pipelineExecInternal . breakQueryIntoStatements
 
-pipelineCmdInternal :: NonEmpty SingleQuery -> Pipeline (IO Int64)
-pipelineCmdInternal qs =
+pipelineExecInternal :: NonEmpty SingleQuery -> Pipeline (IO Int64)
+pipelineExecInternal qs =
   Pipeline
     (map (,Nothing) (NE.toList qs))
     ( \conn qryIds -> do
         case lastAndInit qryIds of
           (firstQueries, mLastQry) -> do
             forM_ firstQueries $ consumeResultsIgnoreRows conn
-            consumeResultsIgnoreRows conn (fromMaybe (error "pipelineCmd internal bug: no mLastQry") mLastQry)
+            consumeResultsIgnoreRows conn (fromMaybe (error "pipelineExec internal bug: no mLastQry") mLastQry)
     )
 
 -- | Runs a pipeline of statements, that is, sends multiple SQL statements in a single round-trip
