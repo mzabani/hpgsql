@@ -19,11 +19,12 @@ import DbUtils
   )
 import Hpgsql
 import Hpgsql.Cancellation (cancelActiveStatement)
+import Hpgsql.Encoding (FromPgRow (..))
 import Hpgsql.Connection (withConnection)
 import Hpgsql.Copy (copyFromS, putCopyData, withCopy)
 import Hpgsql.Pipeline (pipeline, pipelineExec, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
-import Hpgsql.Transaction (transactionStatus)
+import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
 import Hpgsql.Types (Only (..))
 import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S

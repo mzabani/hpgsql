@@ -9,9 +9,11 @@ import DbUtils
     withRollback,
   )
 import Hpgsql
+import Hpgsql.Connection (getParameterStatus)
+import Hpgsql.Encoding (FromPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (toMonadicRowDecoder)
 import Hpgsql.Query (mkQuery, sql)
-import Hpgsql.Transaction (transactionStatus)
+import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
 import Hpgsql.Types (Only (..))
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S

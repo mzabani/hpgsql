@@ -78,6 +78,7 @@
 -- = What's in this module
 --
 -- This module re-exports some of the essentials: querying and the core types.
+-- We recommend importing from this module instead of others whenever possible.
 -- For more functionality, see:
 --
 -- * "Hpgsql.Connection" for connecting and connection state resetting.
@@ -86,6 +87,7 @@
 -- * "Hpgsql.Query" for the @sql@ and @sqlPrep@ quasiquoters.
 -- * "Hpgsql.Transaction" for transaction management.
 -- * "Hpgsql.Types" for extra types that might be useful.
+-- * "Hpgsql.Cancellation" for cancelling active queries.
 module Hpgsql
   ( -- * Query
     query,
@@ -105,28 +107,15 @@ module Hpgsql
     executeMany,
     executeMany_,
 
-    -- * Type info
-    refreshTypeInfoCache,
-    resetTypeInfoCache,
-    getParameterStatus,
-    getBackendPid,
-
     -- * Type re-exports
     HPgConnection, -- Do not export constructor
     Query, -- Do not export constructor
-    ConnectionString (..),
-    ConnectOpts (..),
     PostgresError (..),
     IrrecoverableHpgsqlError (..),
     ErrorDetail (..),
-    RowDecoder (..),
-    TransactionStatus (..),
-    FromPgRow (..),
-    FromPgField (..),
   )
 where
 
-import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), RowDecoder (..))
 import Hpgsql.Internal
-import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), TransactionStatus (..))
+import Hpgsql.InternalTypes (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))
 import Hpgsql.Query (Query)

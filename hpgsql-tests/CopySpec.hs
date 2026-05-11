@@ -18,7 +18,7 @@ import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Copy (copyFrom, copyStart, putCopyData, putCopyError, withCopy_)
 import Hpgsql.Query (sql)
-import Hpgsql.Transaction (transactionStatus)
+import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 

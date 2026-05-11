@@ -11,6 +11,7 @@ import Hpgsql.Query (sql)
 import Hpgsql.Transaction
   ( IsolationLevel (..),
     ReadWriteMode (..),
+    TransactionStatus (..),
     beginMode,
     rollback,
     transactionStatus,

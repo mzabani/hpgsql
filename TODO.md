@@ -3,7 +3,6 @@
   - hstore
   - PGRange?
 - Get rid of Time.hs? Move Unbounded to Types.hs?
-- Support escapeIdentifier taking schema-qualified objects
 - Review all exposed functions per module, move more to Internal modules
 - Double-check our tests don't import Internal modules except for very specific things
     - Otherwise we might accidentally not be exposing functions in public modules

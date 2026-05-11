@@ -851,11 +851,12 @@ lookupQueryText conn qryId = STM.atomically $ do
   st <- STM.readTVar (internalConnectionState conn)
   pure $ maybe "" queryText $ List.find ((== qryId) . queryIdentifier) (currentPipeline st)
 
--- | Returns the count of affected rows of the given query.
+-- | Executes a SQL statement (that may or may not be row-returning) and
+-- returns the count of affected rows of the given query.
 execute :: HPgConnection -> Query -> IO Int64
 execute conn qry = sum <$> executeMany conn [qry]
 
--- | Apply any number of SQL statements that can be row-returning or count-returning.
+-- | Executes a SQL statement that may or may not be row-returning.
 execute_ :: HPgConnection -> Query -> IO ()
 execute_ conn qry = void $ execute conn qry
 

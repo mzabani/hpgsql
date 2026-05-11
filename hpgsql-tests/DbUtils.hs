@@ -13,8 +13,9 @@ import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Hpgsql (ConnectOpts (..), ConnectionString (..), ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
+import Hpgsql (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
 import Hpgsql.Connection (defaultConnectOpts, withConnection, withConnectionOpts)
+import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..))
 import System.Environment (getEnv)
 import System.Mem (performGC)
 import Test.Hspec

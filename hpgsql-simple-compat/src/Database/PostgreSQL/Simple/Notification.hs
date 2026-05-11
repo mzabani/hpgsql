@@ -36,7 +36,7 @@ where
 import qualified Data.ByteString as B
 import Data.Text.Encoding (encodeUtf8)
 import Database.PostgreSQL.Simple.Internal
-import qualified Hpgsql
+import qualified Hpgsql.Connection
 import qualified Hpgsql.Notification
 import System.Posix.Types (CPid)
 
@@ -77,4 +77,4 @@ fromHpgsqlNotification Hpgsql.Notification.NotificationResponse {..} =
 -- process). Note that the PID belongs to a process executing on the
 -- database server host, not the local host!
 getBackendPID :: Connection -> IO CPid
-getBackendPID conn = pure $ fromIntegral $ Hpgsql.getBackendPid (hpgConn conn)
+getBackendPID conn = pure $ fromIntegral $ Hpgsql.Connection.getBackendPid (hpgConn conn)

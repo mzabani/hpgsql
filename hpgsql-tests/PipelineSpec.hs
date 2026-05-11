@@ -14,6 +14,7 @@ import Hedgehog
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import Hpgsql
+import Hpgsql.Encoding (FromPgRow (..), RowDecoder (..))
 import Hpgsql.Pipeline (pipeline, pipeline1, pipelineExec, pipelineExec_, pipelineS, pipelineSWith, pipelineWith, runPipeline)
 import Hpgsql.Query (nonPreparedStatement, preparedStatement, sql)
 import Hpgsql.Types (Only (..))

@@ -15,9 +15,10 @@ import qualified Database.PostgreSQL.Simple as PGSimple
 import DbUtils (aroundConn, testConnInfo, withRollback)
 import Hpgsql
 import Hpgsql.Connection (renderLibpqConnectionString)
+import Hpgsql.Encoding (FromPgRow (..))
 import Hpgsql.Pipeline (pipeline1, pipelineExec_, pipelineSWith, runPipeline)
 import Hpgsql.Query (sql, sqlPrep)
-import Hpgsql.Transaction (transactionStatus, withTransaction)
+import Hpgsql.Transaction (TransactionStatus (..), transactionStatus, withTransaction)
 import Hpgsql.Types (Only (..))
 import Streaming (Of, Stream)
 import qualified Streaming.Prelude as Streaming

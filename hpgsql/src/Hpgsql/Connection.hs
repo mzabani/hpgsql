@@ -11,6 +11,10 @@ module Hpgsql.Connection
     ResetConnectionOpts (..),
     resetConnectionState,
     renderLibpqConnectionString,
+    refreshTypeInfoCache,
+    resetTypeInfoCache,
+    getParameterStatus,
+    getBackendPid,
   )
 where
 
@@ -44,7 +48,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
-import Hpgsql.Internal (closeForcefully, closeGracefully, connect, connectOpts, defaultConnectOpts, resetConnectionState, withConnection, withConnectionOpts)
+import Hpgsql.Internal (closeForcefully, closeGracefully, connect, connectOpts, defaultConnectOpts, getBackendPid, getParameterStatus, refreshTypeInfoCache, resetConnectionState, resetTypeInfoCache, withConnection, withConnectionOpts)
 import Hpgsql.InternalTypes (ConnectionString (..), ResetConnectionOpts (..))
 import Network.URI
   ( URI (..),
