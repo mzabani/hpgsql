@@ -7,7 +7,7 @@ homepage:       https://github.com/mzabani/hpgsql#readme
 bug-reports:    https://github.com/mzabani/hpgsql/issues
 author:         Marcelo Zabani
 maintainer:     mzabani@gmail.com
-copyright:      2025 Marcelo Zabani
+copyright:      2026 Marcelo Zabani
 license:        BSD3
 license-file:   LICENSE
 build-type:     Simple
