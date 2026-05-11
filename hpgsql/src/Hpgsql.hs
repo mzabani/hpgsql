@@ -100,12 +100,8 @@ module Hpgsql
     query1With,
     queryMay,
     queryMayWith,
-
-    -- * Execute
     execute,
     execute_,
-    executeMany,
-    executeMany_,
 
     -- * Type re-exports
     HPgConnection, -- Do not export constructor

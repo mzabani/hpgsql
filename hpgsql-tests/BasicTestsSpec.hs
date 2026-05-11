@@ -11,6 +11,7 @@ import DbUtils
 import Hpgsql
 import Hpgsql.Connection (getParameterStatus)
 import Hpgsql.Encoding (FromPgRow (..))
+import Hpgsql.Pipeline (pipelineExec, pipelineExec_, runPipeline)
 import Hpgsql.Encoding.RowDecoderMonadic (toMonadicRowDecoder)
 import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
@@ -116,7 +117,8 @@ executingCountReturningStatements conn = withRollback conn $ do
 
 executingMixedRowsAndCountReturningStatements :: HPgConnection -> IO ()
 executingMixedRowsAndCountReturningStatements conn = withRollback conn $ do
-  executeMany conn ["SELECT 1", "CREATE TABLE xyz();", "DELETE FROM xyz;"] `shouldReturn` [1, 0, 0]
+  results <- runPipeline conn $ traverse pipelineExec ["SELECT 1", "CREATE TABLE xyz();", "DELETE FROM xyz;"]
+  sequenceA results `shouldReturn` [1, 0, 0]
   execute_ conn "DROP TABLE xyz;"
 
 queryMWithismatchInNumberOfColumns :: HPgConnection -> IO ()
@@ -148,13 +150,13 @@ queryThatErrorsBeforeReturningAnyRowsFollowedBySuccessfulQuery conn = do
 
 discardingReturnCountsAndValues :: HPgConnection -> IO ()
 discardingReturnCountsAndValues conn = withRollback conn $ do
-  executeMany_ conn ["CREATE TABLE xx(id serial primary key, name text)", "SELECT * FROM generate_series(1,10000)"]
-  executeMany_ conn ["SELECT * FROM generate_series(1,10000)", "INSERT INTO xx(name) values ('test'), ('abc')"]
+  runPipeline conn (traverse pipelineExec_ ["CREATE TABLE xx(id serial primary key, name text)", "SELECT * FROM generate_series(1,10000)"]) >>= sequence_
+  runPipeline conn (traverse pipelineExec_ ["SELECT * FROM generate_series(1,10000)", "INSERT INTO xx(name) values ('test'), ('abc')"]) >>= sequence_
   execute_ conn "DROP TABLE xx;"
 
 wellFormedPreparedStatements :: HPgConnection -> IO ()
 wellFormedPreparedStatements conn = withRollback conn $ do
-  executeMany_ conn ["CREATE TABLE xx(num int)", "CREATE TABLE yy()", "INSERT INTO xx (num) SELECT * FROM generate_series(1,10)"]
+  runPipeline conn (traverse pipelineExec_ ["CREATE TABLE xx(num int)", "CREATE TABLE yy()", "INSERT INTO xx (num) SELECT * FROM generate_series(1,10)"]) >>= sequence_
   queryWith (rowDecoder @(Only Int)) conn "SELECT COUNT(*) FROM xx WHERE num IN (8, 9)" `shouldReturn` [Only 2]
   queryWith (rowDecoder @(Only Int)) conn (mkQuery "SELECT COUNT(*) FROM xx WHERE num BETWEEN $1 AND $2" (1 :: Int, 5 :: Int)) `shouldReturn` [Only 5]
   queryWith (rowDecoder @(Only Int)) conn "SELECT * FROM xx WHERE num < 0" `shouldReturn` []

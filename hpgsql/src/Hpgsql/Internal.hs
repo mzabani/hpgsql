@@ -19,12 +19,8 @@ module Hpgsql.Internal
     query1With,
     queryMay,
     queryMayWith,
-
-    -- * Execute
     execute,
     execute_,
-    executeMany,
-    executeMany_,
 
     -- * Pipeline
     Pipeline,
@@ -392,7 +388,9 @@ resetConnectionState conn@HPgConnection {internalConnectionState} mCleanOpts = d
   -- What if there are notifications in the socket buffer? It seems reasonable to assume that when
   -- running "UNLISTEN *" those would be received, so this might be fine as long as we
   -- clear the internal queue _after_ "UNLISTEN *".
-  executeMany_ conn $ (if unlistenAll cleanOpts then ["UNLISTEN *"] else []) ++ (if resetAll cleanOpts then ["RESET ALL", "RESET ROLE"] else [])
+  do
+    let qs = (if unlistenAll cleanOpts then ["UNLISTEN *"] else []) ++ (if resetAll cleanOpts then ["RESET ALL", "RESET ROLE"] else [])
+    runPipeline conn (traverse pipelineExec_ qs) >>= sequence_
   when (unlistenAll cleanOpts) clearInternalNotificationQueue
   where
     cleanOpts = fromMaybe ResetConnectionOpts {resetAll = True, unlistenAll = True, checkTransactionState = True} mCleanOpts
@@ -854,7 +852,7 @@ lookupQueryText conn qryId = STM.atomically $ do
 -- | Executes a SQL statement (that may or may not be row-returning) and
 -- returns the count of affected rows of the given query.
 execute :: HPgConnection -> Query -> IO Int64
-execute conn qry = sum <$> executeMany conn [qry]
+execute conn qry = join $ runPipeline conn (pipelineExec qry)
 
 -- | Executes a SQL statement that may or may not be row-returning.
 execute_ :: HPgConnection -> Query -> IO ()
@@ -868,17 +866,6 @@ consumeResultsIgnoreRows conn qryId = do
   case results of
     Left err -> throwPostgresError qText err
     Right (CommandComplete n) -> pure n
-
--- | Returns the count of affected rows only of the supplied
--- queries in order.
-executeMany :: HPgConnection -> [Query] -> IO [Int64]
-executeMany conn qs = do
-  sent <- runPipeline conn $ traverse pipelineExec qs
-  sequenceA sent
-
--- | Apply any number of SQL statements that can be row-returning or count-returning.
-executeMany_ :: HPgConnection -> [Query] -> IO ()
-executeMany_ conn qry = void $ executeMany conn qry
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
 --
