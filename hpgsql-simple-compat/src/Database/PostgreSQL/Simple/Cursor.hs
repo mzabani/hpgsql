@@ -29,16 +29,16 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Internal as Base
 import Database.PostgreSQL.Simple.Transaction
 import Database.PostgreSQL.Simple.Types (Query (..))
-import Hpgsql (Query, execute_, queryMWith)
+import Hpgsql (execute_, queryMWith)
 import Hpgsql.Encoding.RowDecoderMonadic (RowDecoderMonadic)
-import Hpgsql.Query (escapeIdentifier, sql)
+import Hpgsql.Query (Query, escapeIdentifier, sql)
 
 -- | Cursor within a transaction.
 data Cursor = Cursor !Database.PostgreSQL.Simple.Types.Query !Connection
 
 -- | Declare a temporary cursor. The cursor is given a
 -- unique name for the given connection.
-declareCursor :: Connection -> Hpgsql.Query -> IO Cursor
+declareCursor :: Connection -> Hpgsql.Query.Query -> IO Cursor
 declareCursor conn q = mapHpgsqlErrors $ do
   name <- newTempName conn
   void $ Hpgsql.execute_ (hpgConn conn) [sql|DECLARE ^{escapeIdentifier (fromQuery name)} NO SCROLL CURSOR FOR ^{q}|]

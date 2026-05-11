@@ -47,8 +47,8 @@ import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.ToRow (ToRow)
 import Database.PostgreSQL.Simple.Types
-import qualified Hpgsql
 import qualified Hpgsql.Copy
+import qualified Hpgsql.Query
 
 -- | Issue a @COPY FROM STDIN@ or @COPY TO STDOUT@ query.   In the former
 --   case, the connection's state will change to @CopyIn@;  in the latter,
@@ -68,7 +68,7 @@ copy_ conn template = do
   let qry = toHpgsqlQuery template ()
   doCopy "Database.PostgreSQL.Simple.Copy.copy_" conn qry
 
-doCopy :: B.ByteString -> Connection -> Hpgsql.Query -> IO ()
+doCopy :: B.ByteString -> Connection -> Hpgsql.Query.Query -> IO ()
 doCopy _funcName conn q = mapHpgsqlErrors $ do
   Hpgsql.Copy.copyStart (hpgConn conn) q
 

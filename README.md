@@ -34,7 +34,7 @@ f val = do
 
 Hpgsql is in active development, is new and has not been used in Production yet. It currently lacks (at least) many of the authentication methods that libpq provides; for now only cleartext and MD5 password auth are supported, and only unencrypted connections.
 
-That being said, one of my other projects, codd, [has a branch using hpgsql-simple-compat](https://github.com/mzabani/codd/pull/227) (the nearly API compatible fork of postgresql-simple described in the next section) with very few modifications, passing tests.
+That being said, one of my other projects, codd, [has a tests-passing branch using hpgsql-simple-compat](https://github.com/mzabani/codd/pull/227) (the nearly API compatible fork of postgresql-simple described in the next section) with very few modifications.
 
 ## Migrating from postgresql-simple
 

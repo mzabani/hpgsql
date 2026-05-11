@@ -11,8 +11,8 @@ import DbUtils
 import Hpgsql
 import Hpgsql.Connection (getParameterStatus)
 import Hpgsql.Encoding (FromPgRow (..))
-import Hpgsql.Pipeline (pipelineExec, pipelineExec_, runPipeline)
 import Hpgsql.Encoding.RowDecoderMonadic (toMonadicRowDecoder)
+import Hpgsql.Pipeline (pipelineExec, pipelineExec_, runPipeline)
 import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
 import Hpgsql.Types (Only (..))

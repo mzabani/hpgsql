@@ -42,7 +42,9 @@ import qualified Hasql.Statement as HasqlStmt
 import qualified Hpgsql
 import Hpgsql.Connection (renderLibpqConnectionString)
 import qualified Hpgsql.Connection
+import qualified Hpgsql.Connection as Hpgsql
 import qualified Hpgsql.Copy
+import qualified Hpgsql.Encoding as Hpgsql
 import qualified Hpgsql.Query as Hpgsql
 import qualified Hpgsql.Types as Hpgsql
 import Numeric (showFFloat)

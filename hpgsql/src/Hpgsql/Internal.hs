@@ -624,7 +624,8 @@ withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = d
                           restore $ socketWaitWrite socket
                           n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
                           -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
-                          let fin = (LBS.drop n msgs, afterSentTxn) : xs
+                          let !remaining = LBS.drop n msgs
+                              fin = (remaining, afterSentTxn) : xs
                           pure (fin, fin)
 
                   -- debugPrint $ show $ stop || null others
