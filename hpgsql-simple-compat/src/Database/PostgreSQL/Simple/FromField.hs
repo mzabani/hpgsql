@@ -86,7 +86,7 @@ module Database.PostgreSQL.Simple.FromField
     Attribute (..),
     typeInfo,
     typeInfoByOid,
-    -- name,
+    name,
     typeOid,
     PQ.Oid (..),
     PQ.Format (..),
@@ -105,6 +105,7 @@ import Data.CaseInsensitive (CI)
 import Data.Int (Int16, Int32, Int64)
 import Data.Scientific (Scientific)
 import Data.Text (Text)
+import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (UTCTime)
@@ -279,8 +280,8 @@ typeInfoByOid oid = Conversion $ \encCtx -> do
 
 -- | Returns the name of the column.  This is often determined by a table
 --   definition,  but it can be set using an @as@ clause.
--- name :: Field -> Maybe ByteString
--- name Field {..} = unsafeDupablePerformIO (PQ.fname result column)
+name :: Field -> Maybe ByteString
+name f = encodeUtf8 <$> fieldName f
 
 -- | Given one of the constructors from 'ResultError',  the field,
 --   and an 'errMessage',  this fills in the other fields in the

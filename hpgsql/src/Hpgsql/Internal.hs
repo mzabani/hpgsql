@@ -1316,7 +1316,7 @@ consumeStreamingResults rp conn qryId = S.effect $ do
     Just (Middle3 (RowDescription coltypes)) -> do
       encodingContext <- readMVar conn.encodingContext
       let numResultColumns = length coltypes
-          mkColInfo oid = FieldInfo oid encodingContext
+          mkColInfo (colName, oid) = FieldInfo oid (Just colName) encodingContext
           colInfos = map mkColInfo coltypes
       !rowparser <- case rp of
         ApplicativeRowDecoder (RowDecoder rparser rtypecheck expectedNumCols) -> do

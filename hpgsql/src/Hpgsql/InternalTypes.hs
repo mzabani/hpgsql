@@ -338,7 +338,8 @@ data BindComplete = BindComplete
 data NoData = NoData
   deriving stock (Show)
 
-newtype RowDescription = RowDescription {resultColumnTypes :: [Oid]}
+-- | Column names and type OIDs.
+newtype RowDescription = RowDescription {resultColumnTypes :: [(Text, Oid)]}
   deriving stock (Show)
 
 data CopyInResponse = CopyInResponse

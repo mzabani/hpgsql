@@ -23,6 +23,8 @@ module Database.PostgreSQL.Simple.FromRow
     FromPgRow (..),
     RowParser,
     field,
+    fieldWith,
+    numFieldsRemaining,
   )
 where
 
@@ -30,7 +32,7 @@ import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.HpgsqlUtils
 import GHC.Generics (Generic (..), K1 (..), M1 (..), (:*:) (..))
 import Hpgsql.Encoding (FieldDecoder, FromPgField (..), FromPgRow (..), singleField)
-import Hpgsql.Encoding.RowDecoderMonadic (RowDecoderMonadic, toMonadicRowDecoder)
+import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..), toMonadicRowDecoder)
 import Hpgsql.Types (Only (..), (:.) (..))
 import Prelude hiding (null)
 
@@ -82,6 +84,14 @@ instance (FromRow a, FromRow b) => FromRow (a :. b) where
 
 field :: (FromPgField a) => RowDecoderMonadic a
 field = toMonadicRowDecoder $ singleField fieldDecoder
+
+-- | Parse a single field using the given 'FieldParser'.
+fieldWith :: FieldParser a -> RowParser a
+fieldWith fp = toMonadicRowDecoder $ singleField $ toHpgsqlFieldDecoder fp
+
+-- | Return the number of fields remaining in the current row.
+numFieldsRemaining :: RowParser Int
+numFieldsRemaining = RowDecoderMonadic $ \cs -> pure (length (colsLeftToParse cs), 0)
 
 class ProductTypeDecoder f where
   genRowDecoder :: RowDecoderMonadic (f a)

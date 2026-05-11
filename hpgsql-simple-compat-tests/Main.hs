@@ -11,6 +11,7 @@
 module Main (main) where
 
 import Common
+import Control.Applicative ((<|>))
 import Control.Exception as E
 import Control.Monad
 import Data.Aeson
@@ -31,7 +32,8 @@ import Data.Time.Compat (diffUTCTime, getCurrentTime)
 import Data.Typeable
 import qualified Data.Vector as V
 import Database.PostgreSQL.Simple.Copy
-import Database.PostgreSQL.Simple.FromField (FromField (..))
+import Database.PostgreSQL.Simple.FromField (Conversion, FromField (..), name)
+import Database.PostgreSQL.Simple.FromRow (FromRow (..), fieldWith, numFieldsRemaining)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.ToField (ToField)
 import qualified Database.PostgreSQL.Simple.Transaction as ST
@@ -88,7 +90,8 @@ tests env =
         -- These are tests that didn't exist in postgresql-simple's test suite,
         -- added here to better test hpgsql-simple-compat
         testCase "Generic record with custom types" . testGenericRecWithCustomTypes,
-        testCase "Query generation with identifiers" . testQueryGenWithIdents
+        testCase "Query generation with identifiers" . testQueryGenWithIdents,
+        testCase "Dynamic row with Int or Text" . testDynRow
       ]
 
 testBytea :: TestEnv -> TestTree
@@ -753,3 +756,46 @@ testGenericRecWithCustomTypes TestEnv {..} = do
           }
   r <- query conn "SELECT ?::bool, ?::int, ?::int, ?::jsonb, ?::bool" x0
   r @?= [x0]
+
+-- | A dynamic row type that decodes an arbitrary number of columns,
+-- where each column is either an Int or Text. Each entry is a pair of
+-- the column name and the decoded value.
+newtype DynRow = DynRow [(String, Either Int Text)]
+  deriving (Show, Eq)
+
+instance FromRow DynRow where
+  fromRow = do
+    n <- numFieldsRemaining
+    pairs <- replicateM n $ fieldWith $ \f mbs -> do
+      let colName = maybe "" BS8.unpack (name f)
+      val <-
+        (Left <$> (fromField f mbs :: Conversion Int))
+          <|> (Right <$> (fromField f mbs :: Conversion Text))
+      pure (colName, val)
+    pure (DynRow pairs)
+
+testDynRow :: TestEnv -> Assertion
+testDynRow TestEnv {..} = do
+  -- Single int column
+  r1 <- query_ conn "SELECT 42::int AS the_answer"
+  r1 @?= [DynRow [("the_answer", Left 42)]]
+
+  -- Single text column
+  r2 <- query_ conn "SELECT 'hello'::text AS greeting"
+  r2 @?= [DynRow [("greeting", Right "hello")]]
+
+  -- Mixed int and text columns
+  r3 <- query_ conn "SELECT 1::int AS a, 'foo'::text AS b, 2::int AS c"
+  r3 @?= [DynRow [("a", Left 1), ("b", Right "foo"), ("c", Left 2)]]
+
+  -- Multiple rows
+  r4 <- query_ conn "SELECT x::int AS num, y::text AS label FROM (VALUES (1, 'one'), (2, 'two'), (3, 'three')) AS t(x, y)"
+  r4
+    @?= [ DynRow [("num", Left 1), ("label", Right "one")],
+          DynRow [("num", Left 2), ("label", Right "two")],
+          DynRow [("num", Left 3), ("label", Right "three")]
+        ]
+
+  -- Empty result set still works
+  r5 <- query_ conn "SELECT 1::int AS a, 'x'::text AS b WHERE FALSE"
+  r5 @?= ([] :: [DynRow])

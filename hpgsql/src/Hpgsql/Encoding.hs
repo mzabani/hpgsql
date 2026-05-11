@@ -113,6 +113,8 @@ import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, 
 
 data FieldInfo = FieldInfo
   { fieldTypeOid :: !Oid,
+    -- | The column name from the query's result, if available.
+    fieldName :: !(Maybe Text),
     -- | The EncodingContext as of the moment the query ran.
     encodingContext :: !EncodingContext
   }
@@ -216,7 +218,7 @@ compositeTypeDecoder (RowDecoder {..}) =
       -- we can see a composite type's binary representation consists of: number of columns (Int32) + for_each_column { OID (Int32) + size_or_minus_1 (Int32) + Bytes }
       numCols <- fromIntegral <$> int32Parser
       unless (numCols == numExpectedColumns) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numExpectedColumns
-      let mkColInfo oid = FieldInfo oid encodingContext
+      let mkColInfo oid = FieldInfo oid Nothing encodingContext
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> int32Parser
         (sizeBs, !size) <- Parser.match $ fromIntegral <$> int32Parser
@@ -1164,10 +1166,9 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
         !ndim <- int32Parser
         !_hasNull <- int32Parser
         !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-        let !elementColInfo = FieldInfo elementTypeOid encodingContext
+        let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
         when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
         unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
-        -- TODO: Check binary/text compatibility somehow? No, easier to get rid of TextFmt once and for all
         numRows <- do
           !dim_i :: Int <- fromIntegral <$> int32Parser
           !_lb_i <- int32Parser
@@ -1355,7 +1356,7 @@ arrayField !replicateFunction !elementParser =
       !ndim <- int32Parser
       !_hasNull <- int32Parser
       !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
-      let !elementColInfo = FieldInfo elementTypeOid encodingContext
+      let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
       when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
       if ndim == 0
         then pure mempty

@@ -53,15 +53,14 @@ class FromPgMessage a where
 parsePgMessage :: Char -> LBS.ByteString -> PgMsgParser a -> Maybe a
 parsePgMessage c restOfMsg (PgMsgParser parseFunc) = parseFunc c restOfMsg
 
-colParser :: Parsec.Parser Oid
+colParser :: Parsec.Parser (Text, Oid)
 colParser = do
-  Parsec.skipWhile (/= 0) -- Column name as C string
-  Parsec.skip (== 0)
+  colName <- nulTerminatedCStringParser -- Column name as C string
   void $ Parsec.take (4 + 2)
   -- TODO: OIDs are unsigned integers! Try `select (-1)::oid` to see. Change to UInt32 somehow
   typOid <- either fail pure . Cereal.decode @Int32 =<< Parsec.take 4
   void $ Parsec.take (2 + 4 + 2)
-  pure $ Oid (fromIntegral typOid)
+  pure (colName, Oid (fromIntegral typOid))
 
 nulTerminatedCStringParser :: Parsec.Parser Text
 nulTerminatedCStringParser = do
@@ -342,7 +341,7 @@ instance FromPgMessage RowDescription where
       then
         let (numColsBS, colContents) = LBS.splitAt 2 restOfMsg
             numCols = either error id $ Cereal.decodeLazy @Int16 numColsBS
-            allColOidsParser :: Parsec.Parser [Oid]
+            allColOidsParser :: Parsec.Parser [(Text, Oid)]
             allColOidsParser = replicateM (fromIntegral numCols) colParser
          in case LazyParsec.parseOnly (allColOidsParser <* Parsec.endOfInput) colContents of
               Left err -> error $ "Error parsing row's column types' OIDs: " ++ err
