@@ -34,15 +34,17 @@ f val = do
 
 Hpgsql is in active development, is new and has not been used in Production yet. It currently lacks (at least) many of the authentication methods that libpq provides; for now only cleartext and MD5 password auth are supported, and only unencrypted connections.
 
+That being said, one of my other projects, codd, [has a branch using hpgsql-simple-compat](https://github.com/mzabani/codd/pull/227) (the nearly API compatible fork of postgresql-simple described in the next section) with very few modifications, passing tests.
+
 ## Migrating from postgresql-simple
 
 This repository contains [a fork of postgresql-simple](https://github.com/mzabani/hpgsql/tree/master/hpgsql-simple-compat) that preserves as much as possible** the names of modules, functions, types, classes, exceptions, etc. Its purpose is to ease migrating to hpgsql, and I intend to fully support its development to make it and keep it as similar to postgresql-simple as it can be.
 
 It is called hpgsql-simple-compat, and its implementation uses hpgsql. You can get a `HPgConnection` out of it so you can gradually migrate your queries to hpgsql.
 
-You should start by swapping all of "postgresql-simple", "postgresql-libpq", and "postgresql-query" in your cabal files by "hpgsql-simple-compat". But read [MIGRATING.md](/MIGRATING.md) for tips and gotchas.
-
 It also contains parts of [postgresql-libpq](https://hackage.haskell.org/package/postgresql-libpq) and [postgresql-query](https://hackage.haskell.org/package/postgresql-query), all implemented on top of hpgsql.
+
+You should start by swapping all of "postgresql-simple", "postgresql-libpq", and "postgresql-query" in your cabal files by "hpgsql-simple-compat". But read [MIGRATING.md](/MIGRATING.md) for tips and gotchas.
 
 - <sub>I haven't been able to preserve _everything_, so some differences do exist. Also the library is not feature complete yet.</sub>
 - <sub>There may be small intentional differences added to help the transition, like a `sqlStatement` field in the `SqlError` exception so it's easier to know which queries are failing.</sub>
