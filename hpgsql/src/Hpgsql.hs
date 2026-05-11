@@ -55,7 +55,7 @@
 -- = Fetching results
 --
 -- * 'query' returns all rows as a list.
--- * 'queryS' returns all rows as a Stream.
+-- * 'queryS' returns all rows as a Stream, streaming directly from the socket (without cursors).
 -- * 'query1' returns exactly one row, throwing if zero or more than one row is returned.
 -- * 'queryMay' returns zero or one row, throwing if more than one is returned.
 -- * 'execute' runs a statement and returns the count of affected rows.
@@ -84,7 +84,7 @@
 -- * "Hpgsql.Connection" for connecting and connection state resetting.
 -- * "Hpgsql.Copy" for @COPY@ protocol support.
 -- * "Hpgsql.Pipeline" for pipelined queries.
--- * "Hpgsql.Query" for the @sql@ and @sqlPrep@ quasiquoters.
+-- * "Hpgsql.Query" for the @sql@ and @sqlPrep@ quasiquoters, and query-building helpers.
 -- * "Hpgsql.Transaction" for transaction management.
 -- * "Hpgsql.Types" for extra types that might be useful.
 -- * "Hpgsql.Cancellation" for cancelling active queries.
@@ -103,9 +103,8 @@ module Hpgsql
     execute,
     execute_,
 
-    -- * Type re-exports
+    -- * Useful re-exports
     HPgConnection, -- Do not export constructor
-    Query, -- Do not export constructor
     PostgresError (..),
     IrrecoverableHpgsqlError (..),
     ErrorDetail (..),
@@ -114,4 +113,3 @@ where
 
 import Hpgsql.Internal
 import Hpgsql.InternalTypes (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))
-import Hpgsql.Query (Query)
