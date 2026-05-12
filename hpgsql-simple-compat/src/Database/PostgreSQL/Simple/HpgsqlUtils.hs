@@ -22,7 +22,6 @@ import Database.PostgreSQL.Simple.Ok (Ok (..))
 import Database.PostgreSQL.Simple.ToField (Action (..))
 import Database.PostgreSQL.Simple.ToRow (ToRow (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
-import qualified Hpgsql
 import Hpgsql.Builder (BinaryField)
 import Hpgsql.Encoding (FieldDecoder (..), FieldInfo (..))
 import Hpgsql.InternalTypes (SingleQueryFragment (..))

@@ -144,7 +144,7 @@ import qualified Hpgsql.Msgs as Msgs
 import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.SimpleParser as Parser
-import Hpgsql.TypeInfo (TypeInfo (..), buildTypeInfoCache, builtinPgTypesMap)
+import Hpgsql.TypeInfo (ArrayTypeDetails (..), TypeDetails (..), TypeInfo (..), buildTypeInfoCache, builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString as SocketBS
@@ -350,13 +350,22 @@ refreshTypeInfoCache :: HPgConnection -> Pipeline (IO ())
 refreshTypeInfoCache conn =
   -- https://www.postgresql.org/docs/current/system-catalog-initial-data.html#SYSTEM-CATALOG-OID-ASSIGNMENT
   -- says "OIDs assigned during normal database operation are constrained to be 16384 or higher. This ensures that the range 10000—16383 is free for OIDs assigned automatically by genbki.pl or during initdb. These automatically-assigned OIDs are not considered stable, and may change from one installation to another."
-  let fetchPipeline = pipeline "select oid, typname, typarray from pg_catalog.pg_type WHERE oid >= 16384"
+  let fetchPipeline = pipeline "select oid, typname, typarray, typelem, typcategory, typtype from pg_catalog.pg_type WHERE oid >= 16384"
    in fillTypeInfoCache <$> fetchPipeline
   where
     fillTypeInfoCache queryResultsIO = do
       queryResults <- queryResultsIO
-      let customTypes = buildTypeInfoCache $ map (\(oid, typname, typarray) -> TypeInfo oid typname (if typarray == 0 then Nothing else Just typarray)) queryResults
+      let customTypes = buildTypeInfoCache $ map (\(oid, typname, typarray, typelem, typcategory, typtype) -> TypeInfo oid typname (if typarray == 0 then Nothing else Just typarray) (toTypeDetails typelem typcategory typtype)) queryResults
       modifyMVar_ conn.encodingContext $ \_ -> pure $ EncodingContext $ customTypes <> builtinPgTypesMap
+    toTypeDetails typelem typcategory typtype = case (typcategory, typtype) of
+      ('A', _) -> ArrayType (ArrayTypeDetails typelem)
+      (_, 'c') -> CompositeType
+      (_, 'd') -> DomainType
+      (_, 'e') -> EnumType
+      (_, 'p') -> PseudoType
+      (_, 'r') -> RangeType
+      (_, 'm') -> MultiRangeType
+      _ -> BasicType
 
 -- | Useful to reset the connection's internal typeInfo cache
 -- to the builtin postgres types.

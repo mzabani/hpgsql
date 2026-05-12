@@ -276,7 +276,7 @@ typeInfoByOid :: PQ.Oid -> Conversion TypeInfo
 typeInfoByOid oid = Conversion $ \encCtx -> do
   case lookupTypeByOid oid encCtx.typeInfoCache of
     Nothing -> Errors [toException $ userError $ "Type OID " ++ show oid ++ " not found in TypeInfoCache"]
-    Just t -> Ok (fromHpgsqlTypeInfo t)
+    Just t -> Ok (fromHpgsqlTypeInfo encCtx t)
 
 -- | Returns the name of the column.  This is often determined by a table
 --   definition,  but it can be set using an @as@ clause.

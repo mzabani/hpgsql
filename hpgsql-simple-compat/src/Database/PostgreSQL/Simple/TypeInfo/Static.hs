@@ -246,7 +246,8 @@ module Database.PostgreSQL.Simple.TypeInfo.Static
     int8rangeOid,
     _int8range,
     _int8rangeOid,
-  ) where
+  )
+where
 
 import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.TypeInfo.Types
@@ -373,8 +374,6 @@ bool :: TypeInfo
 bool =
   Basic
     { typoid = boolOid,
-      typcategory = 'B',
-      typdelim = ',',
       typname = "bool"
     }
 
@@ -386,8 +385,6 @@ bytea :: TypeInfo
 bytea =
   Basic
     { typoid = byteaOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "bytea"
     }
 
@@ -399,8 +396,6 @@ char :: TypeInfo
 char =
   Basic
     { typoid = charOid,
-      typcategory = 'S',
-      typdelim = ',',
       typname = "char"
     }
 
@@ -412,8 +407,6 @@ name :: TypeInfo
 name =
   Basic
     { typoid = nameOid,
-      typcategory = 'S',
-      typdelim = ',',
       typname = "name"
     }
 
@@ -425,8 +418,6 @@ int8 :: TypeInfo
 int8 =
   Basic
     { typoid = int8Oid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "int8"
     }
 
@@ -438,8 +429,6 @@ int2 :: TypeInfo
 int2 =
   Basic
     { typoid = int2Oid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "int2"
     }
 
@@ -451,8 +440,6 @@ int4 :: TypeInfo
 int4 =
   Basic
     { typoid = int4Oid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "int4"
     }
 
@@ -464,8 +451,6 @@ regproc :: TypeInfo
 regproc =
   Basic
     { typoid = regprocOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "regproc"
     }
 
@@ -477,8 +462,6 @@ text :: TypeInfo
 text =
   Basic
     { typoid = textOid,
-      typcategory = 'S',
-      typdelim = ',',
       typname = "text"
     }
 
@@ -490,8 +473,6 @@ oid :: TypeInfo
 oid =
   Basic
     { typoid = oidOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "oid"
     }
 
@@ -503,8 +484,6 @@ tid :: TypeInfo
 tid =
   Basic
     { typoid = tidOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "tid"
     }
 
@@ -516,8 +495,6 @@ xid :: TypeInfo
 xid =
   Basic
     { typoid = xidOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "xid"
     }
 
@@ -529,8 +506,6 @@ cid :: TypeInfo
 cid =
   Basic
     { typoid = cidOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "cid"
     }
 
@@ -542,8 +517,6 @@ xml :: TypeInfo
 xml =
   Basic
     { typoid = xmlOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "xml"
     }
 
@@ -555,8 +528,6 @@ point :: TypeInfo
 point =
   Basic
     { typoid = pointOid,
-      typcategory = 'G',
-      typdelim = ',',
       typname = "point"
     }
 
@@ -568,8 +539,6 @@ lseg :: TypeInfo
 lseg =
   Basic
     { typoid = lsegOid,
-      typcategory = 'G',
-      typdelim = ',',
       typname = "lseg"
     }
 
@@ -581,8 +550,6 @@ path :: TypeInfo
 path =
   Basic
     { typoid = pathOid,
-      typcategory = 'G',
-      typdelim = ',',
       typname = "path"
     }
 
@@ -594,8 +561,6 @@ box :: TypeInfo
 box =
   Basic
     { typoid = boxOid,
-      typcategory = 'G',
-      typdelim = ';',
       typname = "box"
     }
 
@@ -607,8 +572,6 @@ polygon :: TypeInfo
 polygon =
   Basic
     { typoid = polygonOid,
-      typcategory = 'G',
-      typdelim = ',',
       typname = "polygon"
     }
 
@@ -620,8 +583,6 @@ line :: TypeInfo
 line =
   Basic
     { typoid = lineOid,
-      typcategory = 'G',
-      typdelim = ',',
       typname = "line"
     }
 
@@ -633,8 +594,6 @@ cidr :: TypeInfo
 cidr =
   Basic
     { typoid = cidrOid,
-      typcategory = 'I',
-      typdelim = ',',
       typname = "cidr"
     }
 
@@ -646,8 +605,6 @@ float4 :: TypeInfo
 float4 =
   Basic
     { typoid = float4Oid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "float4"
     }
 
@@ -659,8 +616,6 @@ float8 :: TypeInfo
 float8 =
   Basic
     { typoid = float8Oid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "float8"
     }
 
@@ -672,8 +627,6 @@ unknown :: TypeInfo
 unknown =
   Basic
     { typoid = unknownOid,
-      typcategory = 'X',
-      typdelim = ',',
       typname = "unknown"
     }
 
@@ -685,8 +638,6 @@ circle :: TypeInfo
 circle =
   Basic
     { typoid = circleOid,
-      typcategory = 'G',
-      typdelim = ',',
       typname = "circle"
     }
 
@@ -698,8 +649,6 @@ money :: TypeInfo
 money =
   Basic
     { typoid = moneyOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "money"
     }
 
@@ -711,8 +660,6 @@ macaddr :: TypeInfo
 macaddr =
   Basic
     { typoid = macaddrOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "macaddr"
     }
 
@@ -724,8 +671,6 @@ inet :: TypeInfo
 inet =
   Basic
     { typoid = inetOid,
-      typcategory = 'I',
-      typdelim = ',',
       typname = "inet"
     }
 
@@ -737,8 +682,6 @@ bpchar :: TypeInfo
 bpchar =
   Basic
     { typoid = bpcharOid,
-      typcategory = 'S',
-      typdelim = ',',
       typname = "bpchar"
     }
 
@@ -750,8 +693,6 @@ varchar :: TypeInfo
 varchar =
   Basic
     { typoid = varcharOid,
-      typcategory = 'S',
-      typdelim = ',',
       typname = "varchar"
     }
 
@@ -763,8 +704,6 @@ date :: TypeInfo
 date =
   Basic
     { typoid = dateOid,
-      typcategory = 'D',
-      typdelim = ',',
       typname = "date"
     }
 
@@ -776,8 +715,6 @@ time :: TypeInfo
 time =
   Basic
     { typoid = timeOid,
-      typcategory = 'D',
-      typdelim = ',',
       typname = "time"
     }
 
@@ -789,8 +726,6 @@ timestamp :: TypeInfo
 timestamp =
   Basic
     { typoid = timestampOid,
-      typcategory = 'D',
-      typdelim = ',',
       typname = "timestamp"
     }
 
@@ -802,8 +737,6 @@ timestamptz :: TypeInfo
 timestamptz =
   Basic
     { typoid = timestamptzOid,
-      typcategory = 'D',
-      typdelim = ',',
       typname = "timestamptz"
     }
 
@@ -815,8 +748,6 @@ interval :: TypeInfo
 interval =
   Basic
     { typoid = intervalOid,
-      typcategory = 'T',
-      typdelim = ',',
       typname = "interval"
     }
 
@@ -828,8 +759,6 @@ timetz :: TypeInfo
 timetz =
   Basic
     { typoid = timetzOid,
-      typcategory = 'D',
-      typdelim = ',',
       typname = "timetz"
     }
 
@@ -841,8 +770,6 @@ bit :: TypeInfo
 bit =
   Basic
     { typoid = bitOid,
-      typcategory = 'V',
-      typdelim = ',',
       typname = "bit"
     }
 
@@ -854,8 +781,6 @@ varbit :: TypeInfo
 varbit =
   Basic
     { typoid = varbitOid,
-      typcategory = 'V',
-      typdelim = ',',
       typname = "varbit"
     }
 
@@ -867,8 +792,6 @@ numeric :: TypeInfo
 numeric =
   Basic
     { typoid = numericOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "numeric"
     }
 
@@ -880,8 +803,6 @@ refcursor :: TypeInfo
 refcursor =
   Basic
     { typoid = refcursorOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "refcursor"
     }
 
@@ -893,8 +814,6 @@ record :: TypeInfo
 record =
   Basic
     { typoid = recordOid,
-      typcategory = 'P',
-      typdelim = ',',
       typname = "record"
     }
 
@@ -906,8 +825,6 @@ void :: TypeInfo
 void =
   Basic
     { typoid = voidOid,
-      typcategory = 'P',
-      typdelim = ',',
       typname = "void"
     }
 
@@ -919,10 +836,8 @@ array_record :: TypeInfo
 array_record =
   Array
     { typoid = array_recordOid,
-      typcategory = 'P',
-      typdelim = ',',
       typname = "_record",
-      typelem = record
+      typelem = Just record
     }
 
 array_recordOid :: Oid
@@ -933,8 +848,6 @@ regprocedure :: TypeInfo
 regprocedure =
   Basic
     { typoid = regprocedureOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "regprocedure"
     }
 
@@ -946,8 +859,6 @@ regoper :: TypeInfo
 regoper =
   Basic
     { typoid = regoperOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "regoper"
     }
 
@@ -959,8 +870,6 @@ regoperator :: TypeInfo
 regoperator =
   Basic
     { typoid = regoperatorOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "regoperator"
     }
 
@@ -972,8 +881,6 @@ regclass :: TypeInfo
 regclass =
   Basic
     { typoid = regclassOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "regclass"
     }
 
@@ -985,8 +892,6 @@ regtype :: TypeInfo
 regtype =
   Basic
     { typoid = regtypeOid,
-      typcategory = 'N',
-      typdelim = ',',
       typname = "regtype"
     }
 
@@ -998,8 +903,6 @@ uuid :: TypeInfo
 uuid =
   Basic
     { typoid = uuidOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "uuid"
     }
 
@@ -1011,8 +914,6 @@ json :: TypeInfo
 json =
   Basic
     { typoid = jsonOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "json"
     }
 
@@ -1024,8 +925,6 @@ jsonb :: TypeInfo
 jsonb =
   Basic
     { typoid = jsonbOid,
-      typcategory = 'U',
-      typdelim = ',',
       typname = "jsonb"
     }
 
@@ -1037,10 +936,8 @@ int2vector :: TypeInfo
 int2vector =
   Array
     { typoid = int2vectorOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "int2vector",
-      typelem = int2
+      typelem = Just int2
     }
 
 int2vectorOid :: Oid
@@ -1051,10 +948,8 @@ oidvector :: TypeInfo
 oidvector =
   Array
     { typoid = oidvectorOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "oidvector",
-      typelem = oid
+      typelem = Just oid
     }
 
 oidvectorOid :: Oid
@@ -1065,10 +960,8 @@ array_xml :: TypeInfo
 array_xml =
   Array
     { typoid = array_xmlOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_xml",
-      typelem = xml
+      typelem = Just xml
     }
 
 array_xmlOid :: Oid
@@ -1079,10 +972,8 @@ array_json :: TypeInfo
 array_json =
   Array
     { typoid = array_jsonOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_json",
-      typelem = json
+      typelem = Just json
     }
 
 array_jsonOid :: Oid
@@ -1093,10 +984,8 @@ array_line :: TypeInfo
 array_line =
   Array
     { typoid = array_lineOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_line",
-      typelem = line
+      typelem = Just line
     }
 
 array_lineOid :: Oid
@@ -1107,10 +996,8 @@ array_cidr :: TypeInfo
 array_cidr =
   Array
     { typoid = array_cidrOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_cidr",
-      typelem = cidr
+      typelem = Just cidr
     }
 
 array_cidrOid :: Oid
@@ -1121,10 +1008,8 @@ array_circle :: TypeInfo
 array_circle =
   Array
     { typoid = array_circleOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_circle",
-      typelem = circle
+      typelem = Just circle
     }
 
 array_circleOid :: Oid
@@ -1135,10 +1020,8 @@ array_money :: TypeInfo
 array_money =
   Array
     { typoid = array_moneyOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_money",
-      typelem = money
+      typelem = Just money
     }
 
 array_moneyOid :: Oid
@@ -1149,10 +1032,8 @@ array_bool :: TypeInfo
 array_bool =
   Array
     { typoid = array_boolOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_bool",
-      typelem = bool
+      typelem = Just bool
     }
 
 array_boolOid :: Oid
@@ -1163,10 +1044,8 @@ array_bytea :: TypeInfo
 array_bytea =
   Array
     { typoid = array_byteaOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_bytea",
-      typelem = bytea
+      typelem = Just bytea
     }
 
 array_byteaOid :: Oid
@@ -1177,10 +1056,8 @@ array_char :: TypeInfo
 array_char =
   Array
     { typoid = array_charOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_char",
-      typelem = char
+      typelem = Just char
     }
 
 array_charOid :: Oid
@@ -1191,10 +1068,8 @@ array_name :: TypeInfo
 array_name =
   Array
     { typoid = array_nameOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_name",
-      typelem = name
+      typelem = Just name
     }
 
 array_nameOid :: Oid
@@ -1205,10 +1080,8 @@ array_int2 :: TypeInfo
 array_int2 =
   Array
     { typoid = array_int2Oid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_int2",
-      typelem = int2
+      typelem = Just int2
     }
 
 array_int2Oid :: Oid
@@ -1219,10 +1092,8 @@ array_int2vector :: TypeInfo
 array_int2vector =
   Array
     { typoid = array_int2vectorOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_int2vector",
-      typelem = int2vector
+      typelem = Just int2vector
     }
 
 array_int2vectorOid :: Oid
@@ -1233,10 +1104,8 @@ array_int4 :: TypeInfo
 array_int4 =
   Array
     { typoid = array_int4Oid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_int4",
-      typelem = int4
+      typelem = Just int4
     }
 
 array_int4Oid :: Oid
@@ -1247,10 +1116,8 @@ array_regproc :: TypeInfo
 array_regproc =
   Array
     { typoid = array_regprocOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_regproc",
-      typelem = regproc
+      typelem = Just regproc
     }
 
 array_regprocOid :: Oid
@@ -1261,10 +1128,8 @@ array_text :: TypeInfo
 array_text =
   Array
     { typoid = array_textOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_text",
-      typelem = text
+      typelem = Just text
     }
 
 array_textOid :: Oid
@@ -1275,10 +1140,8 @@ array_tid :: TypeInfo
 array_tid =
   Array
     { typoid = array_tidOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_tid",
-      typelem = tid
+      typelem = Just tid
     }
 
 array_tidOid :: Oid
@@ -1289,10 +1152,8 @@ array_xid :: TypeInfo
 array_xid =
   Array
     { typoid = array_xidOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_xid",
-      typelem = xid
+      typelem = Just xid
     }
 
 array_xidOid :: Oid
@@ -1303,10 +1164,8 @@ array_cid :: TypeInfo
 array_cid =
   Array
     { typoid = array_cidOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_cid",
-      typelem = cid
+      typelem = Just cid
     }
 
 array_cidOid :: Oid
@@ -1317,10 +1176,8 @@ array_oidvector :: TypeInfo
 array_oidvector =
   Array
     { typoid = array_oidvectorOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_oidvector",
-      typelem = oidvector
+      typelem = Just oidvector
     }
 
 array_oidvectorOid :: Oid
@@ -1331,10 +1188,8 @@ array_bpchar :: TypeInfo
 array_bpchar =
   Array
     { typoid = array_bpcharOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_bpchar",
-      typelem = bpchar
+      typelem = Just bpchar
     }
 
 array_bpcharOid :: Oid
@@ -1345,10 +1200,8 @@ array_varchar :: TypeInfo
 array_varchar =
   Array
     { typoid = array_varcharOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_varchar",
-      typelem = varchar
+      typelem = Just varchar
     }
 
 array_varcharOid :: Oid
@@ -1359,10 +1212,8 @@ array_int8 :: TypeInfo
 array_int8 =
   Array
     { typoid = array_int8Oid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_int8",
-      typelem = int8
+      typelem = Just int8
     }
 
 array_int8Oid :: Oid
@@ -1373,10 +1224,8 @@ array_point :: TypeInfo
 array_point =
   Array
     { typoid = array_pointOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_point",
-      typelem = point
+      typelem = Just point
     }
 
 array_pointOid :: Oid
@@ -1387,10 +1236,8 @@ array_lseg :: TypeInfo
 array_lseg =
   Array
     { typoid = array_lsegOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_lseg",
-      typelem = lseg
+      typelem = Just lseg
     }
 
 array_lsegOid :: Oid
@@ -1401,10 +1248,8 @@ array_path :: TypeInfo
 array_path =
   Array
     { typoid = array_pathOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_path",
-      typelem = path
+      typelem = Just path
     }
 
 array_pathOid :: Oid
@@ -1415,10 +1260,8 @@ array_box :: TypeInfo
 array_box =
   Array
     { typoid = array_boxOid,
-      typcategory = 'A',
-      typdelim = ';',
       typname = "_box",
-      typelem = box
+      typelem = Just box
     }
 
 array_boxOid :: Oid
@@ -1429,10 +1272,8 @@ array_float4 :: TypeInfo
 array_float4 =
   Array
     { typoid = array_float4Oid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_float4",
-      typelem = float4
+      typelem = Just float4
     }
 
 array_float4Oid :: Oid
@@ -1443,10 +1284,8 @@ array_float8 :: TypeInfo
 array_float8 =
   Array
     { typoid = array_float8Oid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_float8",
-      typelem = float8
+      typelem = Just float8
     }
 
 array_float8Oid :: Oid
@@ -1457,10 +1296,8 @@ array_polygon :: TypeInfo
 array_polygon =
   Array
     { typoid = array_polygonOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_polygon",
-      typelem = polygon
+      typelem = Just polygon
     }
 
 array_polygonOid :: Oid
@@ -1471,10 +1308,8 @@ array_oid :: TypeInfo
 array_oid =
   Array
     { typoid = array_oidOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_oid",
-      typelem = oid
+      typelem = Just oid
     }
 
 array_oidOid :: Oid
@@ -1485,10 +1320,8 @@ array_macaddr :: TypeInfo
 array_macaddr =
   Array
     { typoid = array_macaddrOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_macaddr",
-      typelem = macaddr
+      typelem = Just macaddr
     }
 
 array_macaddrOid :: Oid
@@ -1499,10 +1332,8 @@ array_inet :: TypeInfo
 array_inet =
   Array
     { typoid = array_inetOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_inet",
-      typelem = inet
+      typelem = Just inet
     }
 
 array_inetOid :: Oid
@@ -1513,10 +1344,8 @@ array_timestamp :: TypeInfo
 array_timestamp =
   Array
     { typoid = array_timestampOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_timestamp",
-      typelem = timestamp
+      typelem = Just timestamp
     }
 
 array_timestampOid :: Oid
@@ -1527,10 +1356,8 @@ array_date :: TypeInfo
 array_date =
   Array
     { typoid = array_dateOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_date",
-      typelem = date
+      typelem = Just date
     }
 
 array_dateOid :: Oid
@@ -1541,10 +1368,8 @@ array_time :: TypeInfo
 array_time =
   Array
     { typoid = array_timeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_time",
-      typelem = time
+      typelem = Just time
     }
 
 array_timeOid :: Oid
@@ -1555,10 +1380,8 @@ array_timestamptz :: TypeInfo
 array_timestamptz =
   Array
     { typoid = array_timestamptzOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_timestamptz",
-      typelem = timestamptz
+      typelem = Just timestamptz
     }
 
 array_timestamptzOid :: Oid
@@ -1569,10 +1392,8 @@ array_interval :: TypeInfo
 array_interval =
   Array
     { typoid = array_intervalOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_interval",
-      typelem = interval
+      typelem = Just interval
     }
 
 array_intervalOid :: Oid
@@ -1583,10 +1404,8 @@ array_numeric :: TypeInfo
 array_numeric =
   Array
     { typoid = array_numericOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_numeric",
-      typelem = numeric
+      typelem = Just numeric
     }
 
 array_numericOid :: Oid
@@ -1597,10 +1416,8 @@ array_timetz :: TypeInfo
 array_timetz =
   Array
     { typoid = array_timetzOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_timetz",
-      typelem = timetz
+      typelem = Just timetz
     }
 
 array_timetzOid :: Oid
@@ -1611,10 +1428,8 @@ array_bit :: TypeInfo
 array_bit =
   Array
     { typoid = array_bitOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_bit",
-      typelem = bit
+      typelem = Just bit
     }
 
 array_bitOid :: Oid
@@ -1625,10 +1440,8 @@ array_varbit :: TypeInfo
 array_varbit =
   Array
     { typoid = array_varbitOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_varbit",
-      typelem = varbit
+      typelem = Just varbit
     }
 
 array_varbitOid :: Oid
@@ -1639,10 +1452,8 @@ array_refcursor :: TypeInfo
 array_refcursor =
   Array
     { typoid = array_refcursorOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_refcursor",
-      typelem = refcursor
+      typelem = Just refcursor
     }
 
 array_refcursorOid :: Oid
@@ -1653,10 +1464,8 @@ array_regprocedure :: TypeInfo
 array_regprocedure =
   Array
     { typoid = array_regprocedureOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_regprocedure",
-      typelem = regprocedure
+      typelem = Just regprocedure
     }
 
 array_regprocedureOid :: Oid
@@ -1667,10 +1476,8 @@ array_regoper :: TypeInfo
 array_regoper =
   Array
     { typoid = array_regoperOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_regoper",
-      typelem = regoper
+      typelem = Just regoper
     }
 
 array_regoperOid :: Oid
@@ -1681,10 +1488,8 @@ array_regoperator :: TypeInfo
 array_regoperator =
   Array
     { typoid = array_regoperatorOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_regoperator",
-      typelem = regoperator
+      typelem = Just regoperator
     }
 
 array_regoperatorOid :: Oid
@@ -1695,10 +1500,8 @@ array_regclass :: TypeInfo
 array_regclass =
   Array
     { typoid = array_regclassOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_regclass",
-      typelem = regclass
+      typelem = Just regclass
     }
 
 array_regclassOid :: Oid
@@ -1709,10 +1512,8 @@ array_regtype :: TypeInfo
 array_regtype =
   Array
     { typoid = array_regtypeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_regtype",
-      typelem = regtype
+      typelem = Just regtype
     }
 
 array_regtypeOid :: Oid
@@ -1723,10 +1524,8 @@ array_uuid :: TypeInfo
 array_uuid =
   Array
     { typoid = array_uuidOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_uuid",
-      typelem = uuid
+      typelem = Just uuid
     }
 
 array_uuidOid :: Oid
@@ -1737,10 +1536,8 @@ array_jsonb :: TypeInfo
 array_jsonb =
   Array
     { typoid = array_jsonbOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_jsonb",
-      typelem = jsonb
+      typelem = Just jsonb
     }
 
 array_jsonbOid :: Oid
@@ -1751,10 +1548,8 @@ int4range :: TypeInfo
 int4range =
   Range
     { typoid = int4rangeOid,
-      typcategory = 'R',
-      typdelim = ',',
-      typname = "int4range",
-      rngsubtype = int4
+      typname = "int4range"
+      -- rngsubtype = int4
     }
 
 int4rangeOid :: Oid
@@ -1765,10 +1560,8 @@ _int4range :: TypeInfo
 _int4range =
   Array
     { typoid = _int4rangeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_int4range",
-      typelem = int4range
+      typelem = Just int4range
     }
 
 _int4rangeOid :: Oid
@@ -1779,10 +1572,8 @@ numrange :: TypeInfo
 numrange =
   Range
     { typoid = numrangeOid,
-      typcategory = 'R',
-      typdelim = ',',
-      typname = "numrange",
-      rngsubtype = numeric
+      typname = "numrange"
+      -- rngsubtype = numeric
     }
 
 numrangeOid :: Oid
@@ -1793,10 +1584,8 @@ _numrange :: TypeInfo
 _numrange =
   Array
     { typoid = _numrangeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_numrange",
-      typelem = numrange
+      typelem = Just numrange
     }
 
 _numrangeOid :: Oid
@@ -1807,10 +1596,8 @@ tsrange :: TypeInfo
 tsrange =
   Range
     { typoid = tsrangeOid,
-      typcategory = 'R',
-      typdelim = ',',
-      typname = "tsrange",
-      rngsubtype = timestamp
+      typname = "tsrange"
+      -- rngsubtype = timestamp
     }
 
 tsrangeOid :: Oid
@@ -1821,10 +1608,8 @@ _tsrange :: TypeInfo
 _tsrange =
   Array
     { typoid = _tsrangeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_tsrange",
-      typelem = tsrange
+      typelem = Just tsrange
     }
 
 _tsrangeOid :: Oid
@@ -1835,10 +1620,8 @@ tstzrange :: TypeInfo
 tstzrange =
   Range
     { typoid = tstzrangeOid,
-      typcategory = 'R',
-      typdelim = ',',
-      typname = "tstzrange",
-      rngsubtype = timestamptz
+      typname = "tstzrange"
+      -- rngsubtype = timestamptz
     }
 
 tstzrangeOid :: Oid
@@ -1849,10 +1632,8 @@ _tstzrange :: TypeInfo
 _tstzrange =
   Array
     { typoid = _tstzrangeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_tstzrange",
-      typelem = tstzrange
+      typelem = Just tstzrange
     }
 
 _tstzrangeOid :: Oid
@@ -1863,10 +1644,8 @@ daterange :: TypeInfo
 daterange =
   Range
     { typoid = daterangeOid,
-      typcategory = 'R',
-      typdelim = ',',
-      typname = "daterange",
-      rngsubtype = date
+      typname = "daterange"
+      -- rngsubtype = date
     }
 
 daterangeOid :: Oid
@@ -1877,10 +1656,8 @@ _daterange :: TypeInfo
 _daterange =
   Array
     { typoid = _daterangeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_daterange",
-      typelem = daterange
+      typelem = Just daterange
     }
 
 _daterangeOid :: Oid
@@ -1891,10 +1668,8 @@ int8range :: TypeInfo
 int8range =
   Range
     { typoid = int8rangeOid,
-      typcategory = 'R',
-      typdelim = ',',
-      typname = "int8range",
-      rngsubtype = int8
+      typname = "int8range"
+      -- rngsubtype = int8
     }
 
 int8rangeOid :: Oid
@@ -1905,10 +1680,8 @@ _int8range :: TypeInfo
 _int8range =
   Array
     { typoid = _int8rangeOid,
-      typcategory = 'A',
-      typdelim = ',',
       typname = "_int8range",
-      typelem = int8range
+      typelem = Just int8range
     }
 
 _int8rangeOid :: Oid
