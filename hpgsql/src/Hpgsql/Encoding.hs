@@ -109,7 +109,7 @@ import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeDetails (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
 
 data FieldInfo = FieldInfo
   { fieldTypeOid :: !Oid,
@@ -1143,6 +1143,14 @@ nullableField FieldDecoder {..} =
 instance (FromPgField a) => FromPgField (Maybe a) where
   fieldDecoder = nullableField fieldDecoder
 
+allowOnlyArrayTypes :: FieldInfo -> Bool
+allowOnlyArrayTypes fieldInfo =
+  -- TODO: We could check the elemTypeOid too, but maybe later
+  case lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache of
+    Just (TypeInfo {typeDetails = ArrayType _}) -> True
+    Nothing -> True -- Assume user knows what they're doing
+    Just _ -> False -- Definitely not an array
+
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
   fieldDecoder = arrayField Vector.replicateM fieldDecoder
 
@@ -1157,7 +1165,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
                 Just bs -> case Parser.parseOnly arrayFieldDecoder bs of
                   Parser.ParseOk v -> Right v
                   Parser.ParseFail err -> Left err,
-        allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
+        allowedPgTypes = allowOnlyArrayTypes
       }
     where
       !elementParser = fieldDecoder @a
@@ -1348,7 +1356,7 @@ arrayField !replicateFunction !elementParser =
               Just bs -> case Parser.parseOnly arrayFieldDecoder bs of
                 Parser.ParseOk v -> Right v
                 Parser.ParseFail err -> Left err,
-      allowedPgTypes = const True -- TODO: We could put "Is-Array" in the typeinfo cache and reject when it's not an array here
+      allowedPgTypes = allowOnlyArrayTypes
     }
   where
     arrayParser :: EncodingContext -> Parser.Parser (f a)
