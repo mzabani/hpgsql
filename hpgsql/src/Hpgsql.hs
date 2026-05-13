@@ -1,6 +1,6 @@
 -- |
 -- Module      : Hpgsql
--- Description : A pure Haskell PostgreSQL driver
+-- Description : A pure Haskell PostgreSQL driver (no libpq) with pipelines, prepared statements, streaming, thread safety and interruption safety.
 --
 -- Hpgsql is a PostgreSQL driver written entirely in Haskell, with no bindings to @libpq@.
 -- It communicates with the database using the PostgreSQL wire protocol directly.
@@ -83,7 +83,7 @@
 --
 -- * "Hpgsql.Connection" for connecting and connection state resetting.
 -- * "Hpgsql.Copy" for @COPY@ protocol support.
--- * "Hpgsql.Pipeline" for pipelined queries.
+-- * "Hpgsql.Pipeline" for building pipelines of queries.
 -- * "Hpgsql.Query" for the @sql@ and @sqlPrep@ quasiquoters, and query-building helpers.
 -- * "Hpgsql.Transaction" for transaction management.
 -- * "Hpgsql.Types" for extra types that might be useful.

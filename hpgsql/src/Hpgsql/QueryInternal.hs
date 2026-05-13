@@ -20,7 +20,7 @@ import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Hpgsql.Builder (BinaryField)
 import Hpgsql.Encoding (FieldEncoder (..), RowEncoder (..), ToPgField (..), ToPgRow (..))
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements, renumberParamsFrom)
-import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, parseSql)
+import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, flattenBlocks, parseSql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.Meta.Parse (parseExp)
 import Language.Haskell.TH
@@ -146,7 +146,7 @@ sqlPrep =
     }
 
 liftQuery :: Bool -> [BlockOrNotBlock] -> Q Exp
-liftQuery isPrepared stmt = do
+liftQuery isPrepared (flattenBlocks -> stmt) = do
   let allFragments = concatMap parseBlockQuasiQuoter stmt
       hasEmbedded = any isEmbedded allFragments
   if hasEmbedded

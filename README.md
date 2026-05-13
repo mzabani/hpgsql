@@ -4,12 +4,12 @@ Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API la
 
 - Usage of PostgreSQL's binary protocol
 - Query arguments passed via the protocol instead of being escaped into the query string
-- Pipeline support
-- Capable of streaming query results directly from the socket (not just with cursors), and ability to use Streams in pipelines
+- Pipelining
+- Prepared statements
+- Ability to stream query results directly from the socket (not just with cursors)
 - [Interruption safety](/INTERRUPTION-SAFETY.md), except for very specific (and documented) edge cases
 - Thread safety, unless specific (and documented) instructions say otherwise
 - A SQL quasiquoter like the one in [postgresql-query](https://hackage.haskell.org/package/postgresql-query) and [hasql-interpolate](https://hackage-content.haskell.org/package/hasql-interpolate-1.0.1.0/docs/Hasql-Interpolate.html)
-- Prepared statements
 
 Here's an example of a pipeline mixing streams, prepared and non prepared statements:
 
