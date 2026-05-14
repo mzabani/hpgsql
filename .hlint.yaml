@@ -30,4 +30,5 @@
   - {name: Data.List.NonEmpty.fromList, within: [], message: "fromList is partial. Use nonEmpty from Data.List.NonEmpty instead."}
   - {name: "Data.List.NonEmpty.!!", within: [], message: "(!!) is partial. Use safe indexing instead."}
   - {name: "waitReadSocketSTM", within: [], message: "waitReadSocketSTM is not available in older versions of the network library. Use functions from our own Networking module instead."}
+  - {name: "tryAny", within: [], message: "You typically want to ignore IrrecoverableHpgsqlError, so use tryJust instead"}
   

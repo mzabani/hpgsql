@@ -1,7 +1,7 @@
 module Hpgsql.Transaction (withTransaction, withTransactionMode, begin, beginMode, commit, rollback, transactionStatus, IsolationLevel (..), ReadWriteMode (..), TransactionStatus (..)) where
 
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (Exception (..), bracketWithError, throw, tryAny)
+import Control.Exception.Safe (Exception (..), bracketWithError, throw, tryAny, tryJust)
 import Control.Monad (unless)
 import Hpgsql.Internal (execute_, fullTransactionStatus, transactionStatus)
 import Hpgsql.InternalTypes (HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError)
@@ -73,24 +73,22 @@ withTransaction conn = withTransactionMode conn DefaultIsolationLevel DefaultRea
 -- will be issued before your next query on this connection.
 withTransactionMode :: HPgConnection -> IsolationLevel -> ReadWriteMode -> IO a -> IO a
 withTransactionMode conn il rw f = bracketWithError (beginMode conn il rw) cleanup $ \() -> do
-  res <- tryAny f
+  res <- tryJust notIrrecoverableError f
   case res of
-    Left ex -> case fromException ex of
-      Just (_ :: IrrecoverableHpgsqlError) -> throw ex -- Rethrow internal errors
-      Nothing -> do
-        -- In case of a synchronous exception, we rollback synchronously.
-        -- If this is interrupted:
-        -- - Before ROLLBACK is sent, `cleanup` will enqueue a "ROLLBACK".
-        -- - After ROLLBACK is sent but before it finishes, a ROLLBACK will still be enqueued
-        --   (check `cleanup`), which means:
-        --      - If ROLLBACK has already completed by the time the new ROLLBACK is meant to be sent,
-        --        the new ROLLBACK will produce a "WARNING: there is no transaction in progress". This
-        --        isn't great, but is mostly harmless.
-        --      - If ROLLBACK is cancelled by the future ROLLBACK, all is good as well.
-        -- - After ROLLBACK is sent and completed, `cleanup` won't enqueue a new ROLLBACK, and all is well.
-        --
-        -- We rollback here, not in `cleanup`, because that runs with async exceptions masked
-        rollback conn >> throw ex -- Reminder that this can be interrupted before/after "rollback" is sent
+    Left ex -> do
+      -- In case of a synchronous exception, we rollback synchronously.
+      -- If this is interrupted:
+      -- - Before ROLLBACK is sent, `cleanup` will enqueue a "ROLLBACK".
+      -- - After ROLLBACK is sent but before it finishes, a ROLLBACK will still be enqueued
+      --   (check `cleanup`), which means:
+      --      - If ROLLBACK has already completed by the time the new ROLLBACK is meant to be sent,
+      --        the new ROLLBACK will produce a "WARNING: there is no transaction in progress". This
+      --        isn't great, but is mostly harmless.
+      --      - If ROLLBACK is cancelled by the future ROLLBACK, all is good as well.
+      -- - After ROLLBACK is sent and completed, `cleanup` won't enqueue a new ROLLBACK, and all is well.
+      --
+      -- We rollback here, not in `cleanup`, because that runs with async exceptions masked
+      rollback conn >> throw ex -- Reminder that this can be interrupted before/after "rollback" is sent
     Right v -> do
       -- If this is interrupted:
       -- - Before COMMIT is sent, it's equivalent to failing in the middle of the user-supplied action
@@ -105,6 +103,9 @@ withTransactionMode conn il rw f = bracketWithError (beginMode conn il rw) clean
       commit conn
       pure v
   where
+    notIrrecoverableError e = case fromException e of
+      Just (_ :: IrrecoverableHpgsqlError) -> Nothing
+      _ -> Just e
     cleanup mEx () = case mEx of
       Nothing -> pure ()
       Just (fromException -> (Just (_ :: IrrecoverableHpgsqlError))) -> pure () -- Do nothing if an internal error was thrown, just let it propagate

@@ -29,6 +29,9 @@ spec = aroundConn $ describe "Hpgsql.Transaction" $ parallel $ do
     "withTransaction issues ROLLBACK when the inner action throws a synchronous exception"
     withTransactionRollsBackOnSyncException
   it
+    "withTransaction lets irrecoverable errors propagate"
+    withTransactionLetsIrrecoverableErrorsPropagate
+  it
     "withTransaction issues ROLLBACK when the inner action is killed by an asynchronous exception"
     withTransactionRollsBackOnAsyncException
 
@@ -56,6 +59,12 @@ withTransactionRollsBackOnSyncException conn = do
   transactionStatus conn `shouldReturn` TransIdle
   query conn [sql|SELECT 1 FROM pg_class WHERE relname = 'tx_sync_test'|]
     `shouldReturn` ([] :: [Only Int])
+
+withTransactionLetsIrrecoverableErrorsPropagate :: HPgConnection -> IO ()
+withTransactionLetsIrrecoverableErrorsPropagate conn = do
+  let irrecEx = IrrecoverableHpgsqlError {hpgsqlDetails = "Example irrecoverable error", relatedStatement = Nothing, innerException = Nothing}
+  (withTransaction conn (throwIO irrecEx))
+    `shouldThrow` (\(ex :: IrrecoverableHpgsqlError) -> ex.hpgsqlDetails == irrecEx.hpgsqlDetails)
 
 withTransactionRollsBackOnAsyncException :: HPgConnection -> IO ()
 withTransactionRollsBackOnAsyncException conn = do
