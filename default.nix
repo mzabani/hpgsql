@@ -19,6 +19,10 @@ rec {
   inherit haskellPackages;
 
   hpgsqlSimpleCompatTestsPg18 = { hspecArgs ? ""}: import ./nix/run-hpgsql-simple-compat-db-tests.nix { inherit pkgs hpgsql-simple-compat-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_18; };
+  hpgsqlSimpleCompatTestsPg17 = { hspecArgs ? ""}: import ./nix/run-hpgsql-simple-compat-db-tests.nix { inherit pkgs hpgsql-simple-compat-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_17; };
+  hpgsqlSimpleCompatTestsPg16 = { hspecArgs ? ""}: import ./nix/run-hpgsql-simple-compat-db-tests.nix { inherit pkgs hpgsql-simple-compat-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_16; };
+  hpgsqlSimpleCompatTestsPg15 = { hspecArgs ? ""}: import ./nix/run-hpgsql-simple-compat-db-tests.nix { inherit pkgs hpgsql-simple-compat-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_15; };
+  hpgsqlSimpleCompatTestsPg14 = { hspecArgs ? ""}: import ./nix/run-hpgsql-simple-compat-db-tests.nix { inherit pkgs hpgsql-simple-compat-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_14; };
   testsPg18 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_18; };
   testsPg17 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_17; };
   testsPg16 = { hspecArgs ? ""}: import ./nix/run-db-tests.nix { inherit pkgs hpgsql-tests hspecArgs; postgres = addPgExtensions pkgs.postgresql_16; };
