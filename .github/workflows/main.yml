@@ -61,7 +61,14 @@ jobs:
 
     - name: Run hpgsql-simple-compat tests
       run: |
-        scripts/ci/run-tests-and-annotate-with-error.sh local/hpgsql-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg18
+        concurrently -g --timings --names pg18,pg17,pg16,pg15,pg14,ghc984,ghc967 \
+          'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg18' \
+          'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg17' \
+          'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg16' \
+          'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg15' \
+          'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg14' \
+          'nix-build --no-out-link --argstr ghc ghc984 -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-simple-compat-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A hpgsqlSimpleCompatTestsPg18' \
+          'nix-build --no-out-link --argstr ghc ghc967 -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc967-simple-compat-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A hpgsqlSimpleCompatTestsPg18'
 
   build-aarch64-darwin:
     runs-on: macos-14
@@ -129,7 +136,7 @@ jobs:
           trusted-public-keys = mzabani.cachix.org-1:wnkKakfl+rbT7zTtV1P1tAtjBTuh6GQVX7LfSd9sMbA= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
 
     - name: Run hlint and `cabal check`
-      run: nix-shell --run 'hlint . && cd hpgsql && cabal check && cd -'
+      run: nix-shell --run 'hlint . && cd hpgsql && cabal check && cd ../hpgsql-simple-compat && cabal check && cd ..'
 
     - name: Check code is formatted
       run: |
