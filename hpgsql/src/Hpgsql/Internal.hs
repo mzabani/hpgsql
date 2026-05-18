@@ -139,10 +139,11 @@ import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEnco
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), ConnectionString (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResetConnectionOpts (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
-import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
+import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
 import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
+import qualified Hpgsql.ScramSHA256 as ScramSHA256
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.TypeInfo (ArrayTypeDetails (..), TypeDetails (..), TypeInfo (..), buildTypeInfoCache, builtinPgTypesMap)
 import Network.Socket (AddrInfo (..))
@@ -284,6 +285,43 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
             AuthMD5Password _ -> do
               nonAtomicSendMsg hpgConnPartialDoNotReturn $ PasswordMessage authMethod (Text.unpack user) (Text.unpack password)
               receiveAuthOkOrThrow hpgConnPartialDoNotReturn
+            AuthSASL mechanisms
+              | "SCRAM-SHA-256" `elem` mechanisms -> do
+                  -- 1. Generate and send client-first-message
+                  clientFirstMsg <- ScramSHA256.generateClientFirstMessage
+                  nonAtomicSendMsg hpgConnPartialDoNotReturn $ SASLInitialResponse "SCRAM-SHA-256" clientFirstMsg.fullMessage
+
+                  -- 2. Receive server-first-message
+                  saslContinueMsg <-
+                    receiveNextMsgUnsafe
+                      hpgConnPartialDoNotReturn
+                      (Right <$> msgParser @AuthenticationResponse <|> Left <$> msgParser @ErrorResponse)
+                  serverFirst <- case saslContinueMsg of
+                    Right (AuthenticationResponse (AuthSASLContinue d)) -> pure d
+                    Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "SCRAM-SHA-256 authentication failed", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
+                    _ -> throwIrrecoverableError "Expected AuthSASLContinue during SCRAM-SHA-256 authentication"
+
+                  -- 3. Generate and send client-final-message
+                  clientFinalMsg <- case ScramSHA256.handleServerFirstMsg password clientFirstMsg serverFirst of
+                    Left err -> throwIrrecoverableError $ "SCRAM-SHA-256 error: " <> Text.pack err
+                    Right r -> pure r
+                  nonAtomicSendMsg hpgConnPartialDoNotReturn $ SASLResponse clientFinalMsg
+
+                  -- 4. Receive server-final-message
+                  saslFinalMsg <-
+                    receiveNextMsgUnsafe
+                      hpgConnPartialDoNotReturn
+                      (Right <$> msgParser @AuthenticationResponse <|> Left <$> msgParser @ErrorResponse)
+                  case saslFinalMsg of
+                    Right (AuthenticationResponse (AuthSASLFinal serverFinalData)) ->
+                      case ScramSHA256.verifyServerFinal clientFinalMsg serverFinalData of
+                        Left err -> throwIrrecoverableError $ "SCRAM-SHA-256 server verification failed: " <> Text.pack err
+                        Right () -> pure ()
+                    Left errResp -> throw $ IrrecoverableHpgsqlError {hpgsqlDetails = "SCRAM-SHA-256 authentication failed", innerException = Just $ toException $ mkPostgresError "" errResp, relatedStatement = Nothing}
+                    _ -> throwIrrecoverableError "Expected AuthSASLFinal during SCRAM-SHA-256 authentication"
+
+                  -- 5. Receive AuthOk
+                  receiveAuthOkOrThrow hpgConnPartialDoNotReturn
             _ -> throwIrrecoverableError $ "Hpgsql does not yet support authenticating with method " <> Text.pack (show authMethod)
           errorOrBackendKeyData <- receiveNextMsgUnsafe hpgConnPartialDoNotReturn $ Right <$> msgParser @BackendKeyData <|> Left <$> msgParser @ErrorResponse
           case errorOrBackendKeyData of

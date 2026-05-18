@@ -1,12 +1,13 @@
-module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), PasswordMessage (..), Sync (..), parsePgMessage, nulTermCString) where
+module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), PasswordMessage (..), Sync (..), parsePgMessage, nulTermCString) where
 
 import Control.Applicative (Alternative (..))
 import Control.Monad (replicateM)
-import qualified Crypto.Hash.MD5 as MD5
+import qualified Crypto.Hash as Crypto
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
 import qualified Data.Attoparsec.Text as TextParsec
 import Data.Bifunctor (first)
+import Data.ByteArray (convert)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
@@ -18,11 +19,12 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Serialize as Cereal
 import Data.Text (Text)
-import Data.Text.Encoding (decodeASCII, decodeUtf8)
+import Data.Text.Encoding (decodeASCII, decodeUtf8, encodeUtf8)
 import Data.Word (Word8)
 import Hpgsql.Builder (BinaryField, Builder, builderLength)
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
+import Hpgsql.ScramSHA256 (ScramClientFinalMessage (..), ScramServerFirstMessage (..))
 import Hpgsql.TypeInfo (Oid (..))
 
 class ToPgMessage a where
@@ -71,7 +73,13 @@ nulTerminatedCStringParser = do
 newtype AuthenticationResponse = AuthenticationResponse AuthenticationMethod
   deriving stock (Show)
 
-data AuthenticationMethod = AuthOk | AuthKerberosV5 | AuthCleartextPassword | AuthMD5Password LBS.ByteString | AuthGSS | AuthGSSContinue | AuthSSPI | AuthSASL | AuthSASLContinue | AuthSASLFinal
+data AuthenticationMethod = AuthOk | AuthKerberosV5 | AuthCleartextPassword | AuthMD5Password LBS.ByteString | AuthGSS | AuthGSSContinue | AuthSSPI | AuthSASL [Text] | AuthSASLContinue !ScramServerFirstMessage | AuthSASLFinal ByteString
+  deriving stock (Show)
+
+data SASLInitialResponse = SASLInitialResponse Text ByteString
+  deriving stock (Show)
+
+newtype SASLResponse = SASLResponse ScramClientFinalMessage
   deriving stock (Show)
 
 data PasswordMessage
@@ -136,19 +144,19 @@ data Terminate = Terminate
 
 instance FromPgMessage AuthenticationResponse where
   msgParser = PgMsgParser $ \c restOfMsg -> case c of
-    'R' -> case LBS.length restOfMsg of
-      4 ->
-        case Cereal.decodeLazy @Int32 restOfMsg of
-          Right 0 -> Just $ AuthenticationResponse AuthOk
-          Right 2 -> Just $ AuthenticationResponse AuthKerberosV5
-          Right 3 -> Just $ AuthenticationResponse AuthCleartextPassword
-          Right 7 -> Just $ AuthenticationResponse AuthGSS
-          Right 9 -> Just $ AuthenticationResponse AuthSSPI
-          _ -> Nothing
-      8 -> case first (Cereal.decodeLazy @Int32) $ LBS.splitAt 4 restOfMsg of
-        (Right 5, salt) -> Just $ AuthenticationResponse (AuthMD5Password salt)
-        _ -> Nothing -- We don't care too much about parsing every possible response yet
-      _ -> Nothing -- We don't care too much about parsing every possible response yet
+    'R' -> case first (Cereal.decodeLazy @Int32) $ LBS.splitAt 4 restOfMsg of
+      (Right 0, _) -> Just $ AuthenticationResponse AuthOk
+      (Right 2, _) -> Just $ AuthenticationResponse AuthKerberosV5
+      (Right 3, _) -> Just $ AuthenticationResponse AuthCleartextPassword
+      (Right 5, salt) -> Just $ AuthenticationResponse (AuthMD5Password salt)
+      (Right 7, _) -> Just $ AuthenticationResponse AuthGSS
+      (Right 9, _) -> Just $ AuthenticationResponse AuthSSPI
+      (Right 10, saslMechanismName) -> case Parsec.parseOnly (Parsec.many1 nulTerminatedCStringParser) (LBS.toStrict saslMechanismName) of
+        Right sm -> Just $ AuthenticationResponse (AuthSASL sm)
+        Left _ -> Nothing
+      (Right 11, saslData) -> Just $ AuthenticationResponse (AuthSASLContinue (ScramServerFirstMessage $ LBS.toStrict saslData))
+      (Right 12, saslData) -> Just $ AuthenticationResponse (AuthSASLFinal (LBS.toStrict saslData))
+      _ -> Nothing
     _ -> Nothing
 
 instance FromPgMessage BackendKeyData where
@@ -250,12 +258,29 @@ instance ToPgMessage PasswordMessage where
           AuthMD5Password (LBS.toStrict -> salt) ->
             let passwordBytes = Builder.toStrictByteString (Builder.string7 password)
                 usernameBytes = Builder.toStrictByteString (Builder.string7 username)
-                innerHex = bytestringToHex (MD5.hash (passwordBytes <> usernameBytes))
-                outerHex = bytestringToHex (MD5.hash (innerHex <> salt))
+                innerHex = bytestringToHex (md5Hash (passwordBytes <> usernameBytes))
+                outerHex = bytestringToHex (md5Hash (innerHex <> salt))
              in Builder.byteString "md5" <> Builder.byteString outerHex <> Builder.word8 0
           _ -> error "PasswordMessage method not implemented"
         msgLen = builderLength passwordBs + 4
      in Builder.char7 'p' <> Builder.int32BE msgLen <> passwordBs
+    where
+      md5Hash :: ByteString -> ByteString
+      md5Hash = convert @(Crypto.Digest Crypto.MD5) . Crypto.hash
+
+instance ToPgMessage SASLInitialResponse where
+  toPgMessage (SASLInitialResponse mechanism clientFirstMsg) =
+    let mechanismBs = Builder.byteString (encodeUtf8 mechanism) <> Builder.word8 0
+        dataLen = fromIntegral (BS.length clientFirstMsg) :: Int32
+        contents = mechanismBs <> Builder.int32BE dataLen <> Builder.byteString clientFirstMsg
+        msgLen = builderLength contents + 4
+     in Builder.char7 'p' <> Builder.int32BE msgLen <> contents
+
+instance ToPgMessage SASLResponse where
+  toPgMessage (SASLResponse responseData) =
+    let contents = Builder.byteString responseData.clientFinalMessage
+        msgLen = builderLength contents + 4
+     in Builder.char7 'p' <> Builder.int32BE msgLen <> contents
 
 instance ToPgMessage Query where
   toPgMessage (Query bs) =
