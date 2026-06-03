@@ -16,7 +16,7 @@ import qualified Data.Text as Text
 import Hpgsql (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
 import Hpgsql.Connection (defaultConnectOpts, withConnection, withConnectionOpts)
 import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..))
-import System.Environment (getEnv)
+import System.Environment (getEnv, lookupEnv)
 import System.Mem (performGC)
 import Test.Hspec
 
@@ -26,7 +26,8 @@ testConnInfo = do
   hostname <- Text.pack <$> getEnv "PGHOST"
   database <- Text.pack <$> getEnv "PGDATABASE"
   user <- Text.pack <$> getEnv "PGUSER"
-  pure ConnectionString {user, database, hostname, port = read portStr, password = "", options = ""}
+  password <- maybe "" Text.pack <$> lookupEnv "PGPASSWORD"
+  pure ConnectionString {user, database, hostname, port = read portStr, password, options = ""}
 
 aroundConn :: SpecWith HPgConnection -> Spec
 aroundConn = around $ \act -> do

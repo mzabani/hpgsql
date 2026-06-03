@@ -1,7 +1,7 @@
 module Hpgsql.Transaction (withTransaction, withTransactionMode, begin, beginMode, commit, rollback, transactionStatus, IsolationLevel (..), ReadWriteMode (..), TransactionStatus (..)) where
 
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (Exception (..), bracketWithError, throw, tryAny, tryJust)
+import Control.Exception.Safe (Exception (..), bracketWithError, throw, tryJust)
 import Control.Monad (unless)
 import Hpgsql.Internal (execute_, fullTransactionStatus, transactionStatus)
 import Hpgsql.InternalTypes (HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError)
