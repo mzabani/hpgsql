@@ -7,6 +7,7 @@ module Hpgsql.Internal
     withConnectionOpts,
     closeGracefully,
     closeForcefully,
+    connectionIsClosed,
 
     -- * Query
     query,
@@ -97,7 +98,6 @@ module Hpgsql.Internal
     debugPrint,
     _globalDebugLock,
     timeDebugNonBlockingOperation,
-    whenNotClosed,
     chunkBuildersBySize,
     pipelineExecInternal,
     pipelineM,
@@ -449,7 +449,7 @@ resetConnectionState conn@HPgConnection {internalConnectionState} mCleanOpts = d
 -- | Closes the connection with postgres. Do not use this in exception handlers; use `closeForcefully`
 -- instead.
 closeGracefully :: HPgConnection -> IO ()
-closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finally (Socket.close socket >> modifyMVar_ conn.socketClosed (const $ pure True)) $ do
+closeGracefully conn = closeInternalFinally conn $ do
   withControlMsgsLock
     conn
     (const $ pure ())
@@ -457,21 +457,23 @@ closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finall
     $ \() -> do
       nonAtomicSendMsg conn Terminate
 
--- | Closes the connection with postgres as quickly as possible without
+-- | Closes the connection with postgres as quickly as possible, without
 -- the proper postgres protocol handshake procedures. This is equivalent to
 -- closing the connection's socket in the kernel without making postgres
 -- aware of it.
 -- Use this if you need to close the connection in exception handlers or
 -- if you received an irrecoverable Hpgsql exception.
 closeForcefully :: HPgConnection -> IO ()
-closeForcefully conn@(HPgConnection {socket}) = whenNotClosed conn $ do
-  Socket.close socket
-  modifyMVar_ conn.socketClosed $ const $ pure True
+closeForcefully conn = closeInternalFinally conn $ pure ()
 
-whenNotClosed :: HPgConnection -> IO () -> IO ()
-whenNotClosed conn f = do
+-- | Returns `True` if the connection has already been closed.
+connectionIsClosed :: HPgConnection -> IO Bool
+connectionIsClosed conn = readMVar conn.socketClosed
+
+closeInternalFinally :: HPgConnection -> IO () -> IO ()
+closeInternalFinally conn f = do
   isClosed <- readMVar conn.socketClosed
-  unless isClosed f
+  unless isClosed $ finally f (Socket.close conn.socket >> modifyMVar_ conn.socketClosed (const $ pure True))
 
 withConnection :: ConnectionString -> DiffTime -> (HPgConnection -> IO a) -> IO a
 withConnection connstr conntimeout f = bracketOnError (connect connstr conntimeout) closeForcefully $ \conn -> do
