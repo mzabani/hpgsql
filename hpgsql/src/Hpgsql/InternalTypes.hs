@@ -301,13 +301,24 @@ data NotificationResponse = NotificationResponse {notifierPid :: !Int32, channel
   deriving stock (Eq, Show)
 
 data ResetConnectionOpts = ResetConnectionOpts
-  { -- | Runs `RESET ALL` and `RESET ROLE` on the connection. Defaults to True.
+  { -- | Runs `CLOSE ALL` to close all cursors. Defaults to True.
+    closeAllCursors :: Bool,
+    -- | Runs `RESET ALL` on the connection. Defaults to True.
     resetAll :: Bool,
+    -- | Runs `SET SESSION AUTHORIZATION DEFAULT` on the connection. Defaults to True.
+    resetRole :: Bool,
+    -- | Runs `DEALLOCATE ALL; DISCARD PLANS;` to deallocate all prepared statements and cached query plans. Defaults to False to reap more benefits from prepared statements.
+    deallocatePreparedStmts :: Bool,
     -- | Runs `UNLISTEN *` on the connection and clears the internal queue of notifications. Defaults to True.
     unlistenAll :: Bool,
+    -- | Runs `SELECT pg_advisory_unlock_all()` to release all session-level advisory locks. Defaults to True.
+    releaseAdvisoryLocks :: Bool,
+    -- | Runs `DISCARD TEMP` to drop temporary tables created in this session. Defaults to True.
+    discardTempTables :: Bool,
+    -- | Runs `DISCARD SEQUENCES` to discard all cached sequence-related state. Defaults to True.
+    discardSequences :: Bool,
     -- | Throws an exception if there is an open transaction or if there's a transaction in error state. Defaults to True.
     checkTransactionState :: Bool
-    -- TODO: Check for any temporary tables and throw?
   }
 
 -- | An error coming from PostgreSQL. You can safely handle this and continue using the connection.
