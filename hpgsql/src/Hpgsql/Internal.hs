@@ -112,7 +112,7 @@ import Control.Concurrent (modifyMVar, modifyMVar_, readMVar)
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (MonadThrow, SomeException, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
+import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
 import Data.ByteString.Internal (w2c)
@@ -350,7 +350,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
             AuthOk -> pure ()
             _ -> throwIrrecoverableError "Failed to authenticate user."
 
-    getConnectedSocket = do
+    getConnectedSocket = rethrowAsIrrecoverable $ do
       addrInfo <- case connectOrCancel of
         CancelNotConnect _ addrInfo -> pure addrInfo
         Connect ->
@@ -1684,8 +1684,11 @@ nonAtomicSendMsg HPgConnection {socket} msg = do
 
 -- | Wraps an IO action to rethrow any exception as a IrrecoverableHpgsqlError.
 rethrowAsIrrecoverable :: IO a -> IO a
-rethrowAsIrrecoverable = handle (throw . asIrrec)
+rethrowAsIrrecoverable = handleJust isNotIrrec (throw . asIrrec)
   where
+    isNotIrrec (ex :: SomeException) = case fromException ex of
+      Just (_ :: IrrecoverableHpgsqlError) -> Nothing -- Let irrecoverable errors blow up
+      Nothing -> Just ex -- Catch others to rethrow wrapped
     asIrrec (ex :: SomeException) = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", innerException = Just ex, relatedStatement = Nothing}
 
 {-# NOINLINE _globalDebugLock #-}
