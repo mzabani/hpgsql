@@ -637,6 +637,10 @@ withControlMsgsLock ::
   IO c
 withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = do
   withMutex socketMutex $ do
+    -- Check the connection status here as this function is in almost
+    -- every code path
+    connIsClosed <- connectionIsClosed conn
+    when connIsClosed $ throwIrrecoverableError "Attempting to use a database connection that has been closed"
     -- The lock is acquired, so now we run flushSendBuffer
     -- so the caller will only see internal state after previous
     -- messages were sent
