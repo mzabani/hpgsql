@@ -436,11 +436,19 @@ resetConnectionState conn@HPgConnection {internalConnectionState} mCleanOpts = d
   -- running "UNLISTEN *" those would be received, so this might be fine as long as we
   -- clear the internal queue _after_ "UNLISTEN *".
   do
-    let qs = (if unlistenAll cleanOpts then ["UNLISTEN *"] else []) ++ (if resetAll cleanOpts then ["RESET ALL", "RESET ROLE"] else [])
+    let qs =
+          (if cleanOpts.unlistenAll then ["UNLISTEN *"] else [])
+            ++ (if cleanOpts.closeAllCursors then ["CLOSE ALL"] else [])
+            ++ (if cleanOpts.resetAll then ["RESET ALL"] else [])
+            ++ (if cleanOpts.resetRole then ["SET SESSION AUTHORIZATION DEFAULT"] else [])
+            ++ (if cleanOpts.deallocatePreparedStmts then ["DEALLOCATE ALL; DISCARD PLANS;"] else [])
+            ++ (if cleanOpts.releaseAdvisoryLocks then ["SELECT pg_advisory_unlock_all()"] else [])
+            ++ (if cleanOpts.discardTempTables then ["DISCARD TEMP"] else [])
+            ++ (if cleanOpts.discardSequences then ["DISCARD SEQUENCES"] else [])
     runPipeline conn (traverse pipelineExec_ qs) >>= sequence_
   when (unlistenAll cleanOpts) clearInternalNotificationQueue
   where
-    cleanOpts = fromMaybe ResetConnectionOpts {resetAll = True, unlistenAll = True, checkTransactionState = True} mCleanOpts
+    cleanOpts = fromMaybe ResetConnectionOpts {closeAllCursors = True, resetAll = True, resetRole = True, deallocatePreparedStmts = False, unlistenAll = True, releaseAdvisoryLocks = True, discardTempTables = True, discardSequences = True, checkTransactionState = True} mCleanOpts
     clearInternalNotificationQueue = STM.atomically $ do
       st <- STM.readTVar internalConnectionState
       emptyQueue <- STM.newTQueue
