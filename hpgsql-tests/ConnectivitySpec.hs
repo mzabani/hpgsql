@@ -1,5 +1,6 @@
 module ConnectivitySpec where
 
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar)
 import qualified Data.List as List
 import Data.Text (Text)
 import DbUtils
@@ -9,7 +10,7 @@ import DbUtils
   )
 import Hpgsql
 import Hpgsql.Cancellation (cancelActiveStatement)
-import Hpgsql.Connection (connect, withConnection)
+import Hpgsql.Connection (connect, connectionIsClosed, withConnection)
 import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..))
 import Hpgsql.Query (sql)
 import Hpgsql.Types (Only (..))
@@ -24,6 +25,9 @@ spec = do
     it
       "Connecting with connect-time options"
       connectingWithConnectTimeOptions
+    it
+      "Trying to use a closed connection"
+      tryingToUseClosedConnection
     it
       "Connecting and change to unsupported client_encoding"
       connectingAndChangeToUnsupportedClientEncoding
@@ -50,6 +54,18 @@ connectingWithConnectTimeOptions = do
     query conn "SELECT current_setting('my.random_setting')" `shouldReturn` [Only ("7" :: Text)]
     execute_ conn "RESET ALL"
     query conn "SELECT current_setting('my.random_setting')" `shouldReturn` [Only ("4" :: Text)]
+
+tryingToUseClosedConnection :: IO ()
+tryingToUseClosedConnection = do
+  hpgsqlConnInfo <- testConnInfo
+  connUsed <- newEmptyMVar
+  withConnection hpgsqlConnInfo 10 $ \conn -> do
+    putMVar connUsed conn
+    connectionIsClosed conn `shouldReturn` False
+
+  conn <- readMVar connUsed
+  connectionIsClosed conn `shouldReturn` True
+  execute_ conn "ANY QUERY" `shouldThrow` irrecoverableErrorWithMsg "Attempting to use a database connection that has been closed"
 
 connectingAndChangeToUnsupportedClientEncoding :: IO ()
 connectingAndChangeToUnsupportedClientEncoding = do

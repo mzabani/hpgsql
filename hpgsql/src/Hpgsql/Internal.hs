@@ -7,6 +7,7 @@ module Hpgsql.Internal
     withConnectionOpts,
     closeGracefully,
     closeForcefully,
+    connectionIsClosed,
 
     -- * Query
     query,
@@ -97,7 +98,6 @@ module Hpgsql.Internal
     debugPrint,
     _globalDebugLock,
     timeDebugNonBlockingOperation,
-    whenNotClosed,
     chunkBuildersBySize,
     pipelineExecInternal,
     pipelineM,
@@ -112,7 +112,7 @@ import Control.Concurrent (modifyMVar, modifyMVar_, readMVar)
 import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
-import Control.Exception.Safe (MonadThrow, SomeException, bracket, bracketOnError, finally, handle, mask, mask_, onException, throw, toException, tryJust)
+import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
 import Data.ByteString.Internal (w2c)
@@ -350,7 +350,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
             AuthOk -> pure ()
             _ -> throwIrrecoverableError "Failed to authenticate user."
 
-    getConnectedSocket = do
+    getConnectedSocket = rethrowAsIrrecoverable $ do
       addrInfo <- case connectOrCancel of
         CancelNotConnect _ addrInfo -> pure addrInfo
         Connect ->
@@ -449,7 +449,7 @@ resetConnectionState conn@HPgConnection {internalConnectionState} mCleanOpts = d
 -- | Closes the connection with postgres. Do not use this in exception handlers; use `closeForcefully`
 -- instead.
 closeGracefully :: HPgConnection -> IO ()
-closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finally (Socket.close socket >> modifyMVar_ conn.socketClosed (const $ pure True)) $ do
+closeGracefully conn = closeInternalFinally conn $ do
   withControlMsgsLock
     conn
     (const $ pure ())
@@ -457,21 +457,23 @@ closeGracefully conn@(HPgConnection {socket}) = whenNotClosed conn $ flip finall
     $ \() -> do
       nonAtomicSendMsg conn Terminate
 
--- | Closes the connection with postgres as quickly as possible without
+-- | Closes the connection with postgres as quickly as possible, without
 -- the proper postgres protocol handshake procedures. This is equivalent to
 -- closing the connection's socket in the kernel without making postgres
 -- aware of it.
 -- Use this if you need to close the connection in exception handlers or
 -- if you received an irrecoverable Hpgsql exception.
 closeForcefully :: HPgConnection -> IO ()
-closeForcefully conn@(HPgConnection {socket}) = whenNotClosed conn $ do
-  Socket.close socket
-  modifyMVar_ conn.socketClosed $ const $ pure True
+closeForcefully conn = closeInternalFinally conn $ pure ()
 
-whenNotClosed :: HPgConnection -> IO () -> IO ()
-whenNotClosed conn f = do
+-- | Returns `True` if the connection has already been closed.
+connectionIsClosed :: HPgConnection -> IO Bool
+connectionIsClosed conn = readMVar conn.socketClosed
+
+closeInternalFinally :: HPgConnection -> IO () -> IO ()
+closeInternalFinally conn f = do
   isClosed <- readMVar conn.socketClosed
-  unless isClosed f
+  unless isClosed $ finally f (Socket.close conn.socket >> modifyMVar_ conn.socketClosed (const $ pure True))
 
 withConnection :: ConnectionString -> DiffTime -> (HPgConnection -> IO a) -> IO a
 withConnection connstr conntimeout f = bracketOnError (connect connstr conntimeout) closeForcefully $ \conn -> do
@@ -635,6 +637,10 @@ withControlMsgsLock ::
   IO c
 withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = do
   withMutex socketMutex $ do
+    -- Check the connection status here as this function is in almost
+    -- every code path
+    connIsClosed <- connectionIsClosed conn
+    when connIsClosed $ throwIrrecoverableError "Attempting to use a database connection that has been closed"
     -- The lock is acquired, so now we run flushSendBuffer
     -- so the caller will only see internal state after previous
     -- messages were sent
@@ -1682,8 +1688,11 @@ nonAtomicSendMsg HPgConnection {socket} msg = do
 
 -- | Wraps an IO action to rethrow any exception as a IrrecoverableHpgsqlError.
 rethrowAsIrrecoverable :: IO a -> IO a
-rethrowAsIrrecoverable = handle (throw . asIrrec)
+rethrowAsIrrecoverable = handleJust isNotIrrec (throw . asIrrec)
   where
+    isNotIrrec (ex :: SomeException) = case fromException ex of
+      Just (_ :: IrrecoverableHpgsqlError) -> Nothing -- Let irrecoverable errors blow up
+      Nothing -> Just ex -- Catch others to rethrow wrapped
     asIrrec (ex :: SomeException) = IrrecoverableHpgsqlError {hpgsqlDetails = "An inner exception was thrown", innerException = Just ex, relatedStatement = Nothing}
 
 {-# NOINLINE _globalDebugLock #-}
