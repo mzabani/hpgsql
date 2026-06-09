@@ -39,7 +39,9 @@ module Hpgsql.Pipeline
     pipelineExec_,
     pipeline1,
     pipeline1With,
+    pipelineMay,
+    pipelineMayWith,
   )
 where
 
-import Hpgsql.Internal (Pipeline, pipeline, pipeline1, pipeline1With, pipelineExec, pipelineExec_, pipelineS, pipelineSMWith, pipelineSWith, pipelineWith, runPipeline)
+import Hpgsql.Internal (Pipeline, pipeline, pipeline1, pipeline1With, pipelineExec, pipelineExec_, pipelineMay, pipelineMayWith, pipelineS, pipelineSMWith, pipelineSWith, pipelineWith, runPipeline)
