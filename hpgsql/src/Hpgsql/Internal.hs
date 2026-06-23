@@ -119,6 +119,7 @@ import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
 import Data.Either (isLeft, isRight)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
@@ -245,7 +246,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
       socketIsClosed <- newMVar False
-      recvBuffer <- newMVar mempty
+      recvBuffer <- newIORef mempty
       sendBuffer <- newMVar mempty
       socketMutex <- mkMutex
       encodingContext <- newMVar (EncodingContext builtinPgTypesMap)
@@ -537,7 +538,12 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
     -- TODO: These IO actions are always STM transactions (some times just a `pure` call),
     -- so maybe we should reflect that in the type to avoid the impression that
     -- anything can happen.
-    go msgIdentChar restOfMsg fullMessageLen = mask_ $ modifyMVar recvBuffer $ \lbs -> do
+    modifyIORefIO ioref io = do
+      c <- readIORef ioref
+      (newC, v) <- io c
+      writeIORef ioref newC
+      pure v
+    go msgIdentChar restOfMsg fullMessageLen = mask_ $ modifyIORefIO recvBuffer $ \lbs -> do
       let !bufferWithoutMsg =
             if LBS.length lbs >= fullMessageLen
               then LBS.drop fullMessageLen lbs
@@ -581,17 +587,17 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
     -- Returns the current buffer.
     receiveUntilBufferHasAtLeast :: Int64 -> IO LBS.ByteString
     receiveUntilBufferHasAtLeast minBytesNecessary = do
-      currentBuffer <- readMVar recvBuffer
+      currentBuffer <- readIORef recvBuffer
       let nBytesInBuffer = LBS.length currentBuffer
       if nBytesInBuffer >= minBytesNecessary
         then pure currentBuffer
         else do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
-          mask $ \restore -> rethrowAsIrrecoverable $ modifyMVar_ recvBuffer $ \lbs -> do
+          mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            pure (lbs <> LBS.fromStrict someBytes)
+            writeIORef recvBuffer (currentBuffer <> LBS.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()

@@ -72,6 +72,7 @@ import Data.Word (Word16)
 #endif
 import qualified Control.Concurrent.STM as STM
 import Data.Hashable (hash)
+import Data.IORef (IORef)
 import Data.Set (Set)
 import Hpgsql.Base (lastTwoAndInit, maximumOnOrDef, minimumOnOrDef)
 import Hpgsql.Builder (BinaryField)
@@ -456,7 +457,7 @@ data InternalConnectionState = InternalConnectionState
 data HPgConnection = HPgConnection
   { socket :: !Socket,
     socketClosed :: !(MVar Bool),
-    recvBuffer :: !(MVar LBS.ByteString),
+    recvBuffer :: !(IORef LBS.ByteString),
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     socketMutex :: !Mutex,
     originalConnStr :: !ConnectionString,
