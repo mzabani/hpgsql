@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
 
-time_seconds() {
-  local start end
-  start=$(date +%s.%N)
-  "$@" >&2
-  end=$(date +%s.%N)
-  awk "BEGIN {print $end - $start}"
-}
-
 run_bench() {
   local csv_file="$1"
   touch benchmark-results/"$csv_file"
@@ -17,12 +9,11 @@ run_bench() {
     echo "$b"
     # Measure wall-clock time without heaptrack to avoid interference
     # Capture stdout to extract RTS peak live data
-    local start end
-    start=$(date +%s.%N)
     BENCH_OUTPUT=$("$benchexe" --match "$b" 2>&1)
-    end=$(date +%s.%N)
-    WALLCLOCK_TIME=$(awk "BEGIN {print $end - $start}")
+    WALLCLOCK_TIME=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=Wall time=)\S+')
     PEAK_LIVE_MB=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=--- Peak live data \(max_live_bytes\): )\S+')
+
+    # Now run with heaptrack to track peak heap memory usage
     heaptrack --record-only -o "benchmark-results/heaptrack.outdat" "$benchexe" --match "$b" 2>/dev/null
     PEAKHEAP=$(heaptrack_print -f "benchmark-results/heaptrack.outdat.zst" | grep "peak heap memory consumption:" | awk -F': ' '{print $2}')
     mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/$b.outdat.zst"
@@ -39,7 +30,7 @@ copy_bench=("postgresql-simple text COPY (100000 rows)" "hpgsql copyFromS binary
 # Wipe the folder, recreate it and run the benchmarks
 rm benchmark-results -rf
 mkdir benchmark-results
-benchexe=$(cabal list-bin -O1 hpgsql-benchmarks)
+benchexe=$(cabal list-bin hpgsql-benchmarks)
 
 run_bench record_list_bench.csv "${record_list_bench[@]}"
 run_bench tuple_list_bench.csv "${tuple_list_bench[@]}"
