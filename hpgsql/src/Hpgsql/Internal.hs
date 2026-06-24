@@ -510,8 +510,6 @@ receiveNextMsgWithMaskedContinuation conn parser f =
 -- This is important for control messages (i.e. not `DataRow`) because if you extract a
 -- message from the buffer, you must be able to update the connection's internal state,
 -- lest it will be left in a very broken place.
--- CAREFUL: avoid doing networking or too much work in your supplied function. It must
--- be really cheap!
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> IO b
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = do
   -- We need to preserve the invariant that the internal buffer's first byte is
