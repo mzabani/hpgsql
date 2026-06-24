@@ -115,6 +115,7 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
@@ -133,6 +134,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
+import Debug.Trace
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
@@ -506,7 +508,7 @@ receiveNextMsgWithMaskedContinuation conn parser f =
     Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " <> Text.pack (show msgIdentChar) <> ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
 data ReceiveWhat a b where
-  ReceiveDataRows :: ReceiveWhat DataRow (Maybe DataRow)
+  ReceiveDataRows :: ReceiveWhat DataRow [DataRow]
   ReceiveArbitraryMsg :: PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> ReceiveWhat a b
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
@@ -544,7 +546,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     Just res -> pure res
   where
     modifyIORefIO ioref io = do
-      (newC, v) <- io
+      (!newC, !v) <- io
       atomicWriteIORef ioref newC
       pure v
     -- We mask_ because if the supplied STM action runs with a message extracted from
@@ -552,6 +554,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
     go msgIdentChar restOfMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
+      -- TODO: No bang annotation here?
       let !bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
       let handleUnknownMessage onError =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
@@ -582,17 +585,27 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
                 fmap (nowBuf,) $ Just <$> STM.atomically (onError (msgIdentChar, mPgError))
       case receiveWhat of
         ReceiveDataRows ->
-          case parsePgMessage msgIdentChar restOfMsg (msgParser @DataRow) of
-            Just msg -> do
-              debugPrint $ "Received " ++ show msg
-              pure (bufferWithoutMsg, Just (Just msg))
-            Nothing -> handleUnknownMessage $ const $ pure Nothing -- No error when we stop receiving a DataRow, only a Nothing
+          case Parser.parseOnly (Parser.matchLeftUnconsumed (Parser.parseMany customDataRowParser)) (LBS.toStrict nowBuf) of
+            Parser.ParseOk (unconsumedBuffer, msgs@(_ : _)) -> do
+              debugPrint $ "Received " ++ show msgs
+              pure (LBS.fromStrict unconsumedBuffer, Just msgs)
+            _ -> handleUnknownMessage $ const $ pure [] -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar restOfMsg parser of
             Just msg -> do
               debugPrint $ "Received " ++ show msg
               fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
             Nothing -> handleUnknownMessage (f . Left)
+
+    customDataRowParser = do
+      charAndLength <- Parser.take 5
+      let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons charAndLength
+          lenLeftToFetch :: Int = fromIntegral $ either error id (Cereal.decode @Int32 lenbs) - 4
+      if msgIdentChar == 'D'
+        then do
+          rowColumnData <- BS.drop 2 <$> Parser.take lenLeftToFetch
+          pure $ DataRow rowColumnData
+        else fail "Not a DataRow"
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
@@ -883,24 +896,25 @@ consumeResults conn qryId = do
       pure (mERowDesc, pure $ Right cmd)
     (mERowDesc, Middle3 mDataRow) -> do
       let allOtherRows =
-            S.unfold
-              ( \() -> do
-                  mRow <- receiveNextMsgGeneric conn ReceiveDataRows
-                  case mRow of
-                    Just row -> pure $ Right (row :> ())
-                    Nothing -> do
-                      stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-                      case stateAfterNextMsg of
-                        ErrorResponseReceived _ err -> do
-                          receiveReadyForQueryIfNecessary thisThreadId
-                          pure $ Left $ Left err
-                        CommandCompleteReceived _ cmd -> do
-                          receiveReadyForQueryIfNecessary thisThreadId
-                          pure $ Left $ Right cmd
-                        ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
-                        _ -> throwIrrecoverableError "Internal error in Hpgsql. After a DataRow we should get either an ErrorResponse or a CommandComplete message"
-              )
-              ()
+            S.concat $
+              S.unfold
+                ( \() -> do
+                    mRow <- receiveNextMsgGeneric conn ReceiveDataRows
+                    case mRow of
+                      rows@(_ : _) -> pure $ Right (rows :> ())
+                      [] -> do
+                        stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+                        case stateAfterNextMsg of
+                          ErrorResponseReceived _ err -> do
+                            receiveReadyForQueryIfNecessary thisThreadId
+                            pure $ Left $ Left err
+                          CommandCompleteReceived _ cmd -> do
+                            receiveReadyForQueryIfNecessary thisThreadId
+                            pure $ Left $ Right cmd
+                          ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
+                          st -> throwIrrecoverableError $ "Internal error in Hpgsql. After the last DataRow we should get either an ErrorResponse or a CommandComplete message. State: " <> Text.pack (show st)
+                )
+                ()
           finalStream = case mDataRow of
             Nothing -> allOtherRows
             Just dr ->

@@ -12,6 +12,9 @@ module Hpgsql.SimpleParser
     take,
     endOfInput,
     match,
+    parseMany,
+    matchLen,
+    matchLeftUnconsumed,
   )
 where
 
@@ -32,7 +35,7 @@ newtype Parser a = Parser
       (String -> r) ->
       -- \^ failure continuation
       (a -> ByteString -> r) ->
-      -- \^ success continuation
+      -- \^ success continuation, taking left-unparsed ByteString and parsed value
       r
   }
 
@@ -85,6 +88,14 @@ take n = Parser $ \bs kf ks ->
       ks mempty bs
 {-# INLINE take #-}
 
+parseMany :: Parser a -> Parser [a]
+parseMany p = Parser $ \bs' _kf ks -> let (vs, rest) = go bs' in ks vs rest
+  where
+    go bs = case parseOnly (matchLeftUnconsumed p) bs of
+      ParseOk (unconsumed, v) -> let (vs, rest) = go unconsumed in (v : vs, rest)
+      ParseFail _ -> ([], bs)
+{-# INLINE parseMany #-}
+
 -- | Succeeds only when the input has been fully consumed.
 endOfInput :: Parser ()
 endOfInput = Parser $ \bs kf ks ->
@@ -104,3 +115,26 @@ match (Parser p) = Parser $ \bs kf ks ->
          in ks (consumed, a) bs'
     )
 {-# INLINE match #-}
+
+-- | Run a parser and additionally return the length of the slice of input it consumed.
+matchLen :: Parser a -> Parser (Int, a)
+matchLen (Parser p) = Parser $ \bs kf ks ->
+  p
+    bs
+    kf
+    ( \a bs' ->
+        let !consumed = BS.length bs - BS.length bs'
+         in ks (consumed, a) bs'
+    )
+{-# INLINE matchLen #-}
+
+-- | Run a parser and additionally return the unconsumed/unparsed ByteString.
+matchLeftUnconsumed :: Parser a -> Parser (ByteString, a)
+matchLeftUnconsumed (Parser p) = Parser $ \bs kf ks ->
+  p
+    bs
+    kf
+    ( \a bs' ->
+        ks (bs', a) bs'
+    )
+{-# INLINE matchLeftUnconsumed #-}
