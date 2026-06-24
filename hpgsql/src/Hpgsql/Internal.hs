@@ -505,13 +505,25 @@ receiveNextMsgWithMaskedContinuation conn parser f =
     Right p -> f p
     Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " <> Text.pack (show msgIdentChar) <> ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
+data ReceiveWhat a where
+  ReceiveDataRows :: ReceiveWhat DataRow
+  ReceiveArbitraryMsg :: PgMsgParser a -> ReceiveWhat a
+
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
 -- the internal buffer and the supplied function runs to completion.
 -- This is important for control messages (i.e. not `DataRow`) because if you extract a
 -- message from the buffer, you must be able to update the connection's internal state,
 -- lest it will be left in a very broken place.
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> IO b
-receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = do
+receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f = join $ receiveNextMsgGeneric conn (ReceiveArbitraryMsg parser) (STM.atomically . f)
+
+-- | Masks asynchronous exceptions in between the moment the message is extracted from
+-- the internal buffer and the supplied function runs to completion.
+-- This is important for control messages (i.e. not `DataRow`) because if you extract a
+-- message from the buffer, you must be able to update the connection's internal state,
+-- lest it will be left in a very broken place.
+receiveNextMsgGeneric :: (Show a) => HPgConnection -> ReceiveWhat a -> (Either (Char, Maybe PostgresError) a -> b) -> IO b
+receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat f = do
   -- We need to preserve the invariant that the internal buffer's first byte is
   -- always the first byte of a valid Message while keeping this function
   -- interruptible.
@@ -528,9 +540,12 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
   restOfMsg <- LBS.drop 5 . LBS.take fullMessageLen <$> if bufLen >= fullMessageLen then pure currentBuf else receiveUntilBufferHasAtLeast fullMessageLen
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen
   case receivedNoticeOrParameterSoTryAgain of
-    Nothing -> receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f
+    Nothing -> receiveNextMsgGeneric conn receiveWhat f
     Just res -> pure res
   where
+    parser = case receiveWhat of
+      ReceiveDataRows -> msgParser @DataRow
+      ReceiveArbitraryMsg p -> p
     modifyIORefIO ioref io = do
       c <- readIORef ioref
       (newC, v) <- io c
@@ -550,7 +565,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
       case parsePgMessage msgIdentChar restOfMsg parser of
         Just msg -> do
           debugPrint $ "Received " ++ show msg
-          fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
+          pure (bufferWithoutMsg, Just (f (Right msg)))
         Nothing -> do
           -- This could be a Notification, NOTICE or a ParameterStatus message, since these
           -- can be received _at any time_ according to the docs.
@@ -577,7 +592,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               -- Just in case this is a postgres error, it might include useful information,
               -- so we spit that out
               let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
-               in fmap (lbs,) $ Just <$> STM.atomically (f (Left (msgIdentChar, mPgError)))
+               in pure (lbs, Just $ f (Left (msgIdentChar, mPgError)))
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
@@ -870,11 +885,7 @@ consumeResults conn qryId = do
       let allOtherRows =
             S.unfold
               ( \() -> do
-                  -- This is a bit ugly, but we try very carefully not to bear the cost of STM
-                  -- transactions at all when receiving DataRows, since they can come in very large
-                  -- amounts, but we need to make sure the _other_ important messages, like ErrorResponse
-                  -- and CommandComplete, do update internal state.
-                  mRow <- receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn (msgParser @DataRow) pure
+                  mRow <- receiveNextMsgGeneric conn ReceiveDataRows Prelude.id
                   case mRow of
                     Right row -> pure $ Right (row :> ())
                     Left _ -> do
