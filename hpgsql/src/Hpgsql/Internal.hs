@@ -531,34 +531,28 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   -- due to the presence of asynchronous exceptions.
   -- So we append to the buffer up until it has been fully fetched,
   -- and then extract it from the buffer in one piece.
-  currentBuf <- receiveUntilBufferHasAtLeast 5
-  let bufLen = LBS.length currentBuf
-  let charAndLength = LBS.take 5 currentBuf
+  (initialBuf, initialBufLen) <- receiveUntilBufferHasAtLeast 5
+  let charAndLength = LBS.take 5 initialBuf
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
       lenLeftToFetch :: Int64 = fromIntegral $ either error id (Cereal.decodeLazy @Int32 lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
-  restOfMsg <- LBS.drop 5 . LBS.take fullMessageLen <$> if bufLen >= fullMessageLen then pure currentBuf else receiveUntilBufferHasAtLeast fullMessageLen
-  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen
+  (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
+  let restOfMsg = LBS.drop 5 $ LBS.take fullMessageLen nowBuf
+  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen nowBuf
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
     Just res -> pure res
   where
     modifyIORefIO ioref io = do
-      c <- readIORef ioref
-      (newC, v) <- io c
+      (newC, v) <- io
       atomicWriteIORef ioref newC
       pure v
     -- We mask_ because if the supplied STM action runs with a message extracted from
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
-    go msgIdentChar restOfMsg fullMessageLen = mask_ $ modifyIORefIO recvBuffer $ \lbs -> do
-      let !bufferWithoutMsg =
-            if LBS.length lbs >= fullMessageLen
-              then LBS.drop fullMessageLen lbs
-              else
-                error "Bug in Hpgsql. Internal buffer's bytes weren't filled enough"
-
+    go msgIdentChar restOfMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
+      let !bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
       let handleUnknownMessage onError =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
             -- can be received _at any time_ according to the docs.
@@ -585,7 +579,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
                 -- Just in case this is a postgres error, it might include useful information,
                 -- so we spit that out
                 let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
-                fmap (lbs,) $ Just <$> STM.atomically (onError (msgIdentChar, mPgError))
+                fmap (nowBuf,) $ Just <$> STM.atomically (onError (msgIdentChar, mPgError))
       case receiveWhat of
         ReceiveDataRows ->
           case parsePgMessage msgIdentChar restOfMsg (msgParser @DataRow) of
@@ -602,13 +596,13 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
-    -- Returns the current buffer.
-    receiveUntilBufferHasAtLeast :: Int64 -> IO LBS.ByteString
+    -- Returns the current buffer and its length.
+    receiveUntilBufferHasAtLeast :: Int64 -> IO (LBS.ByteString, Int64)
     receiveUntilBufferHasAtLeast minBytesNecessary = do
       currentBuffer <- readIORef recvBuffer
       let nBytesInBuffer = LBS.length currentBuffer
       if nBytesInBuffer >= minBytesNecessary
-        then pure currentBuffer
+        then pure (currentBuffer, nBytesInBuffer)
         else do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
