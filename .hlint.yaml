@@ -31,4 +31,7 @@
   - {name: "Data.List.NonEmpty.!!", within: [], message: "(!!) is partial. Use safe indexing instead."}
   - {name: "waitReadSocketSTM", within: [], message: "waitReadSocketSTM is not available in older versions of the network library. Use functions from our own Networking module instead."}
   - {name: "tryAny", within: [], message: "You typically want to ignore IrrecoverableHpgsqlError, so use tryJust instead"}
+  - {name: "writeIORef", within: [], message: "Are you sure you don't want to use atomicWriteIORef? Hpgsql being interruption-safe means a thread can resume the consumption of query results from a different thread, so it must read up-to-date buffers"}
+  - {name: "modifyIORef", within: [], message: "Are you sure you don't want to use atomicModifyIORef? Hpgsql being interruption-safe means a thread can resume the consumption of query results from a different thread, so it must read up-to-date buffers"}
+  - {name: "modifyIORef'", within: [], message: "Are you sure you don't want to use atomicModifyIORef'? Hpgsql being interruption-safe means a thread can resume the consumption of query results from a different thread, so it must read up-to-date buffers"}
   
