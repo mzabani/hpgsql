@@ -505,9 +505,9 @@ receiveNextMsgWithMaskedContinuation conn parser f =
     Right p -> f p
     Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " <> Text.pack (show msgIdentChar) <> ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
-data ReceiveWhat a where
-  ReceiveDataRows :: ReceiveWhat DataRow
-  ReceiveArbitraryMsg :: PgMsgParser a -> ReceiveWhat a
+data ReceiveWhat a b where
+  ReceiveDataRows :: ReceiveWhat DataRow (Maybe DataRow)
+  ReceiveArbitraryMsg :: PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> ReceiveWhat a b
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
 -- the internal buffer and the supplied function runs to completion.
@@ -515,15 +515,15 @@ data ReceiveWhat a where
 -- message from the buffer, you must be able to update the connection's internal state,
 -- lest it will be left in a very broken place.
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> IO b
-receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f = join $ receiveNextMsgGeneric conn (ReceiveArbitraryMsg parser) (STM.atomically . f)
+receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f = receiveNextMsgGeneric conn (ReceiveArbitraryMsg parser f)
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
 -- the internal buffer and the supplied function runs to completion.
 -- This is important for control messages (i.e. not `DataRow`) because if you extract a
 -- message from the buffer, you must be able to update the connection's internal state,
 -- lest it will be left in a very broken place.
-receiveNextMsgGeneric :: (Show a) => HPgConnection -> ReceiveWhat a -> (Either (Char, Maybe PostgresError) a -> b) -> IO b
-receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat f = do
+receiveNextMsgGeneric :: (Show a) => HPgConnection -> ReceiveWhat a b -> IO b
+receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   -- We need to preserve the invariant that the internal buffer's first byte is
   -- always the first byte of a valid Message while keeping this function
   -- interruptible.
@@ -540,12 +540,9 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat f = do
   restOfMsg <- LBS.drop 5 . LBS.take fullMessageLen <$> if bufLen >= fullMessageLen then pure currentBuf else receiveUntilBufferHasAtLeast fullMessageLen
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen
   case receivedNoticeOrParameterSoTryAgain of
-    Nothing -> receiveNextMsgGeneric conn receiveWhat f
+    Nothing -> receiveNextMsgGeneric conn receiveWhat
     Just res -> pure res
   where
-    parser = case receiveWhat of
-      ReceiveDataRows -> msgParser @DataRow
-      ReceiveArbitraryMsg p -> p
     modifyIORefIO ioref io = do
       c <- readIORef ioref
       (newC, v) <- io c
@@ -562,37 +559,46 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat f = do
               else
                 error "Bug in Hpgsql. Internal buffer's bytes weren't filled enough"
 
-      case parsePgMessage msgIdentChar restOfMsg parser of
-        Just msg -> do
-          debugPrint $ "Received " ++ show msg
-          pure (bufferWithoutMsg, Just (f (Right msg)))
-        Nothing -> do
-          -- This could be a Notification, NOTICE or a ParameterStatus message, since these
-          -- can be received _at any time_ according to the docs.
-          case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
-            Just (Left3 notifResponse) -> do
-              debugPrint "Received notification. Will add it to internal queue."
-              STM.atomically $ do
-                sttv <- STM.readTVar $ internalConnectionState conn
-                STM.writeTQueue (notificationsReceived sttv) notifResponse
-              pure (bufferWithoutMsg, Nothing)
-            Just (Middle3 (NoticeResponse details)) -> do
-              let severity =
-                    fromMaybe
-                      "Notice of unknown severity"
-                      (Map.lookup ErrorSeverity details)
-                  humanmsg = fromMaybe "no message" (Map.lookup ErrorHumanReadableMsg details)
-              Text.hPutStrLn stderr $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
-              pure (bufferWithoutMsg, Nothing)
-            Just (Right3 (ParameterStatus {..})) -> do
-              when (parameterName == "client_encoding" && parameterValue /= "UTF8") $ throwIrrecoverableError $ "Postgres sent us a change of client_encoding to not UTF8, and Hpgsql only supports UTF8. The encoding postgres sent us is " <> parameterValue
-              modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
-              pure (bufferWithoutMsg, Nothing)
-            Nothing ->
-              -- Just in case this is a postgres error, it might include useful information,
-              -- so we spit that out
-              let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
-               in pure (lbs, Just $ f (Left (msgIdentChar, mPgError)))
+      let handleUnknownMessage onError =
+            -- This could be a Notification, NOTICE or a ParameterStatus message, since these
+            -- can be received _at any time_ according to the docs.
+            case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
+              Just (Left3 notifResponse) -> do
+                debugPrint "Received notification. Will add it to internal queue."
+                STM.atomically $ do
+                  sttv <- STM.readTVar $ internalConnectionState conn
+                  STM.writeTQueue (notificationsReceived sttv) notifResponse
+                pure (bufferWithoutMsg, Nothing)
+              Just (Middle3 (NoticeResponse details)) -> do
+                let severity =
+                      fromMaybe
+                        "Notice of unknown severity"
+                        (Map.lookup ErrorSeverity details)
+                    humanmsg = fromMaybe "no message" (Map.lookup ErrorHumanReadableMsg details)
+                Text.hPutStrLn stderr $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
+                pure (bufferWithoutMsg, Nothing)
+              Just (Right3 (ParameterStatus {..})) -> do
+                when (parameterName == "client_encoding" && parameterValue /= "UTF8") $ throwIrrecoverableError $ "Postgres sent us a change of client_encoding to not UTF8, and Hpgsql only supports UTF8. The encoding postgres sent us is " <> parameterValue
+                modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
+                pure (bufferWithoutMsg, Nothing)
+              Nothing -> do
+                -- Just in case this is a postgres error, it might include useful information,
+                -- so we spit that out
+                let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
+                fmap (lbs,) $ Just <$> STM.atomically (onError (msgIdentChar, mPgError))
+      case receiveWhat of
+        ReceiveDataRows ->
+          case parsePgMessage msgIdentChar restOfMsg (msgParser @DataRow) of
+            Just msg -> do
+              debugPrint $ "Received " ++ show msg
+              pure (bufferWithoutMsg, Just (Just msg))
+            Nothing -> handleUnknownMessage $ const $ pure Nothing -- No error when we stop receiving a DataRow, only a Nothing
+        ReceiveArbitraryMsg parser f ->
+          case parsePgMessage msgIdentChar restOfMsg parser of
+            Just msg -> do
+              debugPrint $ "Received " ++ show msg
+              fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
+            Nothing -> handleUnknownMessage (f . Left)
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
@@ -885,10 +891,10 @@ consumeResults conn qryId = do
       let allOtherRows =
             S.unfold
               ( \() -> do
-                  mRow <- receiveNextMsgGeneric conn ReceiveDataRows Prelude.id
+                  mRow <- receiveNextMsgGeneric conn ReceiveDataRows
                   case mRow of
-                    Right row -> pure $ Right (row :> ())
-                    Left _ -> do
+                    Just row -> pure $ Right (row :> ())
+                    Nothing -> do
                       stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
                       case stateAfterNextMsg of
                         ErrorResponseReceived _ err -> do
