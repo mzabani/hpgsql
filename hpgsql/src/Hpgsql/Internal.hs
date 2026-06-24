@@ -119,6 +119,7 @@ import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
 import Data.Either (isLeft, isRight)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
@@ -245,7 +246,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
       socketIsClosed <- newMVar False
-      recvBuffer <- newMVar mempty
+      recvBuffer <- newIORef mempty
       sendBuffer <- newMVar mempty
       socketMutex <- mkMutex
       encodingContext <- newMVar (EncodingContext builtinPgTypesMap)
@@ -498,7 +499,7 @@ withConnectionOpts connOpts connstr conntimeout f = bracketOnError (connectOpts 
 -- | Just like `receiveNextMsgWithMaskedContinuation` but passes a `Maybe a` to
 -- the continuation instead of throwing an exception on parser failure. On parsing
 -- failure, this makes sure the message buffer remains unaltered.
-receiveNextMsgWithMaskedContinuation :: (Show a) => HPgConnection -> PgMsgParser a -> (a -> IO b) -> IO b
+receiveNextMsgWithMaskedContinuation :: (Show a) => HPgConnection -> PgMsgParser a -> (a -> STM b) -> IO b
 receiveNextMsgWithMaskedContinuation conn parser f =
   receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser $ \case
     Right p -> f p
@@ -509,9 +510,7 @@ receiveNextMsgWithMaskedContinuation conn parser f =
 -- This is important for control messages (i.e. not `DataRow`) because if you extract a
 -- message from the buffer, you must be able to update the connection's internal state,
 -- lest it will be left in a very broken place.
--- CAREFUL: avoid doing networking or too much work in your supplied function. It must
--- be really cheap!
-receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> IO b) -> IO b
+receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> IO b
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = do
   -- We need to preserve the invariant that the internal buffer's first byte is
   -- always the first byte of a valid Message while keeping this function
@@ -532,12 +531,16 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
     Nothing -> receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f
     Just res -> pure res
   where
-    -- We mask_ because if the supplied IO action runs with a message extracted from
+    modifyIORefIO ioref io = do
+      c <- readIORef ioref
+      (newC, v) <- io c
+      writeIORef ioref newC
+      pure v
+    -- We mask_ because if the supplied STM action runs with a message extracted from
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
-    -- TODO: These IO actions are always STM transactions (some times just a `pure` call),
-    -- so maybe we should reflect that in the type to avoid the impression that
-    -- anything can happen.
-    go msgIdentChar restOfMsg fullMessageLen = mask_ $ modifyMVar recvBuffer $ \lbs -> do
+    -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
+    -- Make sure to do very little work inside `go`!
+    go msgIdentChar restOfMsg fullMessageLen = mask_ $ modifyIORefIO recvBuffer $ \lbs -> do
       let !bufferWithoutMsg =
             if LBS.length lbs >= fullMessageLen
               then LBS.drop fullMessageLen lbs
@@ -547,7 +550,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
       case parsePgMessage msgIdentChar restOfMsg parser of
         Just msg -> do
           debugPrint $ "Received " ++ show msg
-          fmap (bufferWithoutMsg,) $ Just <$> f (Right msg)
+          fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
         Nothing -> do
           -- This could be a Notification, NOTICE or a ParameterStatus message, since these
           -- can be received _at any time_ according to the docs.
@@ -574,24 +577,24 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
               -- Just in case this is a postgres error, it might include useful information,
               -- so we spit that out
               let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
-               in fmap (lbs,) $ Just <$> f (Left (msgIdentChar, mPgError))
+               in fmap (lbs,) $ Just <$> STM.atomically (f (Left (msgIdentChar, mPgError)))
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
     -- Returns the current buffer.
     receiveUntilBufferHasAtLeast :: Int64 -> IO LBS.ByteString
     receiveUntilBufferHasAtLeast minBytesNecessary = do
-      currentBuffer <- readMVar recvBuffer
+      currentBuffer <- readIORef recvBuffer
       let nBytesInBuffer = LBS.length currentBuffer
       if nBytesInBuffer >= minBytesNecessary
         then pure currentBuffer
         else do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
-          mask $ \restore -> rethrowAsIrrecoverable $ modifyMVar_ recvBuffer $ \lbs -> do
+          mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            pure (lbs <> LBS.fromStrict someBytes)
+            writeIORef recvBuffer (currentBuffer <> LBS.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()
@@ -725,26 +728,26 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
     -- We do have an assertion in `updateQueryStateIfFirstOrThrow` to ensure we aren't
     -- dismissive of messages arriving in unexpected order.
     receiveParseOrBindCompleteAtomically = receiveNextMsgWithMaskedContinuation conn (Right3 <$> msgParser @ParseComplete <|> Left3 <$> msgParser @ErrorResponse <|> Middle3 <$> msgParser @BindComplete) $ \msgE -> do
-      STM.atomically $ updateQueryStateIfFirstOrThrow $ case msgE of
+      updateQueryStateIfFirstOrThrow $ case msgE of
         Right3 msg -> RespParseComplete msg
         Middle3 msg -> RespBindComplete msg
         Left3 err -> RespErrorResponse err
     receiveBindCompleteAtomically = receiveNextMsgWithMaskedContinuation conn (Right <$> msgParser @BindComplete <|> Left <$> msgParser @ErrorResponse) $ \msgE -> do
-      STM.atomically $ updateQueryStateIfFirstOrThrow $ case msgE of
+      updateQueryStateIfFirstOrThrow $ case msgE of
         Right msg -> RespBindComplete msg
         Left err -> RespErrorResponse err
     receiveNoDataOrRowDescriptionOrCopyInResponseAtomically = receiveNextMsgWithMaskedContinuation conn (Right <$> (Right3 <$> msgParser @RowDescription <|> Left3 <$> msgParser @NoData <|> Middle3 <$> msgParser @CopyInResponse) <|> Left <$> msgParser @ErrorResponse) $ \msgE -> do
-      STM.atomically $ updateQueryStateIfFirstOrThrow $ case msgE of
+      updateQueryStateIfFirstOrThrow $ case msgE of
         Right (Left3 msg) -> RespNoData msg
         Right (Middle3 msg) -> RespCopyInResponse msg
         Right (Right3 msg) -> RespRowDescription msg
         Left err -> RespErrorResponse err
     receiveDataRowOrCommandCompleteAtomically = receiveNextMsgWithMaskedContinuation conn (Right3 <$> msgParser @DataRow <|> Middle3 <$> msgParser @CommandComplete <|> Left3 <$> msgParser @ErrorResponse) $ \msgE -> do
-      STM.atomically $ updateQueryStateIfFirstOrThrow $ case msgE of
+      updateQueryStateIfFirstOrThrow $ case msgE of
         Right3 msg -> RespDataRow msg
         Middle3 msg -> RespCommandComplete msg
         Left3 msg -> RespErrorResponse msg
-    receiveReadyForQueryAtomically = receiveNextMsgWithMaskedContinuation conn (msgParser @ReadyForQuery) $ \rq -> STM.atomically $ updateQueryStateIfFirstOrThrow $ RespReadyForQuery rq
+    receiveReadyForQueryAtomically = receiveNextMsgWithMaskedContinuation conn (msgParser @ReadyForQuery) $ \rq -> updateQueryStateIfFirstOrThrow $ RespReadyForQuery rq
     getQueryStateIfFirstOrThrow :: STM QueryState
     getQueryStateIfFirstOrThrow = updateConnStateTxn conn $ \sttv -> do
       st <- STM.readTVar sttv

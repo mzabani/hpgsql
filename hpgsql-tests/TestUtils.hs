@@ -1,5 +1,6 @@
 module TestUtils (genJsonValue) where
 
+import Control.Monad (guard)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Aeson.Key
 import qualified Data.Aeson.KeyMap as Aeson.KeyMap
@@ -18,7 +19,7 @@ genJsonValue =
       Aeson.Bool <$> Gen.bool,
       Aeson.Number . fromIntegral <$> Gen.int (Range.linearFrom 0 (-1000000) 1000000),
       Aeson.Number . realToFrac <$> Gen.double (Range.linearFracFrom 0 (-1e6) 1e6),
-      Aeson.String <$> Gen.text (Range.linear 0 20) Gen.unicode
+      Aeson.String <$> Gen.text (Range.linear 0 20) unicodeNotNul
     ]
     -- Recursive cases
     [ Aeson.Array . Vector.fromList <$> Gen.list (Range.linear 0 5) genJsonValue,
@@ -26,3 +27,4 @@ genJsonValue =
     ]
   where
     genKeyValue = (,) <$> (Aeson.Key.fromText <$> Gen.text (Range.linear 1 10) Gen.alphaNum) <*> genJsonValue
+    unicodeNotNul = Gen.filter (/= '\0') Gen.unicode
