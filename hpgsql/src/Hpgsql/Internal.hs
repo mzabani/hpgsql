@@ -119,7 +119,7 @@ import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
 import Data.Either (isLeft, isRight)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (atomicWriteIORef, newIORef, readIORef)
 import Data.Int (Int32, Int64)
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty (..))
@@ -534,7 +534,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
     modifyIORefIO ioref io = do
       c <- readIORef ioref
       (newC, v) <- io c
-      writeIORef ioref newC
+      atomicWriteIORef ioref newC
       pure v
     -- We mask_ because if the supplied STM action runs with a message extracted from
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
@@ -594,7 +594,7 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            writeIORef recvBuffer (currentBuffer <> LBS.fromStrict someBytes)
+            atomicWriteIORef recvBuffer (currentBuffer <> LBS.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()
