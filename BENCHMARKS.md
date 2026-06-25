@@ -29,18 +29,18 @@ The second column is wall clock time in seconds, the third is peak heap memory a
 
 This runs with 2 concurrent queries, 10 times over:
 ```csv
-postgresql-simple Record List (100000 rows),11.65,142.75M,89.1
-hasql Record List (100000 rows),6.660,142.48M,78.3
-hpgsql Record List (100000 rows),4.360,72.07M,82.3
+postgresql-simple Record List (100000 rows),11.90,142.65M,101.6
+hasql Record List (100000 rows),6.279,142.48M,78.0
+hpgsql Record List (100000 rows),3.886,72.07M,98.2
 ```
 
 ### Materializing 100_000 rows with 13 columns each into a List of Tuples
 
 This runs with 2 concurrent queries, 10 times over:
 ```csv
-postgresql-simple Tuple List (100000 rows),14.68,143.04M,146.2
-hasql Tuple List (100000 rows),8.999,142.48M,204.3
-hpgsql Tuple List (100000 rows),5.014,72.07M,149.1
+postgresql-simple Tuple List (100000 rows),15.03,142.78M,149.8
+hasql Tuple List (100000 rows),8.376,142.48M,195.4
+hpgsql Tuple List (100000 rows),4.689,72.07M,149.4
 ```
 
 ### Streaming 100_000 rows with 13 columns as Records
@@ -50,9 +50,9 @@ Hpgsql's implementation streams directly from the socket while the others use cu
 it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
 cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 ```csv
-streaming-postgresql-simple Record Stream (100000 rows),13.36,73.30M,0.1
-postgresql-simple Record fold (100000 rows),13.46,77.53M,0.1
-hpgsql Record Stream (100000 rows),1.557,72.07M,0.2
+streaming-postgresql-simple Record Stream (100000 rows),16.69,73.24M,0.1
+postgresql-simple Record fold (100000 rows),13.39,78.29M,0.2
+hpgsql Record Stream (100000 rows),1.457,72.07M,0.2
 ```
 
 ### Streaming 100_000 rows with 13 columns as Tuples
@@ -62,9 +62,9 @@ Hpgsql's implementation streams directly from the socket while the others use cu
 it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
 cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 ```csv
-streaming-postgresql-simple Tuple Stream (100000 rows),14.15,73.18M,0.1
-postgresql-simple Tuple fold (100000 rows),13.57,84.07M,0.2
-hpgsql Tuple Stream (100000 rows),1.195,72.07M,0.2
+streaming-postgresql-simple Tuple Stream (100000 rows),13.89,73.28M,0.1
+postgresql-simple Tuple fold (100000 rows),13.69,81.99M,0.2
+hpgsql Tuple Stream (100000 rows),1.076,72.07M,0.2
 ```
 
 ### COPY FROM STDIN

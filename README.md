@@ -51,9 +51,9 @@ You should start by swapping all of "postgresql-simple", "postgresql-libpq", and
 
 ## Performance
 
-Some benchmarks show materializing large query results with hpgsql takes 34-38% the time postgresql-simple takes, and 56-66% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
+Some benchmarks show materializing large query results with hpgsql takes 31-33% the time postgresql-simple takes, and 56-62% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
 
-When comparing hpgsql's Stream querying, hpgsql takes 9-12% the time of both [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
+When comparing hpgsql's Stream querying, hpgsql takes 9-11% the time of both [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
 
 hpgsql's binary COPY runs in about 92% the time of postgresql-simple's textual COPY.
 
