@@ -2,6 +2,8 @@ module NotificationsSpec where
 
 import Control.Concurrent (myThreadId, threadDelay)
 import Control.Concurrent.Async (wait, withAsync)
+import Control.Monad (forM_)
+import qualified Data.Text as Text
 import DbUtils
   ( aroundConn,
     irrecoverableErrorWithMsg,
@@ -11,6 +13,8 @@ import Hpgsql
 import Hpgsql.Connection (getBackendPid, resetConnectionState, withConnection)
 import Hpgsql.Notification (NotificationResponse (..), getNotification, getNotificationNonBlocking)
 import Hpgsql.Query (sql)
+import Hpgsql.Types (Only (..))
+import qualified Streaming.Prelude as S
 import System.Timeout (timeout)
 import Test.Hspec
 
@@ -20,6 +24,10 @@ spec = do
     it
       "Send notifications and then receive them"
       sendNotifAndReceiveIt
+
+    it
+      "Receiving notifications while consuming query results"
+      receivingNotificationsWhileConsumingQueryResults
 
     it
       "Mixing order of sending and receiving notifications"
@@ -51,6 +59,20 @@ sendNotifAndReceiveIt conn = do
   execute_ conn "NOTIFY test_chan, 'hello again'"
   execute_ conn "SELECT 91" -- Ensure NotificationResponse can be received at any time
   getNotification conn `shouldReturn` NotificationResponse {notifierPid = currentPid, channelName = "test_chan", notifPayload = "hello again"}
+
+receivingNotificationsWhileConsumingQueryResults :: HPgConnection -> IO ()
+receivingNotificationsWhileConsumingQueryResults conn = do
+  execute_ conn "LISTEN multi_chan"
+  hpgsqlConnInfo <- testConnInfo
+  withConnection hpgsqlConnInfo 10 $ \conn2 -> do
+    withAsync (forM_ [30000 .. 31000] $ \i -> execute_ conn2 [sql|SELECT pg_notify('multi_chan', #{show i})|]) $ \notifier -> do
+      s <- queryS conn "SELECT * FROM generate_series(1,1000)"
+      map fromOnly <$> S.toList_ s `shouldReturn` [1 :: Int .. 1000]
+      forM_ [30000 .. 31000] $ \i -> do
+        notif <- getNotification conn
+        notif.channelName `shouldBe` "multi_chan"
+        notif.notifPayload `shouldBe` Text.pack (show i)
+      wait notifier
 
 mixedOrderSendAndReceiveNotifications :: HPgConnection -> IO ()
 mixedOrderSendAndReceiveNotifications conn = do
