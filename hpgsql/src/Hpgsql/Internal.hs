@@ -955,6 +955,9 @@ consumeResultsIgnoreRows conn qryId = do
     Right (CommandComplete n) -> pure n
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 --
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
@@ -964,6 +967,9 @@ queryS :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryS = querySWith rowDecoder
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 --
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
@@ -976,6 +982,10 @@ querySWith rparser conn qry = join $ runPipeline conn $ pipelineSWith rparser qr
 --
 -- Prefer to use 'queryS' and 'querySWith', because 'RowDecoder' can typecheck PostgreSQL results
 -- even when no rows are returned by queries, and 'RowDecoderMonadic' cannot.
+--
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 --
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
@@ -1227,10 +1237,16 @@ acquireOwnershipOfOrphanedQueries conn = do
         Just tid -> (`elem` [ThreadDied, ThreadFinished]) <$> threadStatus tid
 
 -- | Fetches any number of rows by streaming them directly from the socket.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineS :: (FromPgRow a) => Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineS = pipelineSWith rowDecoder
 
 -- | Fetches any number of rows by streaming them directly from the socket, with a custom row decoder.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineSWith :: RowDecoder a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
@@ -1244,6 +1260,9 @@ pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQ
 
 -- | Prefer to use 'pipelineS' and 'pipelineSWith', because 'RowDecoder' can typecheck PostgreSQL results
 -- even when no rows are returned by queries, and 'RowDecoderMonadic' cannot.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineSMWith :: RowDecoderMonadic a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineSMWith rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline

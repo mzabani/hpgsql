@@ -1,1 +1,0 @@
-- Document that Streams must be consumed linearly with a clear example in queryS, queryMS, pipelineS
