@@ -553,7 +553,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- Make sure to do very little work inside `go`!
     go msgIdentChar restOfMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
       let bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
-          handleUnknownMessage onError =
+          handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
             -- can be received _at any time_ according to the docs.
             case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
@@ -579,7 +579,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
                 -- Just in case this is a postgres error, it might include useful information,
                 -- so we spit that out
                 let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
-                fmap (nowBuf,) $ Just <$> STM.atomically (onError (msgIdentChar, mPgError))
+                fmap (nowBuf,) $ Just <$> STM.atomically (onNotAnyReasonableMsg (msgIdentChar, mPgError))
       case receiveWhat of
         ReceiveDataRows ->
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
@@ -587,14 +587,17 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
             Parser.ParseOk (unconsumedBuffer, msgs@(_ : _)) -> do
               debugPrint $ "Received " ++ show msgs
               pure (LBS.fromStrict unconsumedBuffer, Just msgs)
-            _ -> handleUnknownMessage $ const $ pure [] -- No error when we stop receiving DataRows, only emptiness
+            _ -> handleUnexpectedMsg $ const $ pure [] -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar restOfMsg parser of
             Just msg -> do
               debugPrint $ "Received " ++ show msg
               fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
-            Nothing -> handleUnknownMessage (f . Left)
+            Nothing -> handleUnexpectedMsg (f . Left)
 
+    -- Sadly we have to repeat the parsing of a DataRow message here, when it already
+    -- exists in the FromPgMessage instance and in the body of this function. Maybe
+    -- we can improve this later.
     customDataRowParser = do
       charAndLength <- Parser.take 5
       let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons charAndLength
