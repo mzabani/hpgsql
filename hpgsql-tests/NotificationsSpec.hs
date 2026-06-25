@@ -20,7 +20,7 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  aroundConn $ describe "Notifications" $ do
+  aroundConn $ describe "Notifications" $ parallel $ do
     it
       "Send notifications and then receive them"
       sendNotifAndReceiveIt
