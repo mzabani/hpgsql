@@ -134,7 +134,6 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
-import Debug.Trace
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
@@ -155,7 +154,6 @@ import qualified Network.Socket.ByteString as SocketBS
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
 import Streaming (Of (..), Stream)
 import qualified Streaming as S
-import qualified Streaming.Internal as SInternal
 import qualified Streaming.Prelude as S
 import System.IO (stderr)
 import System.IO.Error (isResourceVanishedError)
@@ -554,9 +552,8 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
     go msgIdentChar restOfMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
-      -- TODO: No bang annotation here?
-      let !bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
-      let handleUnknownMessage onError =
+      let bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
+          handleUnknownMessage onError =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
             -- can be received _at any time_ according to the docs.
             case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
@@ -585,6 +582,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
                 fmap (nowBuf,) $ Just <$> STM.atomically (onError (msgIdentChar, mPgError))
       case receiveWhat of
         ReceiveDataRows ->
+          -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
           case Parser.parseOnly (Parser.matchLeftUnconsumed (Parser.parseMany customDataRowParser)) (LBS.toStrict nowBuf) of
             Parser.ParseOk (unconsumedBuffer, msgs@(_ : _)) -> do
               debugPrint $ "Received " ++ show msgs
@@ -918,8 +916,7 @@ consumeResults conn qryId = do
           finalStream = case mDataRow of
             Nothing -> allOtherRows
             Just dr ->
-              SInternal.Step $
-                dr :> allOtherRows
+              dr `S.cons` allOtherRows
       pure (mERowDesc, finalStream)
   where
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()

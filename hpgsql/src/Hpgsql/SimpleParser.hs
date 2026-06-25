@@ -13,7 +13,6 @@ module Hpgsql.SimpleParser
     endOfInput,
     match,
     parseMany,
-    matchLen,
     matchLeftUnconsumed,
   )
 where
@@ -115,18 +114,6 @@ match (Parser p) = Parser $ \bs kf ks ->
          in ks (consumed, a) bs'
     )
 {-# INLINE match #-}
-
--- | Run a parser and additionally return the length of the slice of input it consumed.
-matchLen :: Parser a -> Parser (Int, a)
-matchLen (Parser p) = Parser $ \bs kf ks ->
-  p
-    bs
-    kf
-    ( \a bs' ->
-        let !consumed = BS.length bs - BS.length bs'
-         in ks (consumed, a) bs'
-    )
-{-# INLINE matchLen #-}
 
 -- | Run a parser and additionally return the unconsumed/unparsed ByteString.
 matchLeftUnconsumed :: Parser a -> Parser (ByteString, a)
