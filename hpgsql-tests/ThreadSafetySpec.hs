@@ -214,8 +214,8 @@ sendQueriesConcurrently conn = forConcurrently_ [1 .. 10] $ const $ do
 cancelStreamingQueryThenTryToConsumeResults :: HPgConnection -> IO ()
 cancelStreamingQueryThenTryToConsumeResults conn = do
   res <- querySWith (rowDecoder @(Only Int)) conn "SELECT * FROM generate_series(1,100000000)"
-  firstTwoElems <- S.toList_ $ S.take 2 res
-  thirdAndFourthElems :> restOfStream <- S.toList $ S.splitAt 2 res
+  firstTwoElems :> restOfStream0 <- S.toList $ S.splitAt 2 res
+  thirdAndFourthElems :> restOfStream <- S.toList $ S.splitAt 2 restOfStream0
   fifthAndSixthElems <- S.toList_ $ S.take 2 restOfStream
   firstTwoElems `shouldBe` [Only 1, Only 2]
   thirdAndFourthElems `shouldBe` [Only 3, Only 4]

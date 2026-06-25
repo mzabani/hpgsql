@@ -115,6 +115,7 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
@@ -153,7 +154,6 @@ import qualified Network.Socket.ByteString as SocketBS
 import qualified Network.Socket.ByteString.Lazy as SocketLBS
 import Streaming (Of (..), Stream)
 import qualified Streaming as S
-import qualified Streaming.Internal as SInternal
 import qualified Streaming.Prelude as S
 import System.IO (stderr)
 import System.IO.Error (isResourceVanishedError)
@@ -505,13 +505,25 @@ receiveNextMsgWithMaskedContinuation conn parser f =
     Right p -> f p
     Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " <> Text.pack (show msgIdentChar) <> ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
+data ReceiveWhat a b where
+  ReceiveDataRows :: ReceiveWhat DataRow [DataRow]
+  ReceiveArbitraryMsg :: PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> ReceiveWhat a b
+
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
 -- the internal buffer and the supplied function runs to completion.
 -- This is important for control messages (i.e. not `DataRow`) because if you extract a
 -- message from the buffer, you must be able to update the connection's internal state,
 -- lest it will be left in a very broken place.
 receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure :: (Show a) => HPgConnection -> PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> IO b
-receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnection {socket, recvBuffer} parser f = do
+receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f = receiveNextMsgGeneric conn (ReceiveArbitraryMsg parser f)
+
+-- | Masks asynchronous exceptions in between the moment the message is extracted from
+-- the internal buffer and the supplied function runs to completion.
+-- This is important for control messages (i.e. not `DataRow`) because if you extract a
+-- message from the buffer, you must be able to update the connection's internal state,
+-- lest it will be left in a very broken place.
+receiveNextMsgGeneric :: (Show a) => HPgConnection -> ReceiveWhat a b -> IO b
+receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   -- We need to preserve the invariant that the internal buffer's first byte is
   -- always the first byte of a valid Message while keeping this function
   -- interruptible.
@@ -519,75 +531,92 @@ receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn@HPgConnect
   -- due to the presence of asynchronous exceptions.
   -- So we append to the buffer up until it has been fully fetched,
   -- and then extract it from the buffer in one piece.
-  currentBuf <- receiveUntilBufferHasAtLeast 5
-  let bufLen = LBS.length currentBuf
-  let charAndLength = LBS.take 5 currentBuf
+  (initialBuf, initialBufLen) <- receiveUntilBufferHasAtLeast 5
+  let charAndLength = LBS.take 5 initialBuf
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
       lenLeftToFetch :: Int64 = fromIntegral $ either error id (Cereal.decodeLazy @Int32 lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
-  restOfMsg <- LBS.drop 5 . LBS.take fullMessageLen <$> if bufLen >= fullMessageLen then pure currentBuf else receiveUntilBufferHasAtLeast fullMessageLen
-  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen
+  (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
+  let restOfMsg = LBS.drop 5 $ LBS.take fullMessageLen nowBuf
+  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen nowBuf
   case receivedNoticeOrParameterSoTryAgain of
-    Nothing -> receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn parser f
+    Nothing -> receiveNextMsgGeneric conn receiveWhat
     Just res -> pure res
   where
     modifyIORefIO ioref io = do
-      c <- readIORef ioref
-      (newC, v) <- io c
+      (!newC, !v) <- io
       atomicWriteIORef ioref newC
       pure v
     -- We mask_ because if the supplied STM action runs with a message extracted from
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
-    go msgIdentChar restOfMsg fullMessageLen = mask_ $ modifyIORefIO recvBuffer $ \lbs -> do
-      let !bufferWithoutMsg =
-            if LBS.length lbs >= fullMessageLen
-              then LBS.drop fullMessageLen lbs
-              else
-                error "Bug in Hpgsql. Internal buffer's bytes weren't filled enough"
+    go msgIdentChar restOfMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
+      let bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
+          handleUnexpectedMsg onNotAnyReasonableMsg =
+            -- This could be a Notification, NOTICE or a ParameterStatus message, since these
+            -- can be received _at any time_ according to the docs.
+            case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
+              Just (Left3 notifResponse) -> do
+                debugPrint "Received notification. Will add it to internal queue."
+                STM.atomically $ do
+                  sttv <- STM.readTVar $ internalConnectionState conn
+                  STM.writeTQueue (notificationsReceived sttv) notifResponse
+                pure (bufferWithoutMsg, Nothing)
+              Just (Middle3 (NoticeResponse details)) -> do
+                let severity =
+                      fromMaybe
+                        "Notice of unknown severity"
+                        (Map.lookup ErrorSeverity details)
+                    humanmsg = fromMaybe "no message" (Map.lookup ErrorHumanReadableMsg details)
+                Text.hPutStrLn stderr $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
+                pure (bufferWithoutMsg, Nothing)
+              Just (Right3 (ParameterStatus {..})) -> do
+                when (parameterName == "client_encoding" && parameterValue /= "UTF8") $ throwIrrecoverableError $ "Postgres sent us a change of client_encoding to not UTF8, and Hpgsql only supports UTF8. The encoding postgres sent us is " <> parameterValue
+                modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
+                pure (bufferWithoutMsg, Nothing)
+              Nothing -> do
+                -- Just in case this is a postgres error, it might include useful information,
+                -- so we spit that out
+                let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
+                fmap (nowBuf,) $ Just <$> STM.atomically (onNotAnyReasonableMsg (msgIdentChar, mPgError))
+      case receiveWhat of
+        ReceiveDataRows ->
+          -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
+          case Parser.parseOnly (Parser.matchLeftUnconsumed (Parser.parseMany customDataRowParser)) (LBS.toStrict nowBuf) of
+            Parser.ParseOk (unconsumedBuffer, msgs@(_ : _)) -> do
+              debugPrint $ "Received " ++ show msgs
+              pure (LBS.fromStrict unconsumedBuffer, Just msgs)
+            _ -> handleUnexpectedMsg $ const $ pure [] -- No error when we stop receiving DataRows, only emptiness
+        ReceiveArbitraryMsg parser f ->
+          case parsePgMessage msgIdentChar restOfMsg parser of
+            Just msg -> do
+              debugPrint $ "Received " ++ show msg
+              fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
+            Nothing -> handleUnexpectedMsg (f . Left)
 
-      case parsePgMessage msgIdentChar restOfMsg parser of
-        Just msg -> do
-          debugPrint $ "Received " ++ show msg
-          fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
-        Nothing -> do
-          -- This could be a Notification, NOTICE or a ParameterStatus message, since these
-          -- can be received _at any time_ according to the docs.
-          case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
-            Just (Left3 notifResponse) -> do
-              debugPrint "Received notification. Will add it to internal queue."
-              STM.atomically $ do
-                sttv <- STM.readTVar $ internalConnectionState conn
-                STM.writeTQueue (notificationsReceived sttv) notifResponse
-              pure (bufferWithoutMsg, Nothing)
-            Just (Middle3 (NoticeResponse details)) -> do
-              let severity =
-                    fromMaybe
-                      "Notice of unknown severity"
-                      (Map.lookup ErrorSeverity details)
-                  humanmsg = fromMaybe "no message" (Map.lookup ErrorHumanReadableMsg details)
-              Text.hPutStrLn stderr $ decodeUtf8 $ LBS.toStrict $ severity <> ": " <> humanmsg
-              pure (bufferWithoutMsg, Nothing)
-            Just (Right3 (ParameterStatus {..})) -> do
-              when (parameterName == "client_encoding" && parameterValue /= "UTF8") $ throwIrrecoverableError $ "Postgres sent us a change of client_encoding to not UTF8, and Hpgsql only supports UTF8. The encoding postgres sent us is " <> parameterValue
-              modifyMVar_ (parameterStatusMap conn) $ \(!paramMap) -> pure (Map.insert parameterName parameterValue paramMap)
-              pure (bufferWithoutMsg, Nothing)
-            Nothing ->
-              -- Just in case this is a postgres error, it might include useful information,
-              -- so we spit that out
-              let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
-               in fmap (lbs,) $ Just <$> STM.atomically (f (Left (msgIdentChar, mPgError)))
+    -- Sadly we have to repeat the parsing of a DataRow message here, when it already
+    -- exists in the FromPgMessage instance and in the body of this function. Maybe
+    -- we can improve this later.
+    customDataRowParser = do
+      charAndLength <- Parser.take 5
+      let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons charAndLength
+          lenLeftToFetch :: Int = fromIntegral $ either error id (Cereal.decode @Int32 lenbs) - 4
+      if msgIdentChar == 'D'
+        then do
+          rowColumnData <- BS.drop 2 <$> Parser.take lenLeftToFetch
+          pure $ DataRow rowColumnData
+        else fail "Not a DataRow"
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
-    -- Returns the current buffer.
-    receiveUntilBufferHasAtLeast :: Int64 -> IO LBS.ByteString
+    -- Returns the current buffer and its length.
+    receiveUntilBufferHasAtLeast :: Int64 -> IO (LBS.ByteString, Int64)
     receiveUntilBufferHasAtLeast minBytesNecessary = do
       currentBuffer <- readIORef recvBuffer
       let nBytesInBuffer = LBS.length currentBuffer
       if nBytesInBuffer >= minBytesNecessary
-        then pure currentBuffer
+        then pure (currentBuffer, nBytesInBuffer)
         else do
           -- This takes from the kernel's recv buffer and appends to our buffer atomically,
           -- or an exception is thrown when receiving.
@@ -868,33 +897,29 @@ consumeResults conn qryId = do
       pure (mERowDesc, pure $ Right cmd)
     (mERowDesc, Middle3 mDataRow) -> do
       let allOtherRows =
-            S.unfold
-              ( \() -> do
-                  -- This is a bit ugly, but we try very carefully not to bear the cost of STM
-                  -- transactions at all when receiving DataRows, since they can come in very large
-                  -- amounts, but we need to make sure the _other_ important messages, like ErrorResponse
-                  -- and CommandComplete, do update internal state.
-                  mRow <- receiveNextMsgWithMaskedContinuationButDontThrowOnParsingFailure conn (msgParser @DataRow) pure
-                  case mRow of
-                    Right row -> pure $ Right (row :> ())
-                    Left _ -> do
-                      stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-                      case stateAfterNextMsg of
-                        ErrorResponseReceived _ err -> do
-                          receiveReadyForQueryIfNecessary thisThreadId
-                          pure $ Left $ Left err
-                        CommandCompleteReceived _ cmd -> do
-                          receiveReadyForQueryIfNecessary thisThreadId
-                          pure $ Left $ Right cmd
-                        ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
-                        _ -> throwIrrecoverableError "Internal error in Hpgsql. After a DataRow we should get either an ErrorResponse or a CommandComplete message"
-              )
-              ()
+            S.concat $
+              S.unfold
+                ( \() -> do
+                    mRow <- receiveNextMsgGeneric conn ReceiveDataRows
+                    case mRow of
+                      rows@(_ : _) -> pure $ Right (rows :> ())
+                      [] -> do
+                        stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+                        case stateAfterNextMsg of
+                          ErrorResponseReceived _ err -> do
+                            receiveReadyForQueryIfNecessary thisThreadId
+                            pure $ Left $ Left err
+                          CommandCompleteReceived _ cmd -> do
+                            receiveReadyForQueryIfNecessary thisThreadId
+                            pure $ Left $ Right cmd
+                          ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
+                          st -> throwIrrecoverableError $ "Internal error in Hpgsql. After the last DataRow we should get either an ErrorResponse or a CommandComplete message. State: " <> Text.pack (show st)
+                )
+                ()
           finalStream = case mDataRow of
             Nothing -> allOtherRows
             Just dr ->
-              SInternal.Step $
-                dr :> allOtherRows
+              dr `S.cons` allOtherRows
       pure (mERowDesc, finalStream)
   where
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()
@@ -933,6 +958,9 @@ consumeResultsIgnoreRows conn qryId = do
     Right (CommandComplete n) -> pure n
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 --
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
@@ -942,6 +970,9 @@ queryS :: (FromPgRow a) => HPgConnection -> Query -> IO (Stream (Of a) IO ())
 queryS = querySWith rowDecoder
 
 -- | Runs a query and streams results directly from the connection's socket, i.e. without using cursors.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 --
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
@@ -954,6 +985,10 @@ querySWith rparser conn qry = join $ runPipeline conn $ pipelineSWith rparser qr
 --
 -- Prefer to use 'queryS' and 'querySWith', because 'RowDecoder' can typecheck PostgreSQL results
 -- even when no rows are returned by queries, and 'RowDecoderMonadic' cannot.
+--
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 --
 -- Note on thread safety: it is important to note the same thread that runs this must
 -- be the thread that consumes the returned Stream, and the returned Stream must be
@@ -1205,10 +1240,16 @@ acquireOwnershipOfOrphanedQueries conn = do
         Just tid -> (`elem` [ThreadDied, ThreadFinished]) <$> threadStatus tid
 
 -- | Fetches any number of rows by streaming them directly from the socket.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineS :: (FromPgRow a) => Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineS = pipelineSWith rowDecoder
 
 -- | Fetches any number of rows by streaming them directly from the socket, with a custom row decoder.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineSWith :: RowDecoder a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
@@ -1222,6 +1263,9 @@ pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQ
 
 -- | Prefer to use 'pipelineS' and 'pipelineSWith', because 'RowDecoder' can typecheck PostgreSQL results
 -- even when no rows are returned by queries, and 'RowDecoderMonadic' cannot.
+-- Once you assign the returned Stream to a binding, you must consume that binding linearly, i.e.
+-- you should never consume it more than once, for it _will_ give you wrong results if you do that.
+-- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineSMWith :: RowDecoderMonadic a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
 pipelineSMWith rowparser (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
