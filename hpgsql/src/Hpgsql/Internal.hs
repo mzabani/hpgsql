@@ -367,7 +367,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
                     addrCanonName = Nothing
                   }
             else do
-              addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints) (Just $ Text.unpack hostname) (Just $ show port)
+              addrInfos <- Socket.getAddrInfo (Just Socket.defaultHints {Socket.addrSocketType = Socket.Stream}) (Just $ Text.unpack hostname) (Just $ show port)
               case addrInfos of
                 [] -> throwIrrecoverableError "Could not resolve address"
                 addrInfo : _ -> pure addrInfo
