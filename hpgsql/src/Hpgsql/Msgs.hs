@@ -87,14 +87,14 @@ data PasswordMessage
     PasswordMessage AuthenticationMethod String String
   deriving stock (Show)
 
-data BackendKeyData = BackendKeyData {backendPid :: Int32, backendSecretKey :: Int32}
+data BackendKeyData = BackendKeyData {backendPid :: !Int32, backendSecretKey :: !BS.ByteString}
   deriving stock (Show)
 
 data Bind = Bind {paramsValuesInOrder :: ![BinaryField], resultColumnFmts :: !Int, preparedStmtHash :: !(Maybe String)}
   deriving stock (Show)
 
 -- | PId first, secret key second
-data CancelRequest = CancelRequest Int32 Int32
+data CancelRequest = CancelRequest Int32 ByteString
   deriving stock (Show)
 
 newtype CopyData = CopyData Builder
@@ -160,9 +160,9 @@ instance FromPgMessage AuthenticationResponse where
     _ -> Nothing
 
 instance FromPgMessage BackendKeyData where
-  msgParser = PgMsgParser $ \c (LBS.splitAt 4 -> (pidBS, secretBS)) -> case c of
-    'K' -> case (,) <$> Cereal.decodeLazy @Int32 pidBS <*> Cereal.decodeLazy @Int32 secretBS of
-      Right (pid, secret) -> Just $ BackendKeyData {backendPid = pid, backendSecretKey = secret}
+  msgParser = PgMsgParser $ \c (LBS.splitAt 4 -> (pidBS, backendSecretKey)) -> case c of
+    'K' -> case Cereal.decodeLazy @Int32 pidBS of
+      Right pid -> Just $ BackendKeyData {backendPid = pid, backendSecretKey = LBS.toStrict backendSecretKey}
       Left _ -> Nothing
     _ -> Nothing
 
@@ -191,7 +191,7 @@ instance FromPgMessage CommandComplete where
 
 instance ToPgMessage CancelRequest where
   toPgMessage (CancelRequest pid secret) =
-    Builder.int32BE (4 + 4 + 4 + 4) <> Builder.int32BE 80877102 <> Builder.int32BE pid <> Builder.int32BE secret
+    Builder.int32BE (4 + 4 + 4 + 4) <> Builder.int32BE 80877102 <> Builder.int32BE pid <> Builder.byteString secret
 
 instance ToPgMessage CopyData where
   toPgMessage (CopyData bs) =
