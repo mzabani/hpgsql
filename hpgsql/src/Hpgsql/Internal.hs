@@ -262,7 +262,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
               preparedStatementNames = mempty,
               transactionStatusBeforeCurrentPipeline = TransIdle
             }
-      let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer socketMutex originalConnStr addrInfo encodingContext connParams currentConnectionState 0 0 connOpts
+      let hpgConnPartialDoNotReturn = HPgConnection sock socketIsClosed recvBuffer sendBuffer socketMutex originalConnStr addrInfo encodingContext connParams currentConnectionState 0 "" connOpts
       case connectOrCancel of
         CancelNotConnect cancelRequest _ -> do
           nonAtomicSendMsg hpgConnPartialDoNotReturn cancelRequest
@@ -650,7 +650,7 @@ sendCancellationRequest conn = do
         () -- Already cancelled, no need to send another
     Nothing ->
       internalConnectOrCancel
-        (CancelNotConnect (CancelRequest (connPid conn) (cancelSecretKey conn)) (connectedTo conn))
+        (CancelNotConnect (CancelRequest conn.connPid conn.cancelSecretKey) conn.connectedTo)
         (connOpts conn)
         (originalConnStr conn)
         (secondsToDiffTime 30)

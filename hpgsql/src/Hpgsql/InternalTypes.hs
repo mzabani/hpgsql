@@ -466,7 +466,7 @@ data HPgConnection = HPgConnection
     parameterStatusMap :: !(MVar (Map Text Text)),
     internalConnectionState :: !(TVar InternalConnectionState),
     connPid :: !Int32,
-    cancelSecretKey :: !Int32,
+    cancelSecretKey :: !ByteString,
     connOpts :: !ConnectOpts
   }
 
