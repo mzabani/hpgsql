@@ -16,6 +16,7 @@ defaults:
 
 env:
   HPGSQL_THREADED: +threaded
+  PGHOST: /tmp
 
 jobs:
   build-x86_64-linux:
@@ -49,6 +50,7 @@ jobs:
         # to many things, and our library relies on a lot of ThreadId tracking,
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
+        # We also vary things like PGHOST to test both TCP and Unix Domain Sockets.
         concurrently -g --timings --names pg18,pg17,pg16,pg15,pg14,single-threaded-rts,ghc984,ghc967 \
           'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-tests.txt nix-build --no-out-link -A testsPg18' \
           'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17' \
@@ -56,7 +58,7 @@ jobs:
           'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-tests.txt nix-build --no-out-link -A testsPg15' \
           'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-tests.txt nix-build --no-out-link -A testsPg14' \
           'nix-build --no-out-link --argstr threading "-threaded" -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
-          'nix-build --no-out-link --argstr ghc ghc984 -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
+          'nix-build --no-out-link --argstr ghc ghc984 --argstr PGHOST localhost -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
           'nix-build --no-out-link --argstr ghc ghc967 -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc967-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
 
     - name: Run hpgsql-simple-compat tests
@@ -113,8 +115,9 @@ jobs:
         # to many things, and our library relies on a lot of ThreadId tracking,
         # interruption safety, MVars and STM, so we test the single threaded
         # runtime, too.
+        # We also vary things like PGHOST to test both TCP and Unix Domain Sockets.
         nix-build --no-out-link --argstr threading "-threaded" -A hpgsql-tests
-        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg18
+        timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" --argstr PGHOST localhost -A testsPg18
 
     - name: Run hpgsql-simple-compat tests
       run: |

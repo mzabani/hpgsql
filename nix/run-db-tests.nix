@@ -1,4 +1,4 @@
-{ postgres, pkgs, hpgsql-tests, hspecArgs }:
+{ postgres, pkgs, hpgsql-tests, hspecArgs, PGHOST }:
 let fs = pkgs.lib.fileset;
 in
  pkgs.stdenv.mkDerivation {
@@ -16,7 +16,7 @@ in
       export PGDATA="local/temp-pg-data"
       export PGDATABASE="postgres"
       export PGPORT="5434"
-      export PGHOST="/tmp"
+      export PGHOST="${PGHOST}"
       export PGUSER="postgres"
       scripts/init-pg-cluster.sh ./conf/test-db
       trap "pg_ctl stop || true" EXIT ERR
