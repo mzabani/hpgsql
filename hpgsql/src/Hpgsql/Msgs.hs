@@ -191,7 +191,7 @@ instance FromPgMessage CommandComplete where
 
 instance ToPgMessage CancelRequest where
   toPgMessage (CancelRequest pid secret) =
-    Builder.int32BE (4 + 4 + 4 + 4) <> Builder.int32BE 80877102 <> Builder.int32BE pid <> Builder.byteString secret
+    Builder.int32BE (fromIntegral $ 4 + 4 + 4 + BS.length secret) <> Builder.int32BE 80877102 <> Builder.int32BE pid <> Builder.byteString secret
 
 instance ToPgMessage CopyData where
   toPgMessage (CopyData bs) =
