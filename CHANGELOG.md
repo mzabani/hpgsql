@@ -1,4 +1,4 @@
-## v0.2.1.0
+## v0.2.0.1
 
 - Major fix: connecting via TCP on MacOS could fail completely. Thanks @luntain for the contribution.
 - Performance materializing query results improved by ~17%
