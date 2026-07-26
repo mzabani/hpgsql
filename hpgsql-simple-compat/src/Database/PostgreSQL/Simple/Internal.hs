@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 ------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
@@ -51,20 +49,12 @@ data Connection = Connection
     connectionTempNameCounter :: {-# UNPACK #-} !(IORef Int64),
     hpgConn :: HPgConnection
   }
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 instance Eq Connection where
   x == y = hpgConn x == hpgConn y
 
 -- | Superclass for postgresql exceptions
 data SomePostgreSqlException = forall e. (Exception e) => SomePostgreSqlException e
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 postgresqlExceptionToException :: (Exception e) => e -> SomeException
 postgresqlExceptionToException = toException . SomePostgreSqlException
@@ -92,10 +82,6 @@ data SqlError = SqlError
     sqlStatement :: ByteString
   }
   deriving (Eq, Show)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 fatalError :: ByteString -> SqlError
 fatalError msg = SqlError "" FatalError msg "" "" ""
@@ -111,10 +97,6 @@ data QueryError = QueryError
     qeQuery :: Query
   }
   deriving (Eq, Show)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 instance Exception QueryError where
   toException = postgresqlExceptionToException
@@ -129,10 +111,6 @@ data FormatError = FormatError
     fmtParams :: [ByteString]
   }
   deriving (Eq, Show)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 instance Exception FormatError where
   toException = postgresqlExceptionToException
@@ -146,10 +124,6 @@ data ConnectInfo = ConnectInfo
     connectDatabase :: String
   }
   deriving (Generic, Eq, Read, Show)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 -- | Default information for setting up a connection.
 --

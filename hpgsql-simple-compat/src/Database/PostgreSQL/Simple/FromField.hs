@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 -- |
 -- Module:      Database.PostgreSQL.Simple.FromField
 -- Copyright:   (c) 2011 MailRank, Inc.
@@ -160,10 +158,6 @@ data ResultError
         errMessage :: String
       }
   deriving (Eq, Show)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 instance Exception ResultError where
   toException = postgresqlExceptionToException

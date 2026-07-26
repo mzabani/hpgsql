@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 ------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
@@ -21,9 +19,6 @@ module Database.PostgreSQL.Simple.Range
   )
 where
 
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-import Data.Typeable (Typeable)
-#endif
 
 -- | Represents boundary of a range
 data RangeBound a
@@ -32,18 +27,10 @@ data RangeBound a
   | Exclusive !a
   | PosInfinity
   deriving (Show, Eq, Functor)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 -- | Generic range type
 data PGRange a = PGRange !(RangeBound a) !(RangeBound a)
   deriving (Show, Functor)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 empty :: PGRange a
 empty = PGRange PosInfinity NegInfinity

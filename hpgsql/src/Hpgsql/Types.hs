@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 module Hpgsql.Types
   ( Only (..),
     Aeson (..),
@@ -19,11 +17,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
 import Data.Tuple.Only (Only (..))
-#if MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
 import Data.Typeable (Proxy (..))
-#else
-import Data.Typeable (Proxy (..), Typeable)
-#endif
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, toPgVectorField)
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid, lookupTypeByOid)
@@ -109,10 +103,6 @@ instance FromPgField PgJson where
 newtype Aeson a = Aeson {getAeson :: a}
   deriving stock (Functor, Read, Show)
   deriving newtype (Eq)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving stock (Typeable)
-#endif
 
 instance (FromJSON a) => FromPgField (Aeson a) where
   fieldDecoder =

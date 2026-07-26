@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-
 ------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
@@ -29,9 +27,6 @@ import qualified Data.Text as TS
 import qualified Data.Text.Encoding as TS
 import Data.Text.Encoding.Error (UnicodeException)
 import qualified Data.Text.Lazy as TL
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-import Data.Typeable (Typeable)
-#endif
 
 class ToHStore a where
   toHStore :: a -> HStoreBuilder
@@ -40,10 +35,6 @@ class ToHStore a where
 data HStoreBuilder
   = Empty
   | Comma !Builder
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 instance ToHStore HStoreBuilder where
   toHStore = id
@@ -76,10 +67,6 @@ class ToHStoreText a where
 -- | Represents escape text, ready to be the key or value to a hstore value
 newtype HStoreText = HStoreText Builder
   deriving newtype (Semigroup, Monoid)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 instance ToHStoreText HStoreText where
   toHStoreText = id
@@ -123,20 +110,12 @@ hstore (toHStoreText -> (HStoreText key)) (toHStoreText -> (HStoreText val)) =
     )
 
 newtype HStoreList = HStoreList {fromHStoreList :: [(Text, Text)]} deriving (Show)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 -- | hstore
 instance ToHStore HStoreList where
   toHStore (HStoreList xs) = mconcat (map (uncurry hstore) xs)
 
 newtype HStoreMap = HStoreMap {fromHStoreMap :: Map Text Text} deriving (Eq, Ord, Show)
-#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
-  -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving (Typeable)
-#endif
 
 instance ToHStore HStoreMap where
   toHStore (HStoreMap xs) = Map.foldrWithKey f mempty xs
