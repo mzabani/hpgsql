@@ -24,6 +24,11 @@ category:           Database
 homepage:           https://github.com/mzabani/hpgsql#readme
 bug-reports:        https://github.com/mzabani/hpgsql/issues
 build-type:         Simple
+tested-with:
+  GHC ==9.6.7
+   || ==9.8.4
+   || ==9.10.3
+   || ==9.12.2
 
 source-repository head
   type:     git
