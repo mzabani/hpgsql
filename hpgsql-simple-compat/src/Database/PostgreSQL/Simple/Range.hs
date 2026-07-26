@@ -19,19 +19,17 @@ module Database.PostgreSQL.Simple.Range
   )
 where
 
-import Data.Typeable (Typeable)
-
 -- | Represents boundary of a range
 data RangeBound a
   = NegInfinity
   | Inclusive !a
   | Exclusive !a
   | PosInfinity
-  deriving (Show, Typeable, Eq, Functor)
+  deriving (Show, Eq, Functor)
 
 -- | Generic range type
 data PGRange a = PGRange !(RangeBound a) !(RangeBound a)
-  deriving (Show, Typeable, Functor)
+  deriving (Show, Functor)
 
 empty :: PGRange a
 empty = PGRange PosInfinity NegInfinity

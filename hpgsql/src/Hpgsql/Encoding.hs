@@ -397,7 +397,7 @@ instance ToPgField Scientific where
       calculateDigits :: Int16 -> Int16 -> Integer -> BS.ByteString -> (Int16, Int16, BS.ByteString)
       calculateDigits !ndigitsSoFar !weightSoFar 0 !encodedDigits = (ndigitsSoFar, weightSoFar, encodedDigits)
       calculateDigits !ndigitsSoFar !weightSoFar !val !encodedDigits =
-        let (quotient, fromIntegral -> rest :: Int16) = val `divMod` 10000
+        let (quotient, fromIntegral -> (rest :: Int16)) = val `divMod` 10000
          in calculateDigits
               (ndigitsSoFar + 1)
               (weightSoFar + 1)

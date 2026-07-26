@@ -42,7 +42,6 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Tuple.Only (Only (..))
-import Data.Typeable (Typeable)
 import Database.PostgreSQL.LibPQ (Oid (..))
 import Database.PostgreSQL.Simple.Compat (toByteString)
 import Database.PostgreSQL.Simple.ToField (Action (..), ToField (..))
@@ -53,11 +52,11 @@ import Hpgsql.Types (PGArray (..), (:.) (..))
 
 -- | A placeholder for the SQL @NULL@ value.
 data Null = Null
-  deriving (Read, Show, Typeable)
+  deriving (Read, Show)
 
 -- | A placeholder for the PostgreSQL @DEFAULT@ value.
 data Default = Default
-  deriving (Read, Show, Typeable)
+  deriving (Read, Show)
 
 -- | A query string. This type is intended to make it difficult to
 -- construct a SQL query by concatenating string fragments, as that is
@@ -81,7 +80,7 @@ data Default = Default
 newtype Query = Query
   { fromQuery :: ByteString
   }
-  deriving (Eq, Ord, Typeable)
+  deriving (Eq, Ord)
 
 instance Show Query where
   show = show . fromQuery
@@ -145,7 +144,7 @@ instance Monoid Query where
 --     be null or you want null treated sensibly as a component of @IN@ or
 --     @NOT IN@.
 newtype In a = In a
-  deriving (Eq, Ord, Read, Show, Typeable, Functor)
+  deriving (Eq, Ord, Read, Show, Functor)
 
 instance (ToField a) => ToField (In [a]) where
   toField (In []) = Plain "(NULL)"
@@ -153,7 +152,7 @@ instance (ToField a) => ToField (In [a]) where
 
 -- | Wrap binary data for use as a @bytea@ value.
 newtype Binary a = Binary {fromBinary :: a}
-  deriving (Eq, Ord, Read, Show, Typeable, Functor)
+  deriving (Eq, Ord, Read, Show, Functor)
 
 instance ToField (Binary ByteString)
 
@@ -165,7 +164,7 @@ instance ToPgField (Binary ByteString) where
 
 -- | Wrap text for use as sql identifier, i.e. a table or column name.
 newtype Identifier = Identifier {fromIdentifier :: Text}
-  deriving stock (Eq, Ord, Read, Show, Typeable)
+  deriving stock (Eq, Ord, Read, Show)
   deriving newtype (IsString)
 
 instance ToField Identifier where
@@ -177,7 +176,7 @@ instance Hashable Identifier where
 -- | Wrap text for use as (maybe) qualified identifier, i.e. a table
 -- with schema, or column with table.
 data QualifiedIdentifier = QualifiedIdentifier (Maybe Text) Text
-  deriving (Eq, Ord, Read, Show, Typeable)
+  deriving (Eq, Ord, Read, Show)
 
 instance ToField QualifiedIdentifier where
   toField (QualifiedIdentifier m n) = case m of
@@ -201,7 +200,7 @@ instance IsString QualifiedIdentifier where
           else QualifiedIdentifier (Just x) (T.tail y)
 
 newtype Savepoint = Savepoint Query
-  deriving (Eq, Ord, Show, Read, Typeable)
+  deriving (Eq, Ord, Show, Read)
 
 -- | Represents a @VALUES@ table literal,  usable as an alternative to
 --   'Database.PostgreSQL.Simple.executeMany' and
@@ -257,7 +256,7 @@ newtype Savepoint = Savepoint Query
 --   See <https://www.postgresql.org/docs/9.5/static/sql-values.html> for
 --   more information.
 data Values a = Values [QualifiedIdentifier] [a]
-  deriving (Eq, Ord, Show, Read, Typeable)
+  deriving (Eq, Ord, Show, Read)
 
 interleaveFoldr :: (a -> [b] -> [b]) -> b -> [b] -> [a] -> [b]
 interleaveFoldr f b bs' as = foldr (\a bs -> b : f a bs) bs' as

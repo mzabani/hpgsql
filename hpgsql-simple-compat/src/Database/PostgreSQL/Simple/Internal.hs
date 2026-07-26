@@ -49,14 +49,12 @@ data Connection = Connection
     connectionTempNameCounter :: {-# UNPACK #-} !(IORef Int64),
     hpgConn :: HPgConnection
   }
-  deriving (Typeable)
 
 instance Eq Connection where
   x == y = hpgConn x == hpgConn y
 
 -- | Superclass for postgresql exceptions
 data SomePostgreSqlException = forall e. (Exception e) => SomePostgreSqlException e
-  deriving (Typeable)
 
 postgresqlExceptionToException :: (Exception e) => e -> SomeException
 postgresqlExceptionToException = toException . SomePostgreSqlException
@@ -83,7 +81,7 @@ data SqlError = SqlError
     -- to help debugging the source of errors.
     sqlStatement :: ByteString
   }
-  deriving (Eq, Show, Typeable)
+  deriving (Eq, Show)
 
 fatalError :: ByteString -> SqlError
 fatalError msg = SqlError "" FatalError msg "" "" ""
@@ -98,7 +96,7 @@ data QueryError = QueryError
   { qeMessage :: String,
     qeQuery :: Query
   }
-  deriving (Eq, Show, Typeable)
+  deriving (Eq, Show)
 
 instance Exception QueryError where
   toException = postgresqlExceptionToException
@@ -112,7 +110,7 @@ data FormatError = FormatError
     fmtQuery :: Query,
     fmtParams :: [ByteString]
   }
-  deriving (Eq, Show, Typeable)
+  deriving (Eq, Show)
 
 instance Exception FormatError where
   toException = postgresqlExceptionToException
@@ -125,7 +123,7 @@ data ConnectInfo = ConnectInfo
     connectPassword :: String,
     connectDatabase :: String
   }
-  deriving (Generic, Eq, Read, Show, Typeable)
+  deriving (Generic, Eq, Read, Show)
 
 -- | Default information for setting up a connection.
 --
@@ -240,7 +238,7 @@ withConnection Connection {..} m = m $ PQ.Connection hpgConn
 --   for detailed information regarding libpq and SSL.
 connectPostgreSQL :: ByteString -> IO Connection
 connectPostgreSQL connstr = do
-  connectionObjects <- newMVar (IntMap.empty)
+  connectionObjects <- newMVar IntMap.empty
   connectionTempNameCounter <- newIORef 0
   case Hpgsql.Connection.parseLibpqConnectionString (TE.decodeUtf8 connstr) of
     Left err -> error err

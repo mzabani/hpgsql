@@ -31,17 +31,19 @@ ci-tests:
 
     hlint .
 
-    concurrently -g --timings --names pg18,pg17,pg16,pg15,pg14 \
-      'nix-build --no-out-link -A testsPg18' \
-      'nix-build --no-out-link -A testsPg17' \
-      'nix-build --no-out-link -A testsPg16' \
-      'nix-build --no-out-link -A testsPg15' \
-      'nix-build --no-out-link -A testsPg14'
+    concurrently -g --timings --names pg18-ghc9122,pg17,pg16-ghc984-tcp,pg15-single-threaded-rts,pg14-ghc967 \
+      'nix-build --no-out-link --argstr ghc ghc9122 -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc9122-tests.txt nix-build --no-out-link --argstr ghc ghc9122 -A testsPg18' \
+      'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-tests.txt nix-build --no-out-link -A testsPg17' \
+      'nix-build --no-out-link --argstr ghc ghc984 --argstr PGHOST localhost -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-ghc984-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A testsPg16' \
+      'nix-build --no-out-link --argstr threading "-threaded" -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-single-threaded-rts-tests.txt nix-build --no-out-link --argstr threading "-threaded" -A testsPg15' \
+      'nix-build --no-out-link --argstr ghc ghc967 -A hpgsql-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-ghc967-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A testsPg14'
 
-    # concurrently -g --timings --names single-threaded,ghc984,ghc967 \
-    #   'nix-build --no-out-link --argstr threading "-threaded" -A testsPg18' \
-    #   'nix-build --no-out-link --argstr ghc ghc984 -A testsPg18' \
-    #   'nix-build --no-out-link --argstr ghc ghc967 -A testsPg18'
+    concurrently -g --timings --names pg18-ghc9122,pg17,pg16-ghc984,pg15,pg14-ghc967 \
+      'nix-build --no-out-link --argstr ghc ghc984 -A hpgsql-simple-compat-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg18-ghc9122-simple-compat-tests.txt nix-build --no-out-link --argstr ghc ghc9122 -A hpgsqlSimpleCompatTestsPg18' \
+      'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg17-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg17' \
+      'nix-build --no-out-link --argstr ghc ghc984 -A hpgsql-simple-compat-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg16-ghc984-simple-compat-tests.txt nix-build --no-out-link --argstr ghc ghc984 -A hpgsqlSimpleCompatTestsPg16' \
+      'timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg15-simple-compat-tests.txt nix-build --no-out-link -A hpgsqlSimpleCompatTestsPg15' \
+      'nix-build --no-out-link --argstr ghc ghc967 -A hpgsql-simple-compat-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-ghc967-simple-compat-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A hpgsqlSimpleCompatTestsPg14'
 
 
 ##

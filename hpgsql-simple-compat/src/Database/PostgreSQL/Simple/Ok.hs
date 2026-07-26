@@ -31,7 +31,6 @@ module Database.PostgreSQL.Simple.Ok where
 import Control.Applicative
 import Control.Exception
 import Control.Monad (MonadPlus (..))
-import Data.Typeable
 
 import qualified Control.Monad.Fail as Fail
 
@@ -39,7 +38,7 @@ import qualified Control.Monad.Fail as Fail
 --          a difference list (or a tree?)
 
 data Ok a = Errors [SomeException] | Ok !a
-  deriving (Show, Typeable, Functor)
+  deriving (Show, Functor)
 
 -- | Two 'Errors' cases are considered equal, regardless of what the
 --   list of exceptions looks like.
@@ -79,6 +78,6 @@ instance Fail.MonadFail Ok where
 
 -- | a way to reify a list of exceptions into a single exception
 newtype ManyErrors = ManyErrors [SomeException]
-  deriving (Show, Typeable)
+  deriving (Show)
 
 instance Exception ManyErrors

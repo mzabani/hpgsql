@@ -33,7 +33,6 @@ import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Time.LocalTime.Compat (LocalTime, TimeOfDay)
-import Data.Typeable (Typeable)
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import Hpgsql.Builder (BinaryField (..))
@@ -54,7 +53,6 @@ data Action
     Many [Action]
   | -- | Just a static SQL fragment to render
     Plain LB.ByteString
-  deriving (Typeable)
 
 instance Show Action where
   show (QueryArgument _) = "QueryArgument"

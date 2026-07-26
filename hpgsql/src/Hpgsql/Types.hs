@@ -17,7 +17,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
 import Data.Tuple.Only (Only (..))
-import Data.Typeable (Proxy (..), Typeable)
+import Data.Typeable (Proxy (..))
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, toPgVectorField)
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid, lookupTypeByOid)
@@ -101,7 +101,8 @@ instance FromPgField PgJson where
 -- into your type (from either json or jsonb), and to encode
 -- to jsonb.
 newtype Aeson a = Aeson {getAeson :: a}
-  deriving (Eq, Show, Read, Typeable, Functor)
+  deriving stock (Functor, Read, Show)
+  deriving newtype (Eq)
 
 instance (FromJSON a) => FromPgField (Aeson a) where
   fieldDecoder =
