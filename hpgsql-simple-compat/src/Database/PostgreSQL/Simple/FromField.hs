@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 -- |
 -- Module:      Database.PostgreSQL.Simple.FromField
 -- Copyright:   (c) 2011 MailRank, Inc.
@@ -157,7 +159,11 @@ data ResultError
         errHaskellType :: String,
         errMessage :: String
       }
-  deriving (Eq, Show, Typeable)
+  deriving (Eq, Show)
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
+  -- Typeable is auto-derived for all types starting with GHC 9.12
+  deriving (Typeable)
+#endif
 
 instance Exception ResultError where
   toException = postgresqlExceptionToException
@@ -176,8 +182,8 @@ class FromField a where
   fromField =
     let dec = Hpgsql.fieldDecoder
      in \f ->
-          if (Hpgsql.allowedPgTypes dec) f
-            then \mbs -> Conversion $ \_encCtx -> case (Hpgsql.fieldValueDecoder dec) f mbs of
+          if Hpgsql.allowedPgTypes dec f
+            then \mbs -> Conversion $ \_encCtx -> case Hpgsql.fieldValueDecoder dec f mbs of
               Right v -> Ok v
               Left err -> Errors [toException $ userError err]
             else \_ -> Conversion $ \_encCtx -> Errors [toException $ userError "Invalid type OID for FromField instance"]

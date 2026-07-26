@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 ------------------------------------------------------------------------------
@@ -33,7 +34,9 @@ import qualified Data.Text.Lazy as LT
 import Data.Time.Calendar.Compat (Day)
 import Data.Time.Compat (CalendarDiffTime, NominalDiffTime, UTCTime, ZonedTime)
 import Data.Time.LocalTime.Compat (LocalTime, TimeOfDay)
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
 import Data.Typeable (Typeable)
+#endif
 import Data.UUID.Types (UUID)
 import Data.Vector (Vector)
 import Hpgsql.Builder (BinaryField (..))
@@ -54,7 +57,10 @@ data Action
     Many [Action]
   | -- | Just a static SQL fragment to render
     Plain LB.ByteString
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
+  -- Typeable is auto-derived for all types starting with GHC 9.12
   deriving (Typeable)
+#endif
 
 instance Show Action where
   show (QueryArgument _) = "QueryArgument"

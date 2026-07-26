@@ -107,12 +107,11 @@ instance FromPgField PgJson where
 -- into your type (from either json or jsonb), and to encode
 -- to jsonb.
 newtype Aeson a = Aeson {getAeson :: a}
-  deriving newtype (Eq)
-#if MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
   deriving stock (Functor, Read, Show)
-#else
+  deriving newtype (Eq)
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
   -- Typeable is auto-derived for all types starting with GHC 9.12
-  deriving stock (Show, Read, Typeable, Functor)
+  deriving stock (Typeable)
 #endif
 
 instance (FromJSON a) => FromPgField (Aeson a) where

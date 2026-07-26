@@ -92,13 +92,10 @@ library
     , text >= 2.0 && < 2.2
     , aeson >= 2.2 && < 2.3
     , attoparsec >= 0.14 && < 0.15
-    , haskell-src-meta >= 0.8 && < 0.9
     , hpgsql >= 0.2 && < 0.3
     , hashable >= 1.5 && < 1.6
     , mtl >= 2.3 && < 2.4
-    , streaming >= 0.2 && < 0.3
     , time-compat >= 1.9 && < 1.10
-    , transformers >= 0.6 && < 0.7
     , Only >= 0.1 && < 0.2
     , scientific >= 0.3 && < 0.4
     , uuid-types >= 1.0 && < 1.1

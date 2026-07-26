@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 ------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
@@ -42,7 +44,9 @@ import qualified Data.ByteString.Char8 as B
 import Data.Int (Int64)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
 import Data.Typeable (Typeable)
+#endif
 import Database.PostgreSQL.Simple.HpgsqlUtils (toHpgsqlQuery)
 import Database.PostgreSQL.Simple.Internal
 import Database.PostgreSQL.Simple.ToRow (ToRow)
@@ -80,7 +84,11 @@ data CopyOutResult
   | -- | No more rows, and a count of the
     --   number of rows returned.
     CopyOutDone {-# UNPACK #-} !Int64
-  deriving (Eq, Typeable, Show)
+  deriving (Eq, Show)
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
+  -- Typeable is auto-derived for all types starting with GHC 9.12
+  deriving (Typeable)
+#endif
 
 -- | Feed some data to a @COPY FROM STDIN@ query.  Note that
 --   the data does not need to represent a single row,  or even an

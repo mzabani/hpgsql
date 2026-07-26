@@ -1,3 +1,5 @@
+{-# LANGUAGE CPP #-}
+
 ------------------------------------------------------------------------------
 
 ----------------------------------------------------------
@@ -25,11 +27,11 @@ module Database.PostgreSQL.Simple.Errors
 where
 
 import Control.Exception as E
-
 import Data.Attoparsec.ByteString.Char8
 import Data.ByteString (ByteString)
-import Data.Typeable
-
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
+import Data.Typeable (Typeable)
+#endif
 import Database.PostgreSQL.Simple.Internal
 
 -- Examples of parsed error messages
@@ -55,7 +57,11 @@ data ConstraintViolation
     CheckViolation ByteString ByteString
   | -- | Name of the exclusion violation constraint
     ExclusionViolation ByteString
-  deriving (Show, Eq, Ord, Typeable)
+  deriving (Show, Eq, Ord)
+#if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
+  -- Typeable is auto-derived for all types starting with GHC 9.12
+  deriving (Typeable)
+#endif
 
 -- Default instance should be enough
 instance Exception ConstraintViolation where
