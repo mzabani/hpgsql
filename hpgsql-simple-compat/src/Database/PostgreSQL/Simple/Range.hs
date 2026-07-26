@@ -19,7 +19,6 @@ module Database.PostgreSQL.Simple.Range
   )
 where
 
-
 -- | Represents boundary of a range
 data RangeBound a
   = NegInfinity
