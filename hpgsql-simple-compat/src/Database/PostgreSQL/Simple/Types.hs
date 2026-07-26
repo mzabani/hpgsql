@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+
 ------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
@@ -189,11 +190,11 @@ instance ToPgField (Binary ByteString) where
 -- | Wrap text for use as sql identifier, i.e. a table or column name.
 newtype Identifier = Identifier {fromIdentifier :: Text}
   deriving (Eq, Ord, Read, Show)
+  deriving newtype (IsString)
 #if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
   -- Typeable is auto-derived for all types starting with GHC 9.12
   deriving (Typeable)
 #endif
-  deriving newtype (IsString)
 
 instance ToField Identifier where
   toField (Identifier ident) = EscapeIdentifier $ encodeUtf8 ident

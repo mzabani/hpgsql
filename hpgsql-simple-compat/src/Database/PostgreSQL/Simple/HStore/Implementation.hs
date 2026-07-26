@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+
 ------------------------------------------------------------------------------
 
 ------------------------------------------------------------------------------
@@ -74,11 +75,11 @@ class ToHStoreText a where
 
 -- | Represents escape text, ready to be the key or value to a hstore value
 newtype HStoreText = HStoreText Builder
+  deriving newtype (Semigroup, Monoid)
 #if !MIN_VERSION_GLASGOW_HASKELL(9,12,0,0)
   -- Typeable is auto-derived for all types starting with GHC 9.12
   deriving (Typeable)
 #endif
-  deriving newtype (Semigroup, Monoid)
 
 instance ToHStoreText HStoreText where
   toHStoreText = id
