@@ -1,6 +1,7 @@
 module Hpgsql.GhcParseExp (parseExp, canParseExp) where
 
 import Data.Char (isUpper)
+import Data.Either (isRight)
 import GHC.Data.FastString (mkFastString, unpackFS)
 import GHC.Data.StringBuffer (stringToStringBuffer)
 import GHC.Driver.Config.Parser (initParserOpts)
@@ -14,6 +15,7 @@ import GHC.Types.Name.Reader (RdrName (..))
 import GHC.Types.SourceText (IntegralLit (..), rationalFromFractionalLit)
 import GHC.Types.SrcLoc (GenLocated (..), mkRealSrcLoc)
 import Hpgsql.GhcParserOpts (parserDynFlags)
+import Language.Haskell.Syntax.Basic (FieldLabelString (..))
 import qualified Language.Haskell.TH as TH
 
 -- | Parse a Haskell expression string into a Template Haskell Exp.
@@ -26,9 +28,7 @@ parseExp str = do
 -- | Check if a string can be parsed as a Haskell expression.
 -- This only checks parsing validity; it does not convert to TH.
 canParseExp :: String -> Bool
-canParseExp str = case ghcParse str of
-  Right _ -> True
-  Left _ -> False
+canParseExp = isRight . ghcParse
 
 ghcParse :: String -> Either String (HsExpr GhcPs)
 ghcParse str =
@@ -52,7 +52,7 @@ convertExpr (OpApp _ (L _ l) (L _ op) (L _ r)) = do
   Right (TH.UInfixE l' op' r')
 convertExpr (NegApp _ (L _ e) _) = do
   e' <- convertExpr e
-  Right (TH.AppE (TH.VarE (TH.mkName "negate")) e')
+  Right (TH.AppE (TH.VarE 'negate) e')
 convertExpr (HsPar _ (L _ e)) =
   TH.ParensE <$> convertExpr e
 convertExpr (ExplicitList _ es) = TH.ListE <$> traverse (\(L _ e) -> convertExpr e) es
@@ -82,7 +82,12 @@ convertExpr (ExprWithTySig _ (L _ e) sigWcTy) = do
   e' <- convertExpr e
   ty' <- convertSigWcType sigWcTy
   Right (TH.SigE e' ty')
-convertExpr _ = Left "Unsupported Haskell expression form in SQL quasi-quoter"
+convertExpr (HsGetField _ (L _ e) (L _ (DotFieldOcc _ (L _ fld)))) = do
+  e' <- convertExpr e
+  Right (TH.GetFieldE e' (fieldLabelToString fld))
+convertExpr (HsProjection _ flds) =
+  Right (TH.ProjectionE (fmap (\(DotFieldOcc _ (L _ fld)) -> fieldLabelToString fld) flds))
+convertExpr _ = Left "Unsupported Haskell expression form in hpgsql's SQL quasi-quoter"
 
 -- Helper functions
 
@@ -98,8 +103,12 @@ rdrToName _ = TH.mkName "<unknown-name>"
 
 isConName :: TH.Name -> Bool
 isConName n = case TH.nameBase n of
+  -- TODO: No module name check?
   (c : _) -> isUpper c || c == ':'
   _ -> False
+
+fieldLabelToString :: FieldLabelString -> String
+fieldLabelToString (FieldLabelString fs) = unpackFS fs
 
 convertTupArg :: HsTupArg GhcPs -> Either String (Maybe TH.Exp)
 convertTupArg (Present _ (L _ e)) = Just <$> convertExpr e
@@ -111,7 +120,7 @@ convertHsLit (HsString _ fs) = Right (TH.StringL (unpackFS fs))
 convertHsLit (HsInt _ il) = Right (TH.IntegerL (il_value il))
 convertHsLit (HsIntPrim _ i) = Right (TH.IntPrimL i)
 convertHsLit (HsWordPrim _ w) = Right (TH.WordPrimL w)
-convertHsLit (HsFloatPrim _ fl) = Right (TH.FloatPrimL (rationalFromFractionalLit fl))
+convertHsLit (HsFloatPrim _ fl) = Right (TH.FloatPrimL (rationalFromFractionalLit fl)) -- TODO Why rational?
 convertHsLit (HsDoublePrim _ fl) = Right (TH.DoublePrimL (rationalFromFractionalLit fl))
 convertHsLit _ = Left "Unsupported literal type in SQL quasi-quoter"
 
