@@ -36,7 +36,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Language.Haskell.Meta.Parse (parseExp)
+import Hpgsql.GhcParseExp (canParseExp)
 import Prelude hiding (takeWhile)
 
 data BlockOrNotBlock = StaticSql !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !QQExprKind !Text | SemiColon | CommentsOrWhitespace !Text
@@ -165,9 +165,9 @@ quasiQuoterExpressionParser = do
       chunk <- takeWhile (/= '}')
       void $ char '}'
       let candidate = acc <> chunk
-      case parseExp (Text.unpack candidate) of
-        Right _ -> pure candidate
-        Left _ -> findExpressionEnd (candidate <> "}")
+      if canParseExp (Text.unpack candidate)
+        then pure candidate
+        else findExpressionEnd (candidate <> "}")
 
 dollarNumberedQueryArgParser :: Parser BlockOrNotBlock
 dollarNumberedQueryArgParser = do

@@ -22,7 +22,7 @@ import Hpgsql.Encoding (FieldEncoder (..), RowEncoder (..), ToPgField (..), ToPg
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements, renumberParamsFrom)
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, flattenBlocks, parseSql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
-import Language.Haskell.Meta.Parse (parseExp)
+import Hpgsql.GhcParseExp (parseExp)
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
 
