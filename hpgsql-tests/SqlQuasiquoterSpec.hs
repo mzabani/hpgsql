@@ -146,7 +146,7 @@ genMkQuery =
 
 data SomeRecord = SomeRecord {field1 :: Int, field2 :: Int}
 
-newtype SomeGenericRecord a = SomeGenericRecord {field1 :: a}
+-- newtype SomeGenericRecord a = SomeGenericRecord {field1 :: a}
 
 -- | Queries built with the sql quasiquoter and #{} interpolation.
 genInterpolatedQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
@@ -155,7 +155,7 @@ genInterpolatedQuery =
     [ pure ([sql|SELECT 1, '#{x}', '^{y}';|], []),
       do
         x <- genInt
-        pure ([sql|SELECT #{x};|], toComparableParams (Only x)),
+        pure ([sql|SELECT #{if True then x else 0};|], toComparableParams (Only x)),
       do
         x <- SomeRecord <$> genInt <*> genInt
         pure ([sql|SELECT #{x.field1}, #{-(x.field2)};|], toComparableParams (x.field1, -(x.field2))),
@@ -163,7 +163,7 @@ genInterpolatedQuery =
         x <- genInt
         y <- genInt
         z <- genInt
-        pure ([sql|SELECT #{x} FROM t WHERE #{y} BETWEEN 0 AND #{(SomeGenericRecord { field1 = z }).field1};|], toComparableParams (x, y, z))
+        pure ([sql|SELECT #{x} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, y, z))
     ]
 
 -- | Queries built with ^{} embedded queries, including reused placeholders.

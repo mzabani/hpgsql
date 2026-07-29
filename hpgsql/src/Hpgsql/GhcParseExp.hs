@@ -18,6 +18,8 @@ import Hpgsql.GhcParserOpts (parserDynFlags)
 import Language.Haskell.Syntax.Basic (FieldLabelString (..))
 import qualified Language.Haskell.TH as TH
 
+-- TODO: How about source locations/lines? Do we need them?
+
 -- | Parse a Haskell expression string into a Template Haskell Exp.
 -- Drop-in replacement for Language.Haskell.Meta.Parse.parseExp.
 parseExp :: String -> Either String TH.Exp
