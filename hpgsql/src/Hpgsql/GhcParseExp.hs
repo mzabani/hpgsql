@@ -1,3 +1,6 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE PackageImports #-}
+
 module Hpgsql.GhcParseExp (parseExp, canParseExp) where
 
 import Data.Char (isUpper)
@@ -16,7 +19,7 @@ import GHC.Types.SourceText (IntegralLit (..), rationalFromFractionalLit)
 import GHC.Types.SrcLoc (GenLocated (..), mkRealSrcLoc)
 import Hpgsql.GhcParserOpts (parserDynFlags)
 import Language.Haskell.Syntax.Basic (FieldLabelString (..))
-import qualified Language.Haskell.TH as TH
+import qualified "template-haskell" Language.Haskell.TH as TH
 
 -- TODO: How about source locations/lines? Do we need them?
 
@@ -54,8 +57,13 @@ convertExpr (OpApp _ (L _ l) (L _ op) (L _ r)) = do
   Right (TH.UInfixE l' op' r')
 convertExpr (NegApp _ (L _ e) _) = do
   e' <- convertExpr e
-  Right (TH.AppE (TH.VarE 'negate) e')
+  Right $ TH.AppE (TH.VarE 'negate) e'
+
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
 convertExpr (HsPar _ (L _ e)) =
+#elif MIN_VERSION_ghc_lib_parser(9,8,0)
+convertExpr (HsPar _ _ (L _ e) _) =
+#endif
   TH.ParensE <$> convertExpr e
 convertExpr (ExplicitList _ es) = TH.ListE <$> traverse (\(L _ e) -> convertExpr e) es
 convertExpr (ExplicitTuple _ args boxity) = do
@@ -88,7 +96,11 @@ convertExpr (HsGetField _ (L _ e) (L _ (DotFieldOcc _ (L _ fld)))) = do
   e' <- convertExpr e
   Right (TH.GetFieldE e' (fieldLabelToString fld))
 convertExpr (HsProjection _ flds) =
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
   Right (TH.ProjectionE (fmap (\(DotFieldOcc _ (L _ fld)) -> fieldLabelToString fld) flds))
+#elif MIN_VERSION_ghc_lib_parser(9,8,0)
+  Right (TH.ProjectionE (fmap (\(L _ (DotFieldOcc _ (L _ fld))) -> fieldLabelToString fld) flds))
+#endif
 convertExpr _ = Left "Unsupported Haskell expression form in hpgsql's SQL quasi-quoter"
 
 -- Helper functions

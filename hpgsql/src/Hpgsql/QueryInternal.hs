@@ -1,3 +1,5 @@
+{-# LANGUAGE PackageImports #-}
+
 module Hpgsql.QueryInternal
   ( Query (..),
     SingleQuery (..),
@@ -19,12 +21,12 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Hpgsql.Builder (BinaryField)
 import Hpgsql.Encoding (FieldEncoder (..), RowEncoder (..), ToPgField (..), ToPgRow (..))
+import Hpgsql.GhcParseExp (parseExp)
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements, renumberParamsFrom)
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, flattenBlocks, parseSql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
-import Hpgsql.GhcParseExp (parseExp)
-import Language.Haskell.TH
 import Language.Haskell.TH.Quote
+import "template-haskell" Language.Haskell.TH
 
 -- | A useful representation for our quasiquoter parsing.
 data SqlFragment
