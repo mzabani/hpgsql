@@ -1,9 +1,7 @@
 {-# OPTIONS_GHC -Wno-missing-fields #-}
 
-module Hpgsql.GhcParserOpts (parserDynFlags) where
+module Hpgsql.GhcParserOpts (fakeSettings) where
 
-import GHC.Driver.Session (DynFlags, defaultDynFlags, xopt_set)
-import GHC.LanguageExtensions.Type
 import GHC.Platform (genericPlatform)
 import GHC.Settings
 import GHC.Settings.Config (cProjectVersion)
@@ -21,25 +19,3 @@ fakeSettings =
       sPlatformMisc = PlatformMisc {},
       sToolSettings = ToolSettings {toolSettings_opt_P_fingerprint = fingerprint0}
     }
-
-parserDynFlags :: DynFlags
-parserDynFlags =
-  foldl
-    xopt_set
-    (defaultDynFlags fakeSettings)
-    [ OverloadedStrings,
-      OverloadedRecordDot,
-      TupleSections,
-      LambdaCase,
-      MultiWayIf,
-      PostfixOperators,
-      QuasiQuotes,
-      UnicodeSyntax,
-      MagicHash,
-      ForeignFunctionInterface,
-      TemplateHaskell,
-      RankNTypes,
-      MultiParamTypeClasses,
-      RecursiveDo,
-      TypeApplications
-    ]

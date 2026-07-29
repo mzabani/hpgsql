@@ -8,7 +8,9 @@ import Data.Either (isRight)
 import GHC.Data.FastString (mkFastString, unpackFS)
 import GHC.Data.StringBuffer (stringToStringBuffer)
 import GHC.Driver.Config.Parser (initParserOpts)
-import GHC.Hs
+import GHC.Driver.Session (DynFlags, defaultDynFlags, xopt_set)
+import GHC.Hs hiding (UnicodeSyntax)
+import GHC.LanguageExtensions (Extension (..))
 import GHC.Parser (parseExpression)
 import GHC.Parser.Lexer (P (..), ParseResult (..), initParserState)
 import GHC.Parser.PostProcess (ECP (..), runPV)
@@ -17,7 +19,7 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (RdrName (..))
 import GHC.Types.SourceText (IntegralLit (..), rationalFromFractionalLit)
 import GHC.Types.SrcLoc (GenLocated (..), mkRealSrcLoc)
-import Hpgsql.GhcParserOpts (parserDynFlags)
+import Hpgsql.GhcParserOpts (fakeSettings)
 import Language.Haskell.Syntax.Basic (FieldLabelString (..))
 import qualified "template-haskell" Language.Haskell.TH as TH
 
@@ -44,6 +46,28 @@ ghcParse str =
    in case unP parseExprP (initParserState opts buf loc) of
         POk _ (L _ expr) -> Right expr
         PFailed _ -> Left "Failed to parse Haskell expression"
+  where
+    parserDynFlags :: DynFlags
+    parserDynFlags =
+      foldl
+        xopt_set
+        (defaultDynFlags fakeSettings)
+        [ OverloadedStrings,
+          OverloadedRecordDot,
+          TupleSections,
+          LambdaCase,
+          MultiWayIf,
+          PostfixOperators,
+          QuasiQuotes,
+          UnicodeSyntax,
+          MagicHash,
+          ForeignFunctionInterface,
+          TemplateHaskell,
+          RankNTypes,
+          MultiParamTypeClasses,
+          RecursiveDo,
+          TypeApplications
+        ]
 
 -- GHC HsExpr to TH Exp conversion
 
@@ -60,11 +84,10 @@ convertExpr (NegApp _ (L _ e) _) = do
   Right $ TH.AppE (TH.VarE 'negate) e'
 
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
-convertExpr (HsPar _ (L _ e)) =
+convertExpr (HsPar _ (L _ e)) = TH.ParensE <$> convertExpr e
 #elif MIN_VERSION_ghc_lib_parser(9,8,0)
-convertExpr (HsPar _ _ (L _ e) _) =
+convertExpr (HsPar _ _ (L _ e) _) = TH.ParensE <$> convertExpr e
 #endif
-  TH.ParensE <$> convertExpr e
 convertExpr (ExplicitList _ es) = TH.ListE <$> traverse (\(L _ e) -> convertExpr e) es
 convertExpr (ExplicitTuple _ args boxity) = do
   args' <- traverse convertTupArg args
@@ -95,10 +118,11 @@ convertExpr (ExprWithTySig _ (L _ e) sigWcTy) = do
 convertExpr (HsGetField _ (L _ e) (L _ (DotFieldOcc _ (L _ fld)))) = do
   e' <- convertExpr e
   Right (TH.GetFieldE e' (fieldLabelToString fld))
-convertExpr (HsProjection _ flds) =
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertExpr (HsProjection _ flds) =
   Right (TH.ProjectionE (fmap (\(DotFieldOcc _ (L _ fld)) -> fieldLabelToString fld) flds))
 #elif MIN_VERSION_ghc_lib_parser(9,8,0)
+convertExpr (HsProjection _ flds) =
   Right (TH.ProjectionE (fmap (\(L _ (DotFieldOcc _ (L _ fld))) -> fieldLabelToString fld) flds))
 #endif
 convertExpr _ = Left "Unsupported Haskell expression form in hpgsql's SQL quasi-quoter"
