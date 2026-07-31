@@ -2,6 +2,7 @@ module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), Back
 
 import Control.Applicative (Alternative (..))
 import Control.Monad (replicateM)
+import Control.Monad.Trans.Reader (ReaderT (..))
 import qualified Crypto.Hash as Crypto
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
@@ -38,16 +39,7 @@ newtype PgMsgParser a
         Maybe a
       )
   deriving stock (Functor)
-
-instance Applicative PgMsgParser where
-  pure a = PgMsgParser $ \_ _ -> Just a
-
-  -- TODO: Is this Applicative correct? Double-check laws
-  PgMsgParser f <*> PgMsgParser p = PgMsgParser $ \c r -> f c r <*> p c r
-
-instance Alternative PgMsgParser where
-  empty = PgMsgParser $ \_ _ -> Nothing
-  PgMsgParser p1 <|> PgMsgParser p2 = PgMsgParser $ \c restOfMsg -> p1 c restOfMsg <|> p2 c restOfMsg
+  deriving (Applicative, Alternative) via (ReaderT Char (ReaderT LBS.ByteString Maybe))
 
 class FromPgMessage a where
   msgParser :: PgMsgParser a
