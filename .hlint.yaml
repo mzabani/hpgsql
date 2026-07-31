@@ -4,7 +4,9 @@
 
 - arguments:
   - "--cpp-define=MIN_VERSION_base(a,b,c)=1"
-  - "--cpp-define=MIN_VERSION_ghc_lib_parser(9,10,0)=1"
+  - "--cpp-define=MIN_VERSION_template_haskell(2,21,0)=1"
+  - "--cpp-define=MIN_VERSION_template_haskell(2,22,0)=1"
+  - "--cpp-define=MIN_VERSION_template_haskell(2,23,0)=0"
   - "-XQuasiQuotes"
   - "-XTemplateHaskell"
   - "-XOverloadedRecordDot"

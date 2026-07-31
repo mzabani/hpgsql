@@ -1,3 +1,5 @@
+{-# LANGUAGE PackageImports #-}
+
 -- |
 --
 -- This module contains parsers that are helpful to separate SQL statements from each other by finding query boundaries: semi-colons, but not when inside a string or a parenthesised expression, for example.
@@ -37,6 +39,7 @@ import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Hpgsql.GhcParseExp (canParseExp)
+import "template-haskell" Language.Haskell.TH (Extension)
 import Prelude hiding (takeWhile)
 
 data BlockOrNotBlock = StaticSql !Text | DollarNumberedArg !Int | QuestionMarkArg | QuasiQuoterExpression !QQExprKind !Text | SemiColon | CommentsOrWhitespace !Text
@@ -45,7 +48,7 @@ data BlockOrNotBlock = StaticSql !Text | DollarNumberedArg !Int | QuestionMarkAr
 data QQExprKind = QQInterpolation | QQEmbeddedQuery
   deriving stock (Eq, Show)
 
-data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs | AcceptQuasiQuoterExpressions
+data ParsingOpts = AcceptQuestionMarksAsQueryArgs | AcceptOnlyDollarNumberedArgs | AcceptQuasiQuoterExpressions [Extension]
   deriving stock (Show)
 
 -- | Parses one or more SQL statements (separated by semi-colons).
@@ -106,7 +109,7 @@ blockParser popts =
   -- This seems fragile, but our tests will error out if changes make this unsupported.
   (: [])
     <$> ( case popts of
-            AcceptQuasiQuoterExpressions -> quasiQuoterExpressionParser
+            AcceptQuasiQuoterExpressions callerExtensions -> quasiQuoterExpressionParser callerExtensions
             _ -> fail "No quasiquoter expressions"
         )
     <|> (: []) <$> parseStdConformingString
@@ -148,12 +151,12 @@ isPossibleBlockStartingChar popts c =
     || c
       == '?'
     || ( case popts of
-           AcceptQuasiQuoterExpressions -> c == '#' || c == '^'
+           AcceptQuasiQuoterExpressions _ -> c == '#' || c == '^'
            _ -> False
        )
 
-quasiQuoterExpressionParser :: Parser BlockOrNotBlock
-quasiQuoterExpressionParser = do
+quasiQuoterExpressionParser :: [Extension] -> Parser BlockOrNotBlock
+quasiQuoterExpressionParser callerExtensions = do
   prefix <- string "#{" <|> string "^{"
   let kind = if prefix == "#{" then QQInterpolation else QQEmbeddedQuery
   expr <- findExpressionEnd ""
@@ -165,7 +168,7 @@ quasiQuoterExpressionParser = do
       chunk <- takeWhile (/= '}')
       void $ char '}'
       let candidate = acc <> chunk
-      if canParseExp (Text.unpack candidate)
+      if canParseExp callerExtensions (Text.unpack candidate)
         then pure candidate
         else findExpressionEnd (candidate <> "}")
 

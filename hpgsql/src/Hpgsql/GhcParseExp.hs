@@ -5,12 +5,13 @@ module Hpgsql.GhcParseExp (parseExp, canParseExp) where
 
 import Data.Char (isUpper)
 import Data.Either (isRight)
+import qualified Data.List as List
+import Data.Maybe (mapMaybe)
 import GHC.Data.FastString (mkFastString, unpackFS)
 import GHC.Data.StringBuffer (stringToStringBuffer)
 import GHC.Driver.Config.Parser (initParserOpts)
 import GHC.Driver.Session (DynFlags, defaultDynFlags, xopt_set)
 import GHC.Hs hiding (UnicodeSyntax)
-import GHC.LanguageExtensions (Extension (..))
 import GHC.Parser (parseExpression)
 import GHC.Parser.Lexer (P (..), ParseResult (..), initParserState)
 import GHC.Parser.PostProcess (ECP (..), runPV)
@@ -20,25 +21,24 @@ import GHC.Types.Name.Reader (RdrName (..))
 import GHC.Types.SourceText (IntegralLit (..), rationalFromFractionalLit)
 import GHC.Types.SrcLoc (GenLocated (..), mkRealSrcLoc)
 import Hpgsql.GhcParserOpts (fakeSettings)
+import Hpgsql.LanguageHaskell.FromThExtension (fromThToGhcLibExtension)
 import Language.Haskell.Syntax.Basic (FieldLabelString (..))
 import qualified "template-haskell" Language.Haskell.TH as TH
 
 -- TODO: How about source locations/lines? Do we need them?
 
 -- | Parse a Haskell expression string into a Template Haskell Exp.
--- Drop-in replacement for Language.Haskell.Meta.Parse.parseExp.
-parseExp :: String -> Either String TH.Exp
-parseExp str = do
-  hsExpr <- ghcParse str
+parseExp :: [TH.Extension] -> String -> Either String TH.Exp
+parseExp callerExtensions str = do
+  hsExpr <- ghcParse callerExtensions str
   convertExpr hsExpr
 
 -- | Check if a string can be parsed as a Haskell expression.
--- This only checks parsing validity; it does not convert to TH.
-canParseExp :: String -> Bool
-canParseExp = isRight . ghcParse
+canParseExp :: [TH.Extension] -> String -> Bool
+canParseExp callerExtensions = isRight . ghcParse callerExtensions
 
-ghcParse :: String -> Either String (HsExpr GhcPs)
-ghcParse str =
+ghcParse :: [TH.Extension] -> String -> Either String (HsExpr GhcPs)
+ghcParse callerExtensions str =
   let buf = stringToStringBuffer str
       loc = mkRealSrcLoc (mkFastString "<hpgsql>") 1 1
       opts = initParserOpts parserDynFlags
@@ -49,26 +49,12 @@ ghcParse str =
   where
     parserDynFlags :: DynFlags
     parserDynFlags =
-      foldl
+      List.foldl'
         xopt_set
         (defaultDynFlags fakeSettings)
-        [ OverloadedStrings,
-          OverloadedRecordDot,
-          TupleSections,
-          LambdaCase,
-          MultiWayIf,
-          PostfixOperators,
-          QuasiQuotes,
-          UnicodeSyntax,
-          MagicHash,
-          ForeignFunctionInterface,
-          TemplateHaskell,
-          RankNTypes,
-          MultiParamTypeClasses,
-          RecursiveDo,
-          TypeApplications
-        ]
+        (mapMaybe fromThToGhcLibExtension callerExtensions)
 
+--
 -- GHC HsExpr to TH Exp conversion
 
 convertExpr :: HsExpr GhcPs -> Either String TH.Exp

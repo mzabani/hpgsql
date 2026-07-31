@@ -26,7 +26,7 @@ import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, flattenBlocks, parseSql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.TH.Quote
-import "template-haskell" Language.Haskell.TH
+import "template-haskell" Language.Haskell.TH (Exp (..), Q, extsEnabled, integerL, litE, stringL)
 
 -- | A useful representation for our quasiquoter parsing.
 data SqlFragment
@@ -130,7 +130,9 @@ mkQueryInternal queryTemplate allParams =
 sql :: QuasiQuoter
 sql =
   QuasiQuoter
-    { quoteExp = liftQuery False . parseSql AcceptQuasiQuoterExpressions . Text.pack,
+    { quoteExp = \qqSqlString -> do
+        exts <- extsEnabled
+        liftQuery False $ parseSql (AcceptQuasiQuoterExpressions exts) $ Text.pack qqSqlString,
       quotePat = error "Hpgsql's sql quasiquoter does not implement quotePat",
       quoteType = error "Hpgsql's sql quasiquoter does not implement quoteType",
       quoteDec = error "Hpgsql's sql quasiquoter does not implement quoteDec"
@@ -141,7 +143,9 @@ sql =
 sqlPrep :: QuasiQuoter
 sqlPrep =
   QuasiQuoter
-    { quoteExp = liftQuery True . parseSql AcceptQuasiQuoterExpressions . Text.pack,
+    { quoteExp = \qqSqlString -> do
+        exts <- extsEnabled
+        liftQuery True $ parseSql (AcceptQuasiQuoterExpressions exts) $ Text.pack qqSqlString,
       quotePat = error "Hpgsql's sql quasiquoter does not implement quotePat",
       quoteType = error "Hpgsql's sql quasiquoter does not implement quoteType",
       quoteDec = error "Hpgsql's sql quasiquoter does not implement quoteDec"
@@ -176,16 +180,18 @@ liftQueryDynamic isPrepared allFragments = do
 fragmentToPartExp :: SqlFragment -> Q Exp
 fragmentToPartExp (NonInterpolatedSqlFragment t) =
   [|StaticSqlPart $(litE (stringL (Text.unpack t)))|]
-fragmentToPartExp (InterpolatedHaskellExpr haskellExpr) =
-  case parseExp (Text.unpack haskellExpr) of
+fragmentToPartExp (InterpolatedHaskellExpr haskellExpr) = do
+  exts <- extsEnabled
+  case parseExp exts (Text.unpack haskellExpr) of
     Left err -> error $ "Could not parse Haskell expression '" ++ Text.unpack haskellExpr ++ "': " ++ err
     Right expr -> [|ParamPart (encodeParam $(pure expr))|]
 fragmentToPartExp SemiColonFragment =
   [|SemiColonPart|]
 fragmentToPartExp (WhitespaceOrCommentsFragment t) =
   [|WhitespaceOrCommenstPart $(litE (stringL (Text.unpack t)))|]
-fragmentToPartExp (EmbeddedQueryExpr haskellExpr) =
-  case parseExp (Text.unpack haskellExpr) of
+fragmentToPartExp (EmbeddedQueryExpr haskellExpr) = do
+  exts <- extsEnabled
+  case parseExp exts (Text.unpack haskellExpr) of
     Left err -> error $ "Could not parse Haskell expression '" ++ Text.unpack haskellExpr ++ "': " ++ err
     Right expr -> [|EmbeddedQueryPart $(pure expr)|]
 
@@ -251,8 +257,9 @@ parseBlockQuasiQuoter (QuasiQuoterExpression QQEmbeddedQuery expr) = [EmbeddedQu
 
 -- | Generate a parameter expression for a captured variable
 generateParamExp :: Text -> Q Exp
-generateParamExp (Text.unpack -> haskellExpr) =
-  case parseExp haskellExpr of
+generateParamExp (Text.unpack -> haskellExpr) = do
+  exts <- extsEnabled
+  case parseExp exts haskellExpr of
     Left err -> error $ "Could not parse Haskell expression '" ++ haskellExpr ++ "': " ++ err
     Right expr ->
       [|encodeParam $(pure expr)|]

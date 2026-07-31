@@ -46,6 +46,7 @@ library
       Hpgsql.GhcParseExp
       Hpgsql.GhcParserOpts
       Hpgsql.Internal
+      Hpgsql.LanguageHaskell.FromThExtension
       Hpgsql.Locking
       Hpgsql.Msgs
       Hpgsql.Networking
