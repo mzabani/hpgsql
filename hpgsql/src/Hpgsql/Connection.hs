@@ -27,7 +27,6 @@ import Control.Monad
     void,
     when,
   )
-import Control.Monad.Trans.Except (runExceptT, throwE)
 import Data.Attoparsec.Text
   ( Parser,
     char,
@@ -41,7 +40,6 @@ import qualified Data.Attoparsec.Text as Parsec
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as ByteString
 import qualified Data.Char as Char
-import Data.Functor.Identity (Identity (..))
 import Data.List
   ( sortOn,
   )
@@ -115,17 +113,17 @@ eitherToMay (Right v) = Just v
 -- | Parses a URI with scheme 'postgres' or 'postgresql', as per https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING.
 -- The difference here is that URIs with a query string or with a fragment are not allowed.
 uriConnParser :: Text -> Either String ConnectionString
-uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
+uriConnParser line =
   case parseURI (Text.unpack line) of
-    Nothing -> throwE "Connection string is not a URI"
+    Nothing -> Left "Connection string is not a URI"
     Just URI {..} -> do
       unless
         (Text.toLower (Text.pack uriScheme) `elem` ["postgres:", "postgresql:"])
-        $ throwE
+        $ Left
           "Connection string's URI scheme must be 'postgres' or 'postgresql'"
       case uriAuthority of
         Nothing ->
-          throwE
+          Left
             "Connection string must contain at least user and host"
         Just URIAuth {..} -> do
           let database =
@@ -133,10 +131,10 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
               hasQueryString = not $ null uriQuery
               hasFragment = not $ null uriFragment
           when (Text.null database) $
-            throwE
+            Left
               "Connection string must contain a database name"
           when (hasQueryString || hasFragment) $
-            throwE
+            Left
               "Custom parameters are not supported in connection strings. Make sure your connection URI does not have a query string or query fragment"
 
           -- Ports are not mandatory and are defaulted to 5432 when not present
@@ -148,7 +146,7 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
                   (Text.pack $ trimFirst ':' uriPort)
               ) of
             Nothing ->
-              throwE "Invalid port in connection string"
+              Left "Invalid port in connection string"
             Just parsedPort -> do
               let (Text.pack . unEscapeString . trimLast '@' -> user, Text.pack . unEscapeString . trimLast '@' . trimFirst ':' -> password) =
                     break (== ':') uriUserInfo
@@ -178,7 +176,7 @@ uriConnParser line = runIdentity $ runExceptT @String @_ @ConnectionString $ do
       Just (t, lastChar) -> if lastChar == c then Text.unpack t else s
 
 keywordValueConnParser :: Text -> Either String ConnectionString
-keywordValueConnParser line = runIdentity $ runExceptT $ do
+keywordValueConnParser line = do
   kvs <-
     sortOn fst
       <$> parseOrFail
@@ -196,7 +194,7 @@ keywordValueConnParser line = runIdentity $ runExceptT $ do
     getVal key def parser pairs =
       case (map snd $ filter ((== key) . fst) pairs, def) of
         ([], Nothing) ->
-          throwE $
+          Left $
             "Connection string must contain a value for '"
               <> Text.unpack key
               <> "'"
@@ -207,7 +205,7 @@ keywordValueConnParser line = runIdentity $ runExceptT $ do
               <> Text.unpack key
               <> "' is in an unrecognizable format"
         _ ->
-          throwE $
+          Left $
             "Duplicate key '"
               <> Text.unpack key
               <> "' found in connection string."
@@ -215,7 +213,7 @@ keywordValueConnParser line = runIdentity $ runExceptT $ do
     txtToString = Parsec.takeText
     parseOrFail parser txt errorMsg =
       case parseOnly (parser <* endOfInput) txt of
-        Left _ -> throwE errorMsg
+        Left _ -> Left errorMsg
         Right v -> pure v
 
     singleKeyVal = do
