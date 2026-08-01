@@ -1,8 +1,8 @@
 module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), PasswordMessage (..), Sync (..), parsePgMessage, nulTermCString) where
 
 import Control.Applicative (Alternative (..))
+import Control.Arrow (Kleisli (..))
 import Control.Monad (replicateM)
-import Control.Monad.Trans.Reader (ReaderT (..))
 import qualified Crypto.Hash as Crypto
 import qualified Data.Attoparsec.ByteString as Parsec
 import qualified Data.Attoparsec.ByteString.Lazy as LazyParsec
@@ -39,7 +39,9 @@ newtype PgMsgParser a
         Maybe a
       )
   deriving stock (Functor)
-  deriving (Applicative, Alternative) via (ReaderT Char (ReaderT LBS.ByteString Maybe))
+  -- Kleisli m a is a newtype over 'a -> m b', so two nested Kleislis are exactly
+  -- this parser's shape, and both instances lift pointwise into Maybe.
+  deriving (Applicative, Alternative) via (Kleisli (Kleisli Maybe LBS.ByteString) Char)
 
 class FromPgMessage a where
   msgParser :: PgMsgParser a
