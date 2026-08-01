@@ -31,6 +31,7 @@ executable hpgsql-tests
       DbUtils
       DocumentationExamplesSpec
       EncodingDecodingSpec
+      LibPqConnStringParsingSpec
       NotificationsSpec
       ParsingSpec
       PipelineSpec
@@ -84,10 +85,12 @@ executable hpgsql-tests
     , bytestring
     , case-insensitive
     , containers
+    , hashable
     , hedgehog
     , hpgsql
     , hspec
     , hspec-hedgehog
+    , network-uri
     , postgresql-simple
     , random
     , safe-exceptions
