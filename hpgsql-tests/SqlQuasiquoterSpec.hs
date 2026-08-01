@@ -187,7 +187,23 @@ genInterpolatedQuery =
         y <- genInt
         z <- genInt
         e :: SomeGenericEnum <- Gen.enum minBound maxBound
-        pure ([sql|SELECT #{x}, #{e} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, e, y, z))
+        pure ([sql|SELECT #{x}, #{e} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, e, y, z)),
+      do
+        x <- genInt
+        b <- Gen.bool
+        pure
+          ( [sql|SELECT #{fst <$> Just (b, False)}, #{case compare x 0 of
+                                                      EQ -> "abc"::Text
+                                                      GT -> "cde"
+                                                      LT -> "xyz"};|],
+            toComparableParams
+              ( b,
+                case compare x 0 of
+                  EQ -> "abc" :: Text
+                  GT -> "cde"
+                  LT -> "xyz"
+              )
+          )
     ]
 
 -- | Queries built with ^{} embedded queries, including reused placeholders.

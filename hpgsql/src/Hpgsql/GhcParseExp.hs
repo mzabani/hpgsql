@@ -125,8 +125,111 @@ convertExpr (RecordCon _ (L _ conName) (HsRecFields flds _)) = do
   flds' <- traverse convertRecField flds
   Right $ TH.RecConE (rdrToName conName) flds'
 #endif
--- convertExpr (HsAppType _ _ _) = Left "TypeApplications are still unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr _ = Left "Unsupported Haskell expression form in hpgsql's SQL quasi-quoter"
+convertExpr (HsCase _ (L _ caseExpr) mg) = TH.CaseE <$> convertExpr caseExpr <*> convertMatchGroup mg
+convertExpr (HsQual {}) = Left "HsQual is unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsFunArr {}) = Left "Function types are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsForAll {}) = Left "Forall-types are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsUnboundVar {}) = Left "Unbound variables/holes are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+-- convertExpr (HsRecSel {}) = Left "Record field selectors are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsOverLabel {}) = Left "Overloaded labels are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsIPVar {}) = Left "Implicit parameters are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsLam {}) = Left "Lambda expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (ExplicitSum {}) = Left "Unboxed sums are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsMultiIf {}) = Left "Multi-way if expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsLet {}) = Left "Let expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsDo {}) = Left "Do notation is unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (RecordUpd {}) = Left "Record updates are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (ArithSeq {}) = Left "Arithmetic sequences are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsTypedBracket {}) = Left "Typed Template Haskell brackets are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsUntypedBracket {}) = Left "Untyped Template Haskell brackets are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsTypedSplice {}) = Left "Typed Template Haskell splices are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsUntypedSplice {}) = Left "Untyped Template Haskell splices are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsProc {}) = Left "Arrow proc notation is unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsStatic {}) = Left "Static pointers are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsPragE {}) = Left "Pragma expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertExpr (HsEmbTy {}) = Left "Embedded type expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+
+-- convertExpr (XExpr _) = Left "Unsupported expression form in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+
+convertMatchGroup :: MatchGroup GhcPs (LHsExpr GhcPs) -> Either String [TH.Match]
+convertMatchGroup (MG _ (L _ matches)) = traverse convertMatch matches
+
+convertMatch :: LMatch GhcPs (LHsExpr GhcPs) -> Either String TH.Match
+convertMatch (L _ (Match _ _ (L _ pats) grhss)) = do
+  pats' <- traverse (\(L _ p) -> convertPat p) pats
+  (body, decs) <- convertGRHSs grhss
+  case pats' of
+    [pat] -> Right (TH.Match pat body decs)
+    _ -> Left "Multi-pattern matches are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+
+convertGRHSs :: GRHSs GhcPs (LHsExpr GhcPs) -> Either String (TH.Body, [TH.Dec])
+convertGRHSs (GRHSs _ grhss localBinds) = do
+  decs <- convertLocalBinds localBinds
+  body <- case grhss of
+    [L _ (GRHS _ [] (L _ e))] -> TH.NormalB <$> convertExpr e
+    _ -> Left "Guarded case alternatives are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+  Right (body, decs)
+
+convertLocalBinds :: HsLocalBinds GhcPs -> Either String [TH.Dec]
+convertLocalBinds (EmptyLocalBinds _) = Right []
+convertLocalBinds _ = Left "Where clauses in case expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+
+-- Pattern conversion (GHC Pat to TH Pat)
+
+convertPat :: Pat GhcPs -> Either String TH.Pat
+convertPat (WildPat _) = Right TH.WildP
+convertPat (VarPat _ (L _ rdr)) = Right (TH.VarP (rdrToName rdr))
+convertPat (LitPat _ lit) = TH.LitP <$> convertHsLit lit
+convertPat (NPat _ (L _ ol) _ _) = do
+  e <- convertOverLit ol
+  case e of
+    TH.LitE lit -> Right (TH.LitP lit)
+    _ -> Left "Unsupported overloaded literal pattern in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertPat (ConPat _ (L _ con) details) = convertConPatDetails con details
+#elif MIN_VERSION_ghc_lib_parser(9,8,0)
+convertPat (ConPat _ (L _ con) details) = convertConPatDetails con details
+#endif
+convertPat (TuplePat _ pats boxity) = do
+  pats' <- traverse (\(L _ p) -> convertPat p) pats
+  Right $ case boxity of
+    Boxed -> TH.TupP pats'
+    Unboxed -> TH.UnboxedTupP pats'
+convertPat (ListPat _ pats) = TH.ListP <$> traverse (\(L _ p) -> convertPat p) pats
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertPat (ParPat _ (L _ p)) = TH.ParensP <$> convertPat p
+convertPat (AsPat _ (L _ rdr) (L _ p)) = TH.AsP (rdrToName rdr) <$> convertPat p
+#elif MIN_VERSION_ghc_lib_parser(9,8,0)
+convertPat (ParPat _ _ (L _ p) _) = TH.ParensP <$> convertPat p
+convertPat (AsPat _ (L _ rdr) _ (L _ p)) = TH.AsP (rdrToName rdr) <$> convertPat p
+#endif
+convertPat (BangPat _ (L _ p)) = TH.BangP <$> convertPat p
+convertPat _ = Left "Unsupported pattern form in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+
+convertConPatDetails :: RdrName -> HsConPatDetails GhcPs -> Either String TH.Pat
+convertConPatDetails con (PrefixCon tyArgs args) = do
+  args' <- traverse (\(L _ p) -> convertPat p) args
+  if null tyArgs
+    then Right (TH.ConP (rdrToName con) [] args')
+    else Left "Type applications in constructor patterns are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertConPatDetails con (InfixCon (L _ l) (L _ r)) = do
+  l' <- convertPat l
+  r' <- convertPat r
+  Right (TH.InfixP l' (rdrToName con) r')
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertConPatDetails con (RecCon (HsRecFields _ flds _)) = do
+  flds' <- traverse convertPatRecField flds
+  Right (TH.RecP (rdrToName con) flds')
+#elif MIN_VERSION_ghc_lib_parser(9,8,0)
+convertConPatDetails con (RecCon (HsRecFields flds _)) = do
+  flds' <- traverse convertPatRecField flds
+  Right (TH.RecP (rdrToName con) flds')
+#endif
+
+convertPatRecField :: LHsRecField GhcPs (LPat GhcPs) -> Either String TH.FieldPat
+convertPatRecField (L _ (HsFieldBind _ (L _ (FieldOcc _ (L _ rdr))) (L _ pat) _)) = do
+  pat' <- convertPat pat
+  Right (rdrToName rdr, pat')
 
 -- Helper functions
 
