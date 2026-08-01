@@ -4,17 +4,20 @@ import Control.Monad (forM_)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
+import Data.Functor.Contravariant (contramap)
+import Data.Int (Int32)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NE
 import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import GHC.Generics (Generic)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
+import Hpgsql.Encoding (FromPgField, LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeEncoder, typeFieldEncoder, typeOidWithName)
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.ParsingInternal (ParsingOpts (..), parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
@@ -147,14 +150,26 @@ genMkQuery =
 
 data SomeRecord = SomeRecord {field1 :: Int, field2 :: Int}
 
--- newtype SomeGenericRecord a = SomeGenericRecord {field1 :: a}
+data SomeGenericEnum = EVal1 | EVal2 | EVal3
+  deriving stock (Bounded, Enum, Eq, Generic, Show)
+  deriving (ToPgField) via (LowerCasedPgEnum SomeGenericEnum)
+
+data IntAndBool = IntAndBool {ibInt :: Int, ibBool :: Bool}
+  deriving stock (Eq, Show)
+
+instance ToPgField IntAndBool where
+  fieldEncoder =
+    typeFieldEncoder (typeOidWithName "int_and_bool") $
+      compositeTypeEncoder $
+        contramap (\(IntAndBool i b) -> (fromIntegral i :: Int32, b)) rowEncoder
 
 -- | This exists to test TypeApplications inside quasiquoters.
 polyFunc42 :: Proxy a -> Int
 polyFunc42 _ = 42
 
 -- | Queries built with the sql quasiquoter and #{} interpolation.
--- These test a variety of GHC extensions inside quasiquoters.
+-- These test a variety of GHC extensions and language syntax/features
+-- inside quasiquoters.
 genInterpolatedQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
 genInterpolatedQuery =
   Gen.choice
@@ -164,12 +179,15 @@ genInterpolatedQuery =
         pure ([sql|SELECT #{if True then x else 0}, #{polyFunc42 (Proxy @String)};|], toComparableParams (x, polyFunc42 (Proxy @String))),
       do
         x <- SomeRecord <$> genInt <*> genInt
-        pure ([sql|SELECT #{x.field1}, #{-(x.field2)};|], toComparableParams (x.field1, -(x.field2))),
+        y <- genInt
+        z <- Gen.bool
+        pure ([sql|SELECT #{x.field1}, #{-(x.field2)}, #{IntAndBool { ibInt = y, {- Some comment -} ibBool = z }};|], toComparableParams (x.field1, -(x.field2), IntAndBool y z)),
       do
         x <- genInt
         y <- genInt
         z <- genInt
-        pure ([sql|SELECT #{x} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, y, z))
+        e :: SomeGenericEnum <- Gen.enum minBound maxBound
+        pure ([sql|SELECT #{x}, #{e} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, e, y, z))
     ]
 
 -- | Queries built with ^{} embedded queries, including reused placeholders.

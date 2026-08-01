@@ -116,6 +116,15 @@ convertExpr (HsAppType _ (L _ e) (HsWC _ (L _ ty))) = TH.AppTypeE <$> convertExp
 #else
 convertExpr (HsAppType _ (L _ e) _ (HsWC _ (L _ ty))) = TH.AppTypeE <$> convertExpr e <*> convertType ty
 #endif
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertExpr (RecordCon _ (L _ conName) (HsRecFields _ flds _)) = do
+  flds' <- traverse convertRecField flds
+  Right $ TH.RecConE (rdrToName conName) flds'
+#elif MIN_VERSION_ghc_lib_parser(9,8,0)
+convertExpr (RecordCon _ (L _ conName) (HsRecFields flds _)) = do
+  flds' <- traverse convertRecField flds
+  Right $ TH.RecConE (rdrToName conName) flds'
+#endif
 -- convertExpr (HsAppType _ _ _) = Left "TypeApplications are still unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
 convertExpr _ = Left "Unsupported Haskell expression form in hpgsql's SQL quasi-quoter"
 
@@ -139,6 +148,11 @@ isConName n = case TH.nameBase n of
 
 fieldLabelToString :: FieldLabelString -> String
 fieldLabelToString (FieldLabelString fs) = unpackFS fs
+
+convertRecField :: LHsRecField GhcPs (LHsExpr GhcPs) -> Either String (TH.Name, TH.Exp)
+convertRecField (L _ (HsFieldBind _ (L _ (FieldOcc _ (L _ rdr))) (L _ expr) _)) = do
+  expr' <- convertExpr expr
+  Right (rdrToName rdr, expr')
 
 convertTupArg :: HsTupArg GhcPs -> Either String (Maybe TH.Exp)
 convertTupArg (Present _ (L _ e)) = Just <$> convertExpr e
