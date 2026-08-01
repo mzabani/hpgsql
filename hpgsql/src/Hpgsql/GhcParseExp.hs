@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PackageImports #-}
+{- FOURMOLU_DISABLE -}
 
 module Hpgsql.GhcParseExp (parseExp, canParseExp) where
 
@@ -129,36 +130,47 @@ convertExpr (RecordCon _ (L _ conName) (HsRecFields flds _)) = do
   Right $ TH.RecConE (rdrToName conName) flds'
 #endif
 convertExpr (HsCase _ (L _ caseExpr) mg) = TH.CaseE <$> convertExpr caseExpr <*> convertMatchGroup mg
-convertExpr (HsQual {}) = Left "HsQual is unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsFunArr {}) = Left "Function types are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsForAll {}) = Left "Forall-types are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsUnboundVar {}) = Left "Unbound variables/holes are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
--- convertExpr (HsRecSel {}) = Left "Record field selectors are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsOverLabel {}) = Left "Overloaded labels are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsIPVar {}) = Left "Implicit parameters are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsLam {}) = Left "Lambda expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (ExplicitSum {}) = Left "Unboxed sums are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsMultiIf {}) = Left "Multi-way if expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsLet {}) = Left "Let expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsDo {}) = Left "Do notation is unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (RecordUpd {}) = Left "Record updates are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (ArithSeq {}) = Left "Arithmetic sequences are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsTypedBracket {}) = Left "Typed Template Haskell brackets are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsUntypedBracket {}) = Left "Untyped Template Haskell brackets are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsTypedSplice {}) = Left "Typed Template Haskell splices are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsUntypedSplice {}) = Left "Untyped Template Haskell splices are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsProc {}) = Left "Arrow proc notation is unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsStatic {}) = Left "Static pointers are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsPragE {}) = Left "Pragma expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
-convertExpr (HsEmbTy {}) = Left "Embedded type expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
 
--- convertExpr (XExpr _) = Left "Unsupported expression form in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+-- Now come our list of unsupported language features
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertExpr (HsEmbTy {}) = unsupportedLanguageFeatureMsg "Embedded type expressions are"
+convertExpr (HsForAll {}) = unsupportedLanguageFeatureMsg "Forall-types are"
+convertExpr (HsFunArr {}) = unsupportedLanguageFeatureMsg "Function types are"
+convertExpr (HsQual {}) = unsupportedLanguageFeatureMsg "HsQual is"
+#else
+convertExpr (HsLamCase {}) = unsupportedLanguageFeatureMsg "Lambda expressions are"
+convertExpr (HsRecSel {}) = unsupportedLanguageFeatureMsg "Record field selectors are"
+#endif
+convertExpr (HsUnboundVar {}) = unsupportedLanguageFeatureMsg "Unbound variables/holes are"
+convertExpr (HsOverLabel {}) = unsupportedLanguageFeatureMsg "Overloaded labels are"
+convertExpr (HsIPVar {}) = unsupportedLanguageFeatureMsg "Implicit parameters are"
+convertExpr (HsLam {}) = unsupportedLanguageFeatureMsg "Lambda expressions are"
+convertExpr (ExplicitSum {}) = unsupportedLanguageFeatureMsg "Unboxed sums are"
+convertExpr (HsMultiIf {}) = unsupportedLanguageFeatureMsg "Multi-way if expressions are"
+convertExpr (HsLet {}) = unsupportedLanguageFeatureMsg "Let expressions are"
+convertExpr (HsDo {}) = unsupportedLanguageFeatureMsg "Do notation is"
+convertExpr (RecordUpd {}) = unsupportedLanguageFeatureMsg "Record updates are"
+convertExpr (ArithSeq {}) = unsupportedLanguageFeatureMsg "Arithmetic sequences are"
+convertExpr (HsTypedBracket {}) = unsupportedLanguageFeatureMsg "Typed Template Haskell brackets are"
+convertExpr (HsUntypedBracket {}) = unsupportedLanguageFeatureMsg "Untyped Template Haskell brackets are"
+convertExpr (HsTypedSplice {}) = unsupportedLanguageFeatureMsg "Typed Template Haskell splices are"
+convertExpr (HsUntypedSplice {}) = unsupportedLanguageFeatureMsg "Untyped Template Haskell splices are"
+convertExpr (HsProc {}) = unsupportedLanguageFeatureMsg "Arrow proc notation is"
+convertExpr (HsStatic {}) = unsupportedLanguageFeatureMsg "Static pointers are"
+convertExpr (HsPragE {}) = unsupportedLanguageFeatureMsg "Pragma expressions are"
+
+unsupportedLanguageFeatureMsg :: String -> Either String a
+unsupportedLanguageFeatureMsg feat = Left $ feat ++ " unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
 
 convertMatchGroup :: MatchGroup GhcPs (LHsExpr GhcPs) -> Either String [TH.Match]
 convertMatchGroup (MG _ (L _ matches)) = traverse convertMatch matches
 
 convertMatch :: LMatch GhcPs (LHsExpr GhcPs) -> Either String TH.Match
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
 convertMatch (L _ (Match _ _ (L _ pats) grhss)) = do
+#else
+convertMatch (L _ (Match _ _ pats grhss)) = do
+#endif
   pats' <- traverse (\(L _ p) -> convertPat p) pats
   (body, decs) <- convertGRHSs grhss
   case pats' of
