@@ -111,6 +111,8 @@ convertExpr (HsProjection _ flds) =
 convertExpr (HsProjection _ flds) =
   Right (TH.ProjectionE (fmap (\(L _ (DotFieldOcc _ (L _ fld))) -> fieldLabelToString fld) flds))
 #endif
+convertExpr (HsAppType _ (L _ e) (HsWC _ (L _ ty))) = TH.AppTypeE <$> convertExpr e <*> convertType ty
+-- convertExpr (HsAppType _ _ _) = Left "TypeApplications are still unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
 convertExpr _ = Left "Unsupported Haskell expression form in hpgsql's SQL quasi-quoter"
 
 -- Helper functions

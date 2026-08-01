@@ -6,6 +6,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NE
+import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
@@ -148,14 +149,19 @@ data SomeRecord = SomeRecord {field1 :: Int, field2 :: Int}
 
 -- newtype SomeGenericRecord a = SomeGenericRecord {field1 :: a}
 
+-- | This exists to test TypeApplications inside quasiquoters.
+polyFunc42 :: Proxy a -> Int
+polyFunc42 _ = 42
+
 -- | Queries built with the sql quasiquoter and #{} interpolation.
+-- These test a variety of GHC extensions inside quasiquoters.
 genInterpolatedQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
 genInterpolatedQuery =
   Gen.choice
     [ pure ([sql|SELECT 1, '#{x}', '^{y}';|], []),
       do
         x <- genInt
-        pure ([sql|SELECT #{if True then x else 0};|], toComparableParams (Only x)),
+        pure ([sql|SELECT #{if True then x else 0}, #{polyFunc42 (Proxy @String)};|], toComparableParams (x, polyFunc42 (Proxy @String))),
       do
         x <- SomeRecord <$> genInt <*> genInt
         pure ([sql|SELECT #{x.field1}, #{-(x.field2)};|], toComparableParams (x.field1, -(x.field2))),
