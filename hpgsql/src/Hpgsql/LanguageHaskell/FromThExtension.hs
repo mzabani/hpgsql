@@ -165,6 +165,8 @@ fromThToGhcLibExtension = \case
   -- why we have -Wno-overlapping-patterns in this file.
   someNewThExtension -> Map.lookup (show someNewThExtension) allGhcLibParserExtensions
 
+-- | This Map is only useful by assuming the `Show` representations of language extensions in both
+-- ghc-lib-parser and template-haskell match. That feels like a reasonable assumption.
 allGhcLibParserExtensions :: Map String Extension
 allGhcLibParserExtensions = Map.fromList $ map (\ex -> (show ex, ex)) [minBound..maxBound]
 
