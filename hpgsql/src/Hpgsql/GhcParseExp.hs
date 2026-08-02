@@ -133,34 +133,34 @@ convertExpr (HsCase _ (L _ caseExpr) mg) = TH.CaseE <$> convertExpr caseExpr <*>
 
 -- Now come our list of unsupported language features
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
-convertExpr (HsEmbTy {}) = unsupportedLanguageFeatureMsg "Embedded type expressions are"
-convertExpr (HsForAll {}) = unsupportedLanguageFeatureMsg "Forall-types are"
-convertExpr (HsFunArr {}) = unsupportedLanguageFeatureMsg "Function types are"
-convertExpr (HsQual {}) = unsupportedLanguageFeatureMsg "HsQual is"
+convertExpr (HsEmbTy {}) = unsupportedLanguageFeatureMsg "Embedded type"
+convertExpr (HsForAll {}) = unsupportedLanguageFeatureMsg "Forall-types"
+convertExpr (HsFunArr {}) = unsupportedLanguageFeatureMsg "Function types"
+convertExpr (HsQual {}) = unsupportedLanguageFeatureMsg "HsQual"
 #else
-convertExpr (HsLamCase {}) = unsupportedLanguageFeatureMsg "Lambda expressions are"
-convertExpr (HsRecSel {}) = unsupportedLanguageFeatureMsg "Record field selectors are"
+convertExpr (HsLamCase {}) = unsupportedLanguageFeatureMsg "LambdaCase"
+convertExpr (HsRecSel {}) = unsupportedLanguageFeatureMsg "Record field selectors"
 #endif
-convertExpr (HsUnboundVar {}) = unsupportedLanguageFeatureMsg "Unbound variables/holes are"
-convertExpr (HsOverLabel {}) = unsupportedLanguageFeatureMsg "Overloaded labels are"
-convertExpr (HsIPVar {}) = unsupportedLanguageFeatureMsg "Implicit parameters are"
-convertExpr (HsLam {}) = unsupportedLanguageFeatureMsg "Lambda expressions are"
-convertExpr (ExplicitSum {}) = unsupportedLanguageFeatureMsg "Unboxed sums are"
-convertExpr (HsMultiIf {}) = unsupportedLanguageFeatureMsg "Multi-way if expressions are"
-convertExpr (HsLet {}) = unsupportedLanguageFeatureMsg "Let expressions are"
-convertExpr (HsDo {}) = unsupportedLanguageFeatureMsg "Do notation is"
-convertExpr (RecordUpd {}) = unsupportedLanguageFeatureMsg "Record updates are"
-convertExpr (ArithSeq {}) = unsupportedLanguageFeatureMsg "Arithmetic sequences are"
-convertExpr (HsTypedBracket {}) = unsupportedLanguageFeatureMsg "Typed Template Haskell brackets are"
-convertExpr (HsUntypedBracket {}) = unsupportedLanguageFeatureMsg "Untyped Template Haskell brackets are"
-convertExpr (HsTypedSplice {}) = unsupportedLanguageFeatureMsg "Typed Template Haskell splices are"
-convertExpr (HsUntypedSplice {}) = unsupportedLanguageFeatureMsg "Untyped Template Haskell splices are"
-convertExpr (HsProc {}) = unsupportedLanguageFeatureMsg "Arrow proc notation is"
-convertExpr (HsStatic {}) = unsupportedLanguageFeatureMsg "Static pointers are"
-convertExpr (HsPragE {}) = unsupportedLanguageFeatureMsg "Pragma expressions are"
+convertExpr (HsUnboundVar {}) = unsupportedLanguageFeatureMsg "Unbound variables/holes"
+convertExpr (HsOverLabel {}) = unsupportedLanguageFeatureMsg "Overloaded labels"
+convertExpr (HsIPVar {}) = unsupportedLanguageFeatureMsg "Implicit parameters"
+convertExpr (HsLam {}) = unsupportedLanguageFeatureMsg "Lambda"
+convertExpr (ExplicitSum {}) = unsupportedLanguageFeatureMsg "Unboxed sums"
+convertExpr (HsMultiIf {}) = unsupportedLanguageFeatureMsg "Multi-way if"
+convertExpr (HsLet {}) = unsupportedLanguageFeatureMsg "Let"
+convertExpr (HsDo {}) = unsupportedLanguageFeatureMsg "Do notation"
+convertExpr (RecordUpd {}) = unsupportedLanguageFeatureMsg "Record updates"
+convertExpr (ArithSeq {}) = unsupportedLanguageFeatureMsg "Arithmetic sequences"
+convertExpr (HsTypedBracket {}) = unsupportedLanguageFeatureMsg "Typed Template Haskell brackets"
+convertExpr (HsUntypedBracket {}) = unsupportedLanguageFeatureMsg "Untyped Template Haskell brackets"
+convertExpr (HsTypedSplice {}) = unsupportedLanguageFeatureMsg "Typed Template Haskell splices"
+convertExpr (HsUntypedSplice {}) = unsupportedLanguageFeatureMsg "Untyped Template Haskell splices"
+convertExpr (HsProc {}) = unsupportedLanguageFeatureMsg "Arrow proc notation"
+convertExpr (HsStatic {}) = unsupportedLanguageFeatureMsg "Static pointers"
+convertExpr (HsPragE {}) = unsupportedLanguageFeatureMsg "Pragma"
 
 unsupportedLanguageFeatureMsg :: String -> Either String a
-unsupportedLanguageFeatureMsg feat = Left $ feat ++ " unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+unsupportedLanguageFeatureMsg feat = Left $ feat ++ " expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
 
 convertMatchGroup :: MatchGroup GhcPs (LHsExpr GhcPs) -> Either String [TH.Match]
 convertMatchGroup (MG _ (L _ matches)) = traverse convertMatch matches
