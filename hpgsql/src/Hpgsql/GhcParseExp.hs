@@ -17,6 +17,7 @@ import GHC.Parser (parseExpression)
 import GHC.Parser.Lexer (P (..), ParseResult (..), initParserState)
 import GHC.Parser.PostProcess (ECP (..), runPV)
 import GHC.Types.Basic (Boxity (..))
+import GHC.Types.Name (nameOccName)
 import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (RdrName (..))
 import GHC.Types.SourceText (IntegralLit (..), rationalFromFractionalLit)
@@ -100,7 +101,7 @@ convertExpr (HsIf _ (L _ c) (L _ t) (L _ f)) = do
   f' <- convertExpr f
   Right (TH.CondE c' t' f')
 convertExpr (HsLit _ lit) = TH.LitE <$> convertHsLit lit
-convertExpr (HsOverLit _ ol) = convertOverLit ol
+convertExpr (HsOverLit _ ol) = TH.LitE <$> convertOverLit ol
 convertExpr (ExprWithTySig _ (L _ e) sigWcTy) = do
   e' <- convertExpr e
   ty' <- convertSigWcType sigWcTy
@@ -175,19 +176,20 @@ convertMatch (L _ (Match _ _ pats grhss)) = do
   (body, decs) <- convertGRHSs grhss
   case pats' of
     [pat] -> Right (TH.Match pat body decs)
-    _ -> Left "Multi-pattern matches are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+    _ -> unsupportedLanguageFeatureMsg "Multi-pattern matches"
 
 convertGRHSs :: GRHSs GhcPs (LHsExpr GhcPs) -> Either String (TH.Body, [TH.Dec])
 convertGRHSs (GRHSs _ grhss localBinds) = do
   decs <- convertLocalBinds localBinds
   body <- case grhss of
     [L _ (GRHS _ [] (L _ e))] -> TH.NormalB <$> convertExpr e
-    _ -> Left "Guarded case alternatives are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+    _ -> unsupportedLanguageFeatureMsg "Guarded case alternative"
   Right (body, decs)
 
 convertLocalBinds :: HsLocalBinds GhcPs -> Either String [TH.Dec]
 convertLocalBinds (EmptyLocalBinds _) = Right []
-convertLocalBinds _ = Left "Where clauses in case expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertLocalBinds (HsValBinds {}) = unsupportedLanguageFeatureMsg "HsValBinds"
+convertLocalBinds (HsIPBinds {}) = unsupportedLanguageFeatureMsg "HsIPBinds"
 
 -- Pattern conversion (GHC Pat to TH Pat)
 
@@ -195,11 +197,7 @@ convertPat :: Pat GhcPs -> Either String TH.Pat
 convertPat (WildPat _) = Right TH.WildP
 convertPat (VarPat _ (L _ rdr)) = Right (TH.VarP (rdrToName rdr))
 convertPat (LitPat _ lit) = TH.LitP <$> convertHsLit lit
-convertPat (NPat _ (L _ ol) _ _) = do
-  e <- convertOverLit ol
-  case e of
-    TH.LitE lit -> Right (TH.LitP lit)
-    _ -> Left "Unsupported overloaded literal pattern in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+convertPat (NPat _ (L _ ol) _ _) = TH.LitP <$> convertOverLit ol
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
 convertPat (ConPat _ (L _ con) details) = convertConPatDetails con details
 #elif MIN_VERSION_ghc_lib_parser(9,8,0)
@@ -219,7 +217,18 @@ convertPat (ParPat _ _ (L _ p) _) = TH.ParensP <$> convertPat p
 convertPat (AsPat _ (L _ rdr) _ (L _ p)) = TH.AsP (rdrToName rdr) <$> convertPat p
 #endif
 convertPat (BangPat _ (L _ p)) = TH.BangP <$> convertPat p
-convertPat _ = Left "Unsupported pattern form in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+-- Unsupported pattern matching expressions
+convertPat (LazyPat{}) = unsupportedLanguageFeatureMsg "LazyPat in pattern matching"
+convertPat (ViewPat{}) = unsupportedLanguageFeatureMsg "ViewPat in pattern matching"
+convertPat (SumPat{}) = unsupportedLanguageFeatureMsg "SumPat in pattern matching"
+convertPat (SplicePat{}) = unsupportedLanguageFeatureMsg "SplicePat in pattern matching"
+convertPat (SigPat{}) = unsupportedLanguageFeatureMsg "SigPat in pattern matching"
+convertPat (NPlusKPat{}) = unsupportedLanguageFeatureMsg "NPlusKPat in pattern matching"
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertPat (EmbTyPat{}) = unsupportedLanguageFeatureMsg "EmbTyPat in pattern matching"
+convertPat (InvisPat{}) = unsupportedLanguageFeatureMsg "InvisPat in pattern matching"
+convertPat (OrPat{}) = unsupportedLanguageFeatureMsg "OrPat in pattern matching"
+#endif
 
 convertConPatDetails :: RdrName -> HsConPatDetails GhcPs -> Either String TH.Pat
 convertConPatDetails con (PrefixCon tyArgs args) = do
@@ -256,7 +265,8 @@ rdrToExp rdr =
 rdrToName :: RdrName -> TH.Name
 rdrToName (Unqual occ) = TH.mkName (occNameString occ)
 rdrToName (Qual modN occ) = TH.mkName (moduleNameString modN ++ "." ++ occNameString occ)
-rdrToName _ = TH.mkName "<unknown-name>"
+rdrToName (Orig _ occ) = TH.mkName (occNameString occ)
+rdrToName (Exact name) = TH.mkName (occNameString (nameOccName name))
 
 isConName :: TH.Name -> Bool
 isConName n = case TH.nameBase n of
@@ -284,13 +294,27 @@ convertHsLit (HsIntPrim _ i) = Right (TH.IntPrimL i)
 convertHsLit (HsWordPrim _ w) = Right (TH.WordPrimL w)
 convertHsLit (HsFloatPrim _ fl) = Right (TH.FloatPrimL (rationalFromFractionalLit fl)) -- TODO Why rational?
 convertHsLit (HsDoublePrim _ fl) = Right (TH.DoublePrimL (rationalFromFractionalLit fl))
-convertHsLit _ = Left "Unsupported literal type in SQL quasi-quoter"
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertHsLit (HsMultilineString _ fs) = Right (TH.StringL (unpackFS fs))
+#endif
+convertHsLit (HsCharPrim {}) = unsupportedLanguageFeatureMsg "HsCharPrim literal"
+convertHsLit (HsStringPrim {}) = unsupportedLanguageFeatureMsg "HsStringPrim literal"
+convertHsLit (HsInt8Prim {}) = unsupportedLanguageFeatureMsg "HsInt8Prim literal"
+convertHsLit (HsInt16Prim {}) = unsupportedLanguageFeatureMsg "HsInt16Prim literal"
+convertHsLit (HsInt32Prim {}) = unsupportedLanguageFeatureMsg "HsInt32Prim literal"
+convertHsLit (HsInt64Prim {}) = unsupportedLanguageFeatureMsg "HsInt64Prim literal"
+convertHsLit (HsWord8Prim {}) = unsupportedLanguageFeatureMsg "HsWord8Prim literal"
+convertHsLit (HsWord16Prim {}) = unsupportedLanguageFeatureMsg "HsWord16Prim literal"
+convertHsLit (HsWord32Prim {}) = unsupportedLanguageFeatureMsg "HsWord32Prim literal"
+convertHsLit (HsWord64Prim {}) = unsupportedLanguageFeatureMsg "HsWord64Prim literal"
+convertHsLit (HsInteger {}) = unsupportedLanguageFeatureMsg "HsInteger literal"
+convertHsLit (HsRat {}) = unsupportedLanguageFeatureMsg "HsRat literal"
 
-convertOverLit :: HsOverLit GhcPs -> Either String TH.Exp
+convertOverLit :: HsOverLit GhcPs -> Either String TH.Lit
 convertOverLit ol = case ol_val ol of
-  HsIntegral il -> Right (TH.LitE (TH.IntegerL (il_value il)))
-  HsFractional fl -> Right (TH.LitE (TH.RationalL (rationalFromFractionalLit fl)))
-  HsIsString _ fs -> Right (TH.LitE (TH.StringL (unpackFS fs)))
+  HsIntegral il -> Right (TH.IntegerL (il_value il))
+  HsFractional fl -> Right (TH.RationalL (rationalFromFractionalLit fl))
+  HsIsString _ fs -> Right (TH.StringL (unpackFS fs))
 
 -- Type conversion (GHC HsType to TH Type)
 
@@ -319,4 +343,19 @@ convertType (HsParTy _ (L _ t)) =
   convertType t
 convertType (HsQualTy _ _ (L _ t)) =
   convertType t
-convertType _ = Left "Unsupported type in SQL quasi-quoter type signature"
+convertType (HsForAllTy{}) = unsupportedLanguageFeatureMsg "HsForAllTy in a type"
+convertType (HsAppKindTy{}) = unsupportedLanguageFeatureMsg "HsAppKindTy in a type"
+convertType (HsOpTy{}) = unsupportedLanguageFeatureMsg "HsOpTy in a type"
+convertType (HsSumTy{}) = unsupportedLanguageFeatureMsg "HsSumTy in a type"
+convertType (HsIParamTy{}) = unsupportedLanguageFeatureMsg "HsIParamTy in a type"
+convertType (HsStarTy{}) = unsupportedLanguageFeatureMsg "HsStarTy in a type"
+convertType (HsKindSig{}) = unsupportedLanguageFeatureMsg "HsKindSig in a type"
+convertType (HsSpliceTy{}) = unsupportedLanguageFeatureMsg "HsSpliceTy in a type"
+convertType (HsDocTy{}) = unsupportedLanguageFeatureMsg "HsDocTy in a type"
+convertType (HsBangTy{}) = unsupportedLanguageFeatureMsg "HsBangTy in a type"
+convertType (HsRecTy{}) = unsupportedLanguageFeatureMsg "HsRecTy in a type"
+convertType (HsExplicitListTy{}) = unsupportedLanguageFeatureMsg "HsExplicitListTy in a type"
+convertType (HsExplicitTupleTy{}) = unsupportedLanguageFeatureMsg "HsExplicitTupleTy in a type"
+convertType (HsTyLit{}) = unsupportedLanguageFeatureMsg "HsTyLit in a type"
+convertType (HsWildCardTy{}) = unsupportedLanguageFeatureMsg "HsWildCardTy in a type"
+convertType (XHsType{}) = unsupportedLanguageFeatureMsg "XHsType in a type"

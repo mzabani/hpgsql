@@ -12,6 +12,7 @@ import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import qualified Data.Vector as Vector
 import GHC.Generics (Generic)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
@@ -167,6 +168,9 @@ instance ToPgField IntAndBool where
 polyFunc42 :: Proxy a -> Int
 polyFunc42 _ = 42
 
+infixFunc :: Char -> String -> String
+infixFunc c s = c : s
+
 -- | Queries built with the sql quasiquoter and #{} interpolation.
 -- These test a variety of GHC extensions and language syntax/features
 -- inside quasiquoters.
@@ -176,30 +180,33 @@ genInterpolatedQuery =
     [ pure ([sql|SELECT 1, '#{x}', '^{y}';|], []),
       do
         x <- genInt
-        pure ([sql|SELECT #{if True then x else 0}, #{polyFunc42 (Proxy @String)};|], toComparableParams (x, polyFunc42 (Proxy @String))),
+        y <- genInt
+        c <- genChar
+        pure ([sql|SELECT #{c `infixFunc` "abc"} #{if True then x else 0}, #{polyFunc42 (Proxy @String)}, #{Vector.fromList $ 37 : [45, y]};|], toComparableParams (c `infixFunc` "abc", x, polyFunc42 (Proxy @String), Vector.fromList [37, 45, y])),
       do
         x <- SomeRecord <$> genInt <*> genInt
         y <- genInt
         z <- Gen.bool
-        pure ([sql|SELECT #{x.field1}, #{-(x.field2)}, #{IntAndBool { ibInt = y, {- Some comment -} ibBool = z }};|], toComparableParams (x.field1, -(x.field2), IntAndBool y z)),
+        pure ([sql|SELECT #{x.field1}, #{-(x.field2)}, #{IntAndBool { ibInt = y, {- Some comment -} ibBool = z }}, #{'a'};|], toComparableParams (x.field1, -(x.field2), IntAndBool y z, 'a')),
       do
         x <- genInt
         y <- genInt
         z <- genInt
         e :: SomeGenericEnum <- Gen.enum minBound maxBound
-        pure ([sql|SELECT #{x}, #{e} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, e, y, z)),
+        pure ([sql|SELECT #{x}, #{e} FROM t WHERE #{y} BETWEEN 0 AND #{fromIntegral z + 1.421::Float};|], toComparableParams (x, e, y, fromIntegral z + 1.421 :: Float)),
       do
         x <- genInt
         b <- Gen.bool
         pure
           ( [sql|SELECT #{fst <$> Just (b, False)}, #{case compare x 0 of
-                                                      EQ -> "abc"::Text
+                                                      !EQ -> "abc"::Text
                                                       GT -> "cde"
-                                                      LT -> "xyz"};|],
+                                                      LT -> "xyz"
+                                                      _ -> error "Impossible"};|],
             toComparableParams
               ( b,
                 case compare x 0 of
-                  EQ -> "abc" :: Text
+                  !EQ -> "abc" :: Text
                   GT -> "cde"
                   LT -> "xyz"
               )
