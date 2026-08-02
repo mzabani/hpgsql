@@ -1,6 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PackageImports #-}
-{- FOURMOLU_DISABLE -}
+{- FOURMOLU_DISABLE -} -- CPP macros make fourmolu fail
 
 module Hpgsql.GhcParseExp (parseExp, canParseExp) where
 

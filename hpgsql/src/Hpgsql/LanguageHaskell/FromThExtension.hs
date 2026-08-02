@@ -1,13 +1,13 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PackageImports #-}
 {-# OPTIONS_GHC -Wno-overlapping-patterns #-}
-{- FOURMOLU_DISABLE -}
+
 module Hpgsql.LanguageHaskell.FromThExtension where
 
-import qualified "template-haskell" Language.Haskell.TH as TH
-import GHC.LanguageExtensions.Type (Extension (..))
 import Data.Map (Map)
 import qualified Data.Map as Map
+import GHC.LanguageExtensions.Type (Extension (..))
+import qualified "template-haskell" Language.Haskell.TH as TH
 
 fromThToGhcLibExtension :: TH.Extension -> Maybe Extension
 fromThToGhcLibExtension = \case
@@ -163,11 +163,11 @@ fromThToGhcLibExtension = \case
   -- feels important.
   -- So we achieve a little bit of both goals like this. This is also the reason
   -- why we have -Wno-overlapping-patterns in this file.
+{- FOURMOLU_DISABLE -}
   someNewThExtension -> Map.lookup (show someNewThExtension) allGhcLibParserExtensions
+{- FOURMOLU_ENABLE -}
 
 -- | This Map is only useful by assuming the `Show` representations of language extensions in both
 -- ghc-lib-parser and template-haskell match. That feels like a reasonable assumption.
 allGhcLibParserExtensions :: Map String Extension
-allGhcLibParserExtensions = Map.fromList $ map (\ex -> (show ex, ex)) [minBound..maxBound]
-
-
+allGhcLibParserExtensions = Map.fromList $ map (\ex -> (show ex, ex)) [minBound .. maxBound]
