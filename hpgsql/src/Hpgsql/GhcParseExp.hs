@@ -260,7 +260,7 @@ convertPatRecField (L _ (HsFieldBind _ (L _ (FieldOcc _ (L _ rdr))) (L _ pat) _)
 rdrToExp :: RdrName -> TH.Exp
 rdrToExp rdr =
   let name = rdrToName rdr
-   in if isConName name then TH.ConE name else TH.VarE name
+   in if isConstructorName name then TH.ConE name else TH.VarE name
 
 rdrToName :: RdrName -> TH.Name
 rdrToName (Unqual occ) = TH.mkName (occNameString occ)
@@ -268,9 +268,8 @@ rdrToName (Qual modN occ) = TH.mkName (moduleNameString modN ++ "." ++ occNameSt
 rdrToName (Orig _ occ) = TH.mkName (occNameString occ)
 rdrToName (Exact name) = TH.mkName (occNameString (nameOccName name))
 
-isConName :: TH.Name -> Bool
-isConName n = case TH.nameBase n of
-  -- TODO: No module name check?
+isConstructorName :: TH.Name -> Bool
+isConstructorName n = case TH.nameBase n of
   (c : _) -> isUpper c || c == ':'
   _ -> False
 
@@ -327,7 +326,7 @@ convertType (HsTyVar _ promo (L _ rdr)) =
    in Right $ case promo of
         IsPromoted -> TH.PromotedT name
         NotPromoted
-          | isConName name -> TH.ConT name
+          | isConstructorName name -> TH.ConT name
           | otherwise -> TH.VarT name
 convertType (HsAppTy _ (L _ t1) (L _ t2)) =
   TH.AppT <$> convertType t1 <*> convertType t2
