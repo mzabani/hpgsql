@@ -161,7 +161,7 @@ convertExpr (HsStatic {}) = unsupportedLanguageFeatureMsg "Static pointers"
 convertExpr (HsPragE {}) = unsupportedLanguageFeatureMsg "Pragma"
 
 unsupportedLanguageFeatureMsg :: String -> Either String a
-unsupportedLanguageFeatureMsg feat = Left $ feat ++ " expressions are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+unsupportedLanguageFeatureMsg feat = Left $ feat ++ " expressions are unsupported in hpgsql's SQL quasi-quoter. You can usually assign your expression to a binding outside the quasi-quoter and keep only that binding inside, but do raise an issue at https://github.com/mzabani/hpgsql/issues if you want this to be supported."
 
 convertMatchGroup :: MatchGroup GhcPs (LHsExpr GhcPs) -> Either String [TH.Match]
 convertMatchGroup (MG _ (L _ matches)) = traverse convertMatch matches
