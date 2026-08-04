@@ -43,6 +43,7 @@ library
       Hpgsql.Types
   other-modules:
       Hpgsql.Base
+      Hpgsql.Encoding.BinarySerializer
       Hpgsql.Internal
       Hpgsql.LanguageHaskell.FromThExtension
       Hpgsql.LanguageHaskell.GhcParserOpts

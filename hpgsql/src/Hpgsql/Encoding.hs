@@ -107,6 +107,7 @@ import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
 import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
+import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeDetails (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
@@ -163,7 +164,7 @@ singleField (FieldDecoder {..}) =
         [singleColInfo] ->
           let decode = fieldValueDecoder singleColInfo
            in do
-                lenNextCol <- fromIntegral <$> int32Parser
+                lenNextCol <- fromIntegral <$> Parser.takeInt32BE
                 nextColBs <-
                   if lenNextCol >= 0
                     then
@@ -178,9 +179,6 @@ singleField (FieldDecoder {..}) =
         _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
       numExpectedColumns = 1
     }
-
-int32Parser :: Parser.Parser Int32
-int32Parser = either fail pure . Cereal.decode @Int32 =<< Parser.take 4
 
 class FromPgField a where
   fieldDecoder :: FieldDecoder a
@@ -216,12 +214,12 @@ compositeTypeDecoder (RowDecoder {..}) =
     parserForRecord encodingContext = do
       -- From https://github.com/postgres/postgres/blob/50ba65e73325cf55fedb3e1f14673d816726923b/src/backend/utils/adt/rowtypes.c#L687
       -- we can see a composite type's binary representation consists of: number of columns (Int32) + for_each_column { OID (Int32) + size_or_minus_1 (Int32) + Bytes }
-      numCols <- fromIntegral <$> int32Parser
+      numCols <- fromIntegral <$> Parser.takeInt32BE
       unless (numCols == numExpectedColumns) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numExpectedColumns
       let mkColInfo oid = FieldInfo oid Nothing encodingContext
       cols <- replicateM numCols $ do
-        !oid <- Oid . fromIntegral <$> int32Parser
-        (sizeBs, !size) <- Parser.match $ fromIntegral <$> int32Parser
+        !oid <- Oid . fromIntegral <$> Parser.takeInt32BE
+        (sizeBs, !size) <- Parser.match $ fromIntegral <$> Parser.takeInt32BE
         !bs <- Parser.take (max 0 size)
         pure (oid, sizeBs <> bs)
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
@@ -747,17 +745,17 @@ binaryIntDecoder typOid = \bs ->
     maxBoundPgType :: Integer
     intDecoder :: ByteString -> Either String a
     (maxBoundPgType, intDecoder)
-      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . Cereal.decode @Int64)
-      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . Cereal.decode @Int32)
-      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . Cereal.decode @Int16)
+      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . BinSer.decodeInt64BE)
+      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . BinSer.decodeInt32BE)
+      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . BinSer.decodeInt16BE)
       | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
 binaryFloat4Decoder :: ByteString -> Float
-binaryFloat4Decoder = castWord32ToFloat . either error id . Cereal.decode @Word32
+binaryFloat4Decoder = castWord32ToFloat . either error id . BinSer.decodeWord32BE
 
 binaryFloat8Decoder :: ByteString -> Double
-binaryFloat8Decoder = castWord64ToDouble . either error id . Cereal.decode @Word64
+binaryFloat8Decoder = castWord64ToDouble . either error id . BinSer.decodeWord64BE
 
 parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldDecoder a
 parsePgType !requiredTypeOids !fieldValueDecoder =
@@ -890,11 +888,11 @@ typeMustBeNamed typName = \fieldInfo ->
 
 scientificDecoder :: Bool -> Parser.Parser Scientific
 scientificDecoder mustBeInteger = do
-  ndigits <- int16Parser
-  weight <- int16Parser
-  sign <- int16Parser -- 0x0000 is positive, 0x4000 is negative, 0xC000 is NAN, 0xD000 is Positive Infinity, 0xF000 is Negative Infinity
+  ndigits <- Parser.takeInt16BE
+  weight <- Parser.takeInt16BE
+  sign <- Parser.takeInt16BE -- 0x0000 is positive, 0x4000 is negative, 0xC000 is NAN, 0xD000 is Positive Infinity, 0xF000 is Negative Infinity
   unless (sign == 0x0000 || sign == 0x4000) $ fail "NaN, positive or negative infinities cannot be decoded into Integer or Scientific"
-  !dscale <- int16Parser
+  !dscale <- Parser.takeInt16BE
   when (mustBeInteger && dscale /= 0) $ fail "Decoding into `Integer` requires explicit casting with `numeric(X,0)` to force integral values"
   valueAbs <- parseAndMult ndigits (fromIntegral weight * 4) 0
   pure $ (if sign == 0x0000 then 1 else (-1)) * valueAbs
@@ -902,7 +900,7 @@ scientificDecoder mustBeInteger = do
     parseAndMult :: Int16 -> Int -> Scientific -> Parser.Parser Scientific
     parseAndMult 0 _ !val = pure val
     parseAndMult !ndigitsLeft !currexpon !val = do
-      !digit <- fromIntegral <$> int16Parser
+      !digit <- fromIntegral <$> Parser.takeInt16BE
       parseAndMult (ndigitsLeft - 1) (currexpon - 4) (val + scientific digit currexpon)
 
 instance FromPgField Scientific where
@@ -1003,7 +1001,7 @@ instance FromPgField UTCTime where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decode @Int64 bs
+      totalusecs <- BinSer.decodeInt64BE bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1013,7 +1011,7 @@ instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decode @Int64 bs
+      totalusecs <- BinSer.decodeInt64BE bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -1030,7 +1028,7 @@ instance FromPgField ZonedTime where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decode @Int64 bs
+      totalusecs <- BinSer.decodeInt64BE bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1040,7 +1038,7 @@ instance FromPgField (Unbounded ZonedTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- Cereal.decode @Int64 bs
+      totalusecs <- BinSer.decodeInt64BE bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -1056,7 +1054,7 @@ instance FromPgField (Unbounded ZonedTime) where
 instance FromPgField LocalTime where
   fieldDecoder = parsePgType [timestampOid] $ \case
     Just bs -> do
-      totalusecs <- Cereal.decode @Int64 bs
+      totalusecs <- BinSer.decodeInt64BE bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1065,7 +1063,7 @@ instance FromPgField LocalTime where
 instance FromPgField TimeOfDay where
   fieldDecoder = parsePgType [timeOid] $ \case
     Just bs -> do
-      usecs <- Cereal.decode @Int64 bs
+      usecs <- BinSer.decodeInt64BE bs
       Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
     Nothing -> Left "Cannot decode SQL null as the Haskell TimeOfDay type. Use a `Maybe TimeOfDay`"
 
@@ -1075,7 +1073,7 @@ instance FromPgField Day where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- Cereal.decode @Int32 bs
+      jd <- BinSer.decodeInt32BE bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
 
@@ -1085,7 +1083,7 @@ instance FromPgField (Unbounded Day) where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- Cereal.decode @Int32 bs
+      jd <- BinSer.decodeInt32BE bs
       Right $
         if jd == minBound
           then NegInfinity
@@ -1099,7 +1097,9 @@ instance FromPgField (Unbounded Day) where
 instance FromPgField CalendarDiffTime where
   fieldDecoder = parsePgType [intervalOid] $ \case
     Just bs -> do
-      (nMicrosecs :: Int64, nDays :: Int32, nMonths :: Int32) <- Cereal.decode bs
+      nMicrosecs <- BinSer.decodeInt64BE bs
+      nDays <- BinSer.decodeInt32BE (BS.drop 8 bs)
+      nMonths <- BinSer.decodeInt32BE (BS.drop 12 bs)
       Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
     Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
 
@@ -1115,15 +1115,13 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
-                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \case
+                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                    Just d -> Right d
+                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 
@@ -1171,32 +1169,29 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
       !elementParser = fieldDecoder @a
       arrayParser :: EncodingContext -> Parser.Parser (Vector (Vector a))
       arrayParser encodingContext = do
-        !ndim <- int32Parser
-        !_hasNull <- int32Parser
-        !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
+        !ndim <- Parser.takeInt32BE
+        !_hasNull <- Parser.takeInt32BE
+        !elementTypeOid :: Oid <- Oid . fromIntegral <$> Parser.takeInt32BE
         let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
         when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
         unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
         numRows <- do
-          !dim_i :: Int <- fromIntegral <$> int32Parser
-          !_lb_i <- int32Parser
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
           pure dim_i
         lengthEachRow <- do
-          !dim_i :: Int <- fromIntegral <$> int32Parser
-          !_lb_i <- int32Parser
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
           pure dim_i
 
         Vector.replicateM numRows $ do
           Vector.replicateM lengthEachRow $
             do
-              size :: Int <- fromIntegral <$> int32Parser
+              size :: Int <- fromIntegral <$> Parser.takeInt32BE
               elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
               case elementParser.fieldValueDecoder elementColInfo elementBs of
                 Left err -> fail $ "Error parsing array element: " ++ show err
                 Right el -> pure el
-
-int16Parser :: Parser.Parser Int16
-int16Parser = either fail pure . Cereal.decode @Int16 =<< Parser.take 2
 
 -- | Derives `FromPgRow` generically.
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
@@ -1361,19 +1356,19 @@ arrayField !replicateFunction !elementParser =
   where
     arrayParser :: EncodingContext -> Parser.Parser (f a)
     arrayParser encodingContext = do
-      !ndim <- int32Parser
-      !_hasNull <- int32Parser
-      !elementTypeOid :: Oid <- Oid . fromIntegral <$> int32Parser
+      !ndim <- Parser.takeInt32BE
+      !_hasNull <- Parser.takeInt32BE
+      !elementTypeOid :: Oid <- Oid . fromIntegral <$> Parser.takeInt32BE
       let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
       when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
       if ndim == 0
         then pure mempty
         else do
-          !dim_i :: Int <- fromIntegral <$> int32Parser
-          !_lb_i <- int32Parser
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
           unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
           replicateFunction dim_i $ do
-            size :: Int <- fromIntegral <$> int32Parser
+            size :: Int <- fromIntegral <$> Parser.takeInt32BE
             elementBs <- if size == (-1) then pure Nothing else Just <$> Parser.take size
             case elementParser.fieldValueDecoder elementColInfo elementBs of
               Left err -> fail $ "Error parsing array element: " ++ show err

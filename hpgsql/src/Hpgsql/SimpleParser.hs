@@ -14,11 +14,16 @@ module Hpgsql.SimpleParser
     match,
     parseMany,
     matchLeftUnconsumed,
+    takeInt16BE,
+    takeInt32BE,
+    takeInt64BE,
   )
 where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.Int (Int16, Int32, Int64)
+import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Prelude hiding (take)
 
 data ParseResult a
@@ -86,6 +91,24 @@ take n = Parser $ \bs kf ks ->
     else
       ks mempty bs
 {-# INLINE take #-}
+
+takeInt16BE :: Parser Int16
+takeInt16BE = Parser $ \bs kf ks ->
+  case BinSer.decodeInt16BE bs of
+    Left err -> kf err
+    Right v -> ks v (BS.drop 2 bs)
+
+takeInt32BE :: Parser Int32
+takeInt32BE = Parser $ \bs kf ks ->
+  case BinSer.decodeInt32BE bs of
+    Left err -> kf err
+    Right v -> ks v (BS.drop 4 bs)
+
+takeInt64BE :: Parser Int64
+takeInt64BE = Parser $ \bs kf ks ->
+  case BinSer.decodeInt64BE bs of
+    Left err -> kf err
+    Right v -> ks v (BS.drop 8 bs)
 
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \bs' _kf ks -> let (vs, rest) = go bs' in ks vs rest
