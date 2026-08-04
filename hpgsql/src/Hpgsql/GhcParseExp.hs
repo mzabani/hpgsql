@@ -291,7 +291,7 @@ convertHsLit (HsString _ fs) = Right (TH.StringL (unpackFS fs))
 convertHsLit (HsInt _ il) = Right (TH.IntegerL (il_value il))
 convertHsLit (HsIntPrim _ i) = Right (TH.IntPrimL i)
 convertHsLit (HsWordPrim _ w) = Right (TH.WordPrimL w)
-convertHsLit (HsFloatPrim _ fl) = Right (TH.FloatPrimL (rationalFromFractionalLit fl)) -- TODO Why rational?
+convertHsLit (HsFloatPrim _ fl) = Right (TH.FloatPrimL (rationalFromFractionalLit fl))
 convertHsLit (HsDoublePrim _ fl) = Right (TH.DoublePrimL (rationalFromFractionalLit fl))
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
 convertHsLit (HsMultilineString _ fs) = Right (TH.StringL (unpackFS fs))
