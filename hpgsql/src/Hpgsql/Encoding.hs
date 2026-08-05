@@ -679,15 +679,6 @@ instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
   rowEncoder = divide (\(a, b, c, d) -> ((a, b), (c, d))) rowEncoder rowEncoder
 
--- This instance implements toBinaryCopyBytes as well because we did this
--- to test if this method can help improve performance of COPY in our
--- benchmarks. We found that it can, but we didn't bother yet implementing
--- this for other types.
--- toBinaryCopyBytes encCtx = \(a, b, c, d) -> Builder.int16BE 4 <> toPgFieldWithSize a <> toPgFieldWithSize b <> toPgFieldWithSize c <> toPgFieldWithSize d
---   where
---     toPgFieldWithSize :: (ToPgField x) => x -> Builder.Builder
---     toPgFieldWithSize v = Builder.binaryField $ toPgField encCtx v
-
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
   rowEncoder = divide (\(a, b, c, d, e) -> ((a, b, c), (d, e))) rowEncoder rowEncoder
 
