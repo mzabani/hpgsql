@@ -87,7 +87,6 @@ import Data.Monoid (Sum (..))
 import Data.Proxy (Proxy (..))
 import Data.Ratio (Ratio)
 import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
-import qualified Data.Serialize as Cereal
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
@@ -100,8 +99,7 @@ import Data.UUID.Types (UUID)
 import qualified Data.UUID.Types as UUID
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
-import Data.Word (Word32, Word64)
-import GHC.Float (castDoubleToWord64, castFloatToWord32, castWord32ToFloat, castWord64ToDouble, expt, float2Double)
+import GHC.Float (castWord32ToFloat, castWord64ToDouble, expt, float2Double)
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
@@ -335,7 +333,7 @@ instance ToPgField Int16 where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just int2Oid,
-        toPgField = \_ -> \n -> NotNull $ Cereal.encode n
+        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt16BE n
       }
 
 instance ToPgField Int32 where
@@ -349,7 +347,7 @@ instance ToPgField Int64 where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just int8Oid,
-        toPgField = \_ -> \n -> NotNull $ Cereal.encode n
+        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt64BE n
       }
 
 instance ToPgField Integer where
@@ -380,7 +378,7 @@ instance ToPgField Scientific where
     FieldEncoder
       { toTypeOid = \_ -> Just numericOid,
         toPgField = \_ -> \n ->
-          let sign = Cereal.encode @Int16 $ if n >= 0 then 0 else 0x4000
+          let sign = BinSer.encodeInt16BE $ if n >= 0 then 0 else 0x4000
               -- The number is coeff * 10^exp, but we want it in base-10000 so we convert it to
               -- new_coeff * 10^new_exp with new_exp a multiple of 4
               base10000Expon = 4 * (base10Exponent n `div` 4)
@@ -388,8 +386,8 @@ instance ToPgField Scientific where
               ndigits, weight :: Int16
               digits :: ByteString
               (ndigits, weight, digits) = calculateDigits 0 0 (abs base10000Coeff) ""
-              dscale = Cereal.encode @Int16 (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
-           in NotNull $ Cereal.encode ndigits <> Cereal.encode (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
+              dscale = BinSer.encodeInt16BE (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
+           in NotNull $ BinSer.encodeInt16BE ndigits <> BinSer.encodeInt16BE (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
       }
     where
       calculateDigits :: Int16 -> Int16 -> Integer -> BS.ByteString -> (Int16, Int16, BS.ByteString)
@@ -400,7 +398,7 @@ instance ToPgField Scientific where
               (ndigitsSoFar + 1)
               (weightSoFar + 1)
               quotient
-              (Cereal.encode @Int16 rest <> encodedDigits)
+              (BinSer.encodeInt16BE rest <> encodedDigits)
 
 instance ToPgField Float where
   fieldEncoder =
@@ -417,11 +415,10 @@ instance ToPgField Double where
       }
 
 instance ToPgField Bool where
-  -- TODO: Cereal.encode seems to work, but reference the documentation that shows how bools are encoded
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just boolOid,
-        toPgField = \_ n -> NotNull $ Cereal.encode @Bool $ n
+        toPgField = \_ n -> NotNull $ BinSer.encodePgBoolean n
       }
 
 instance ToPgField Day where
@@ -451,7 +448,7 @@ instance ToPgField CalendarDiffTime where
       { toTypeOid = \_ -> Just intervalOid,
         toPgField = \_ CalendarDiffTime {..} ->
           let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400
-           in NotNull $ Cereal.encode @(Int64, Int32, Int32) (round $ timeUnderOneDay * 1_000_000, days, fromIntegral ctMonths)
+           in NotNull $ BinSer.encodeInt64BE (round $ timeUnderOneDay * 1_000_000) <> BinSer.encodeInt32BE days <> BinSer.encodeInt32BE (fromIntegral ctMonths)
       }
 
 instance ToPgField NominalDiffTime where
@@ -459,7 +456,7 @@ instance ToPgField NominalDiffTime where
     FieldEncoder
       { toTypeOid = \_ -> Just intervalOid,
         toPgField = \_ ndt ->
-          NotNull $ Cereal.encode @(Int64, Int32, Int32) (round $ ndt * 1_000_000, 0, 0)
+          NotNull $ BinSer.encodeInt64BE (round $ ndt * 1_000_000) <> BinSer.encodeInt32BE 0 <> BinSer.encodeInt32BE 0
       }
 
 instance ToPgField UTCTime where
@@ -733,7 +730,7 @@ binaryIntEncoder :: Int -> BinaryField
 binaryIntEncoder
   | haskellIntOid == int8Oid = NotNull . BinSer.encodeInt64BE . fromIntegral
   | haskellIntOid == int4Oid = NotNull . BinSer.encodeInt32BE . fromIntegral
-  | otherwise = NotNull . Cereal.encode @Int16 . fromIntegral
+  | otherwise = NotNull . BinSer.encodeInt16BE . fromIntegral
 
 -- | Big-Endian binary decoder for Haskell's various IntXX types.
 binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> ByteString -> Either String a
@@ -926,7 +923,7 @@ instance FromPgField (Ratio Integer) where
   fieldDecoder = toRational <$> fieldDecoder @Scientific
 
 binaryTrue :: ByteString
-binaryTrue = Cereal.encode True
+binaryTrue = BinSer.encodePgBoolean True
 
 instance FromPgField Bool where
   fieldDecoder = parsePgType [boolOid] $ \case
@@ -1115,13 +1112,15 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in \case
-                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                    Just d -> Right d
-                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
-                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
+            let
+              -- jsonb has a byte prepended to the contents and json does not
+              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in
+              \case
+                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                  Just d -> Right d
+                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 

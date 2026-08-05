@@ -127,7 +127,6 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
-import qualified Data.Serialize as Cereal
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -138,6 +137,7 @@ import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
+import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), ConnectionString (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResetConnectionOpts (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
@@ -534,7 +534,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   (initialBuf, initialBufLen) <- receiveUntilBufferHasAtLeast 5
   let charAndLength = LBS.take 5 initialBuf
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
-      lenLeftToFetch :: Int64 = fromIntegral $ either error id (Cereal.decodeLazy @Int32 lenbs) - 4
+      lenLeftToFetch :: Int64 = fromIntegral $ either error id (BinSer.decodeInt32BE $ LBS.toStrict lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
   (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
   let restOfMsg = LBS.drop 5 $ LBS.take fullMessageLen nowBuf
@@ -599,9 +599,13 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- exists in the FromPgMessage instance and in the body of this function. Maybe
     -- we can improve this later.
     customDataRowParser = do
-      charAndLength <- Parser.take 5
-      let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons charAndLength
-          lenLeftToFetch :: Int = fromIntegral $ either error id (Cereal.decode @Int32 lenbs) - 4
+      -- When we used the Cereal library to decode the int32 in here, total
+      -- memory allocated was much smaller. It's the only counter-example I found
+      -- where replacing Cereal with our own decoders made things worse, and I
+      -- didn't investigate why.
+      (w2c . BS.head -> msgIdentChar) <- Parser.take 1
+      lenLeftToFetchPlus4 <- Parser.takeInt32BE
+      let lenLeftToFetch = fromIntegral $ lenLeftToFetchPlus4 - 4
       if msgIdentChar == 'D'
         then do
           rowColumnData <- BS.drop 2 <$> Parser.take lenLeftToFetch

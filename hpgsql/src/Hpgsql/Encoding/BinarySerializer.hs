@@ -15,6 +15,8 @@ module Hpgsql.Encoding.BinarySerializer
     encodeDouble,
     encodeFloat,
     encodeInt64BE,
+    encodeInt16BE,
+    encodePgBoolean,
   )
 where
 
@@ -71,6 +73,9 @@ unsafeEncodeWord n endianConvert len =
 decodeInt16BE :: ByteString -> Either String Int16
 decodeInt16BE bs = fromIntegral <$> unsafeDecodeWord bs 2 fromBigEndian16
 
+encodeInt16BE :: Int16 -> ByteString
+encodeInt16BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian16 2
+
 decodeWord32BE :: ByteString -> Either String Word32
 decodeWord32BE bs = unsafeDecodeWord bs 4 fromBigEndian32
 
@@ -78,13 +83,13 @@ decodeWord64BE :: ByteString -> Either String Word64
 decodeWord64BE bs = unsafeDecodeWord bs 8 fromBigEndian64
 
 decodeInt32BE :: ByteString -> Either String Int32
-decodeInt32BE bs = fromIntegral <$> unsafeDecodeWord bs 2 fromBigEndian32
+decodeInt32BE bs = fromIntegral <$> unsafeDecodeWord bs 4 fromBigEndian32
 
 encodeInt32BE :: Int32 -> ByteString
 encodeInt32BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian32 4
 
 decodeInt64BE :: ByteString -> Either String Int64
-decodeInt64BE bs = fromIntegral <$> unsafeDecodeWord bs 2 fromBigEndian64
+decodeInt64BE bs = fromIntegral <$> unsafeDecodeWord bs 8 fromBigEndian64
 
 encodeInt64BE :: Int64 -> ByteString
 encodeInt64BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian64 8
@@ -94,3 +99,6 @@ encodeFloat n = unsafeEncodeWord (castFloatToWord32 n) fromBigEndian32 4
 
 encodeDouble :: Double -> ByteString
 encodeDouble n = unsafeEncodeWord (castDoubleToWord64 n) fromBigEndian64 8
+
+encodePgBoolean :: Bool -> ByteString
+encodePgBoolean v = if v then "\SOH" else "\NUL"
