@@ -342,7 +342,7 @@ instance ToPgField Int32 where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just int4Oid,
-        toPgField = \_ -> \n -> NotNull $ Cereal.encode n
+        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt32BE n
       }
 
 instance ToPgField Int64 where
@@ -372,7 +372,7 @@ instance ToPgField Oid where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just oidOid,
-        toPgField = \_ -> \n -> NotNull $ Cereal.encode @Int32 $ fromIntegral n
+        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt32BE $ fromIntegral n
       }
 
 instance ToPgField Scientific where
@@ -406,14 +406,14 @@ instance ToPgField Float where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just float4Oid,
-        toPgField = \_ -> \n -> NotNull $ Cereal.encode @Word32 $ castFloatToWord32 n
+        toPgField = \_ -> \n -> NotNull $ BinSer.encodeFloat n
       }
 
 instance ToPgField Double where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just float8Oid,
-        toPgField = \_ -> \n -> NotNull $ Cereal.encode @Word64 $ castDoubleToWord64 n
+        toPgField = \_ -> \n -> NotNull $ BinSer.encodeDouble n
       }
 
 instance ToPgField Bool where
@@ -431,7 +431,7 @@ instance ToPgField Day where
     FieldEncoder
       { toTypeOid = \_ -> Just dateOid,
         -- TODO: Catch integer overflow and do what?
-        toPgField = \_ d -> NotNull $ Cereal.encode @Int32 $ fromIntegral $ diffDays d (fromGregorian 2000 1 1)
+        toPgField = \_ d -> NotNull $ BinSer.encodeInt32BE $ fromIntegral $ diffDays d (fromGregorian 2000 1 1)
       }
 
 instance ToPgField (Unbounded Day) where
@@ -440,9 +440,9 @@ instance ToPgField (Unbounded Day) where
      in FieldEncoder
           { toTypeOid = fe.toTypeOid,
             toPgField = \encCtx -> \case
-              NegInfinity -> NotNull $ Cereal.encode @Int32 minBound
+              NegInfinity -> NotNull $ BinSer.encodeInt32BE minBound
               Finite v -> fe.toPgField encCtx v
-              PosInfinity -> NotNull $ Cereal.encode @Int32 maxBound
+              PosInfinity -> NotNull $ BinSer.encodeInt32BE maxBound
           }
 
 instance ToPgField CalendarDiffTime where
@@ -470,7 +470,7 @@ instance ToPgField UTCTime where
         toPgField = \_ (UTCTime parsedDate timeinday) ->
           let day :: Int64 = fromInteger $ parsedDate `diffDays` fromJulian 1999 12 19
               totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds timeinday `div` 1_000_000)
-           in NotNull $ Cereal.encode @Int64 totalusecs
+           in NotNull $ BinSer.encodeInt64BE totalusecs
       }
 
 instance ToPgField (Unbounded UTCTime) where
@@ -479,9 +479,9 @@ instance ToPgField (Unbounded UTCTime) where
      in FieldEncoder
           { toTypeOid = fe.toTypeOid,
             toPgField = \encCtx -> \case
-              NegInfinity -> NotNull $ Cereal.encode @Int64 minBound
+              NegInfinity -> NotNull $ BinSer.encodeInt64BE minBound
               Finite v -> fe.toPgField encCtx v
-              PosInfinity -> NotNull $ Cereal.encode @Int64 maxBound
+              PosInfinity -> NotNull $ BinSer.encodeInt64BE maxBound
           }
 
 instance ToPgField ZonedTime where
@@ -498,9 +498,9 @@ instance ToPgField (Unbounded ZonedTime) where
      in FieldEncoder
           { toTypeOid = fe.toTypeOid,
             toPgField = \encCtx -> \case
-              NegInfinity -> NotNull $ Cereal.encode @Int64 minBound
+              NegInfinity -> NotNull $ BinSer.encodeInt64BE minBound
               Finite v -> fe.toPgField encCtx v
-              PosInfinity -> NotNull $ Cereal.encode @Int64 maxBound
+              PosInfinity -> NotNull $ BinSer.encodeInt64BE maxBound
           }
 
 instance ToPgField LocalTime where
@@ -510,7 +510,7 @@ instance ToPgField LocalTime where
         toPgField = \_ (LocalTime localDay localTimeOfDay) ->
           let day :: Int64 = fromInteger $ localDay `diffDays` fromJulian 1999 12 19
               totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds (timeOfDayToTime localTimeOfDay) `div` 1_000_000)
-           in NotNull $ Cereal.encode @Int64 totalusecs
+           in NotNull $ BinSer.encodeInt64BE totalusecs
       }
 
 instance ToPgField TimeOfDay where
@@ -519,7 +519,7 @@ instance ToPgField TimeOfDay where
       { toTypeOid = \_ -> Just timeOid,
         toPgField = \_ tod ->
           let usecs :: Int64 = fromInteger $ diffTimeToPicoseconds (timeOfDayToTime tod) `div` 1_000_000
-           in NotNull $ Cereal.encode @Int64 usecs
+           in NotNull $ BinSer.encodeInt64BE usecs
       }
 
 instance ToPgField Char where
@@ -731,8 +731,8 @@ haskellIntOids :: [Oid]
 -- | Big-Endian binary encoder for Haskell's `Data.Int`, which is machine-dependent.
 binaryIntEncoder :: Int -> BinaryField
 binaryIntEncoder
-  | haskellIntOid == int8Oid = NotNull . Cereal.encode @Int64 . fromIntegral
-  | haskellIntOid == int4Oid = NotNull . Cereal.encode @Int32 . fromIntegral
+  | haskellIntOid == int8Oid = NotNull . BinSer.encodeInt64BE . fromIntegral
+  | haskellIntOid == int4Oid = NotNull . BinSer.encodeInt32BE . fromIntegral
   | otherwise = NotNull . Cereal.encode @Int16 . fromIntegral
 
 -- | Big-Endian binary decoder for Haskell's various IntXX types.
@@ -1328,14 +1328,14 @@ toPgVectorField encCtx =
       encodeElement el = Builder.binaryField $ fe.toPgField encCtx el
       Oid elemOid = fromMaybe (Oid 0) (fe.toTypeOid encCtx)
    in \vec ->
-        let ndim = Builder.byteString $ Cereal.encode @Int32 1
+        let ndim = Builder.int32BE 1
             -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
-            hasNull = Builder.byteString $ Cereal.encode @Int32 0
-            -- hasNull = Builder.byteString $ Cereal.encode @Int32 (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
-            elemOidBs = Builder.byteString $ Cereal.encode @Int32 elemOid
-            lb1 = Builder.byteString $ Cereal.encode @Int32 1
+            hasNull = Builder.byteString $ BinSer.encodeInt32BE 0
+            -- hasNull = Builder.byteString $ BinSer.encodeInt32BE (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
+            elemOidBs = Builder.byteString $ BinSer.encodeInt32BE elemOid
+            lb1 = Builder.byteString $ BinSer.encodeInt32BE 1
             (Sum len, encodedElements) = foldMap (\el -> (Sum 1, encodeElement el)) vec
-            dim1 = Builder.byteString $ Cereal.encode @Int32 len
+            dim1 = Builder.byteString $ BinSer.encodeInt32BE len
             fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
          in NotNull (Builder.toStrictByteString fullBs)
 

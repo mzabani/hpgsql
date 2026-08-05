@@ -11,20 +11,26 @@ module Hpgsql.Encoding.BinarySerializer
     decodeInt64BE,
     decodeWord32BE,
     decodeWord64BE,
+    encodeInt32BE,
+    encodeDouble,
+    encodeFloat,
+    encodeInt64BE,
   )
 where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Internal as InternalBS
 import Data.Int (Int16, Int32, Int64)
+import Prelude hiding (encodeFloat)
 #if WORDS_BIGENDIAN
 import Data.Word (Word16, Word32, Word64)
 #else
 import Data.Word (Word16, Word32, Word64, byteSwap16, byteSwap32, byteSwap64)
 #endif
 import Data.Coerce (coerce)
-import Foreign (Storable, peek)
+import Foreign (Storable (..), peek)
 import Foreign.ForeignPtr (withForeignPtr)
+import GHC.Float (castDoubleToWord64, castFloatToWord32)
 import System.IO.Unsafe (unsafeDupablePerformIO)
 
 fromBigEndian32 :: Word32 -> Word32
@@ -57,6 +63,11 @@ unsafeDecodeWord (InternalBS.BS bytesPtr len) minLen endianConvert =
        in Right decodedWord
     else Left "Less than enough bytes to decode"
 
+unsafeEncodeWord :: (Storable a) => a -> (a -> a) -> Int -> ByteString
+unsafeEncodeWord n endianConvert len =
+  InternalBS.unsafeCreate len $ \bufferPtr ->
+    poke (coerce bufferPtr) $ endianConvert n
+
 decodeInt16BE :: ByteString -> Either String Int16
 decodeInt16BE bs = fromIntegral <$> unsafeDecodeWord bs 2 fromBigEndian16
 
@@ -69,5 +80,17 @@ decodeWord64BE bs = unsafeDecodeWord bs 8 fromBigEndian64
 decodeInt32BE :: ByteString -> Either String Int32
 decodeInt32BE bs = fromIntegral <$> unsafeDecodeWord bs 2 fromBigEndian32
 
+encodeInt32BE :: Int32 -> ByteString
+encodeInt32BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian32 4
+
 decodeInt64BE :: ByteString -> Either String Int64
 decodeInt64BE bs = fromIntegral <$> unsafeDecodeWord bs 2 fromBigEndian64
+
+encodeInt64BE :: Int64 -> ByteString
+encodeInt64BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian64 8
+
+encodeFloat :: Float -> ByteString
+encodeFloat n = unsafeEncodeWord (castFloatToWord32 n) fromBigEndian32 4
+
+encodeDouble :: Double -> ByteString
+encodeDouble n = unsafeEncodeWord (castDoubleToWord64 n) fromBigEndian64 8

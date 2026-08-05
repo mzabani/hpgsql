@@ -1,12 +1,10 @@
-module Hpgsql.Builder where
-
--- \| This module replicates parts of the API of Data.ByteString.Builder but its own
+-- | This module replicates parts of the API of Data.ByteString.Builder but its own
 -- builder is length-aware, which makes other parts of the code a little bit nicer.
 -- In COPY benchmarks, this module was introduced in a commit (together with other
 -- changes, like replacing `Maybe` with `BinaryField` in `ToPgField`) that barely
 -- changed memory usage and runtime.
 -- The benefits are exclusively for code readability, then.
--- \|
+module Hpgsql.Builder where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
