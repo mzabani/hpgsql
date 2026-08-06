@@ -198,13 +198,18 @@ genInterpolatedQuery =
         x <- genInt
         b <- Gen.bool
         pure
-          ( [sql|SELECT #{fst <$> Just (b, False)}, #{case compare x 0 of
+          ( [sql|SELECT 42+#{let y = x + 1
+                                 z = y - 7
+                             in z*9}, #{fst <$> Just (b, False)}, #{case compare x 0 of
                                                       !EQ -> "abc"::Text
                                                       GT -> "cde"
                                                       LT -> "xyz"
                                                       _ -> error "Impossible"};|],
             toComparableParams
-              ( b,
+              ( let y = x + 1
+                    z = y - 7
+                in z*9,
+                fst <$> Just (b, False),
                 case compare x 0 of
                   !EQ -> "abc" :: Text
                   GT -> "cde"

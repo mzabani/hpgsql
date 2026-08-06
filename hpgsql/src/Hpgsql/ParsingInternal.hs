@@ -3,6 +3,7 @@
 -- |
 --
 -- This module contains parsers that are helpful to separate SQL statements from each other by finding query boundaries: semi-colons, but not when inside a string or a parenthesised expression, for example.
+-- It also parses SQL inside quasi-quoters with the typical #{} and ^{} Haskell expressions.
 module Hpgsql.ParsingInternal
   ( parseSql,
     BlockOrNotBlock (..),
