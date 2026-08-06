@@ -3,9 +3,9 @@
 
 -- |
 -- A replacement for libraries like cereal or binary.
--- In our tests, this is ~X% faster than cereal, and it also
--- allocates ~Y% less memory in some of our benchmarks.
--- It also means one fewer dependency.
+-- In our tests, this is ~6.5% faster than cereal, and it also
+-- (or by virtue of) allocates ~13% less memory in some of our benchmarks.
+-- And it also means one fewer dependency.
 module Hpgsql.Encoding.BinarySerializer
   ( decodeInt16BE,
     decodeInt32BE,
@@ -120,6 +120,9 @@ decodeDataRow bs@(InternalBS.BS _bytesPtr len) =
   -- We have a fast path when rows are at least 8 bytes long (should be the case
   -- for all but 0-column query results or bytestring chunks "cut in the middle of the message")
   -- by playing with bitwise operations.
+  -- Whether this is worth keeping is sort of questionable. It's complex
+  -- (even if I think it's safe and well tested) and reduces runtime of one of
+  -- our benchmarks by 2% compared to not having it.
   case unsafeDecodeWord bs 8 fromBigEndian64 of
     Right (w64 :: Word64) ->
       -- After fromBigEndian64, the Word64 has bytes in big-endian order:
