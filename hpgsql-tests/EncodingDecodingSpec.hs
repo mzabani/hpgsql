@@ -56,6 +56,9 @@ spec :: Spec
 spec = parallel $ do
   aroundConn $ describe "Encoding and decoding" $ do
     it
+      "0-columns results can be decoded"
+      zeroColumnsResults
+    it
       "Values round-trip"
       valuesRoundTrip
     it
@@ -157,15 +160,15 @@ spec = parallel $ do
       "Generically derived types round-trip"
       queryGenericallyDerivedTypesRoundTrip
 
+zeroColumnsResults :: HPgConnection -> IO ()
+zeroColumnsResults conn = do
+  -- This test is important to test the "slow" decoding path of `decodeDataRow`
+  -- in BinarySerializer.hs. The number of rows needs to be a bit large
+  -- for that code path to be exercised, as per some debug printing.
+  execute conn "SELECT FROM generate_series(1,20001)" `shouldReturn` 20001
+
 valuesRoundTrip :: HPgConnection -> IO ()
 valuesRoundTrip conn = do
-  -- TODO: Property-based test to generate the values
-  -- TODO: Include NULLs
-  -- TODO: Test +-infinity for types where we can
-  -- TODO: Test all types in the regions of values close to `minBound`, 0, and `maxBound`
-  -- TODO: Test floats, timestamptz and other very granular but discrete type in the regions of values
-  --       close to `minBound`, 0, and `maxBound`, with e.g. microsecond precision/fractional values
-  -- TODO: Test +-Infinity and NaN for floats and doubles
   let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Aeson.Null)
   queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE BinaryLiterals #-}
 {-# LANGUAGE CPP #-}
 
 -- |
@@ -17,6 +18,7 @@ module Hpgsql.Encoding.BinarySerializer
     encodeInt64BE,
     encodeInt16BE,
     encodePgBoolean,
+    decodeDataRow,
   )
 where
 
@@ -29,8 +31,11 @@ import Data.Word (Word16, Word32, Word64)
 #else
 import Data.Word (Word16, Word32, Word64, byteSwap16, byteSwap32, byteSwap64)
 #endif
+import Data.Bits (Bits (unsafeShiftR))
+import qualified Data.ByteString as BS
 import Data.Coerce (coerce)
-import Foreign (Storable (..), peek)
+import Data.Maybe (fromMaybe)
+import Foreign (Storable (..), peek, (.&.))
 import Foreign.ForeignPtr (withForeignPtr)
 import GHC.Float (castDoubleToWord64, castFloatToWord32)
 import System.IO.Unsafe (unsafeDupablePerformIO)
@@ -102,3 +107,43 @@ encodeDouble n = unsafeEncodeWord (castDoubleToWord64 n) fromBigEndian64 8
 
 encodePgBoolean :: Bool -> ByteString
 encodePgBoolean v = if v then "\SOH" else "\NUL"
+
+-- TODO: Test without INLINE
+{-# INLINE decodeDataRow #-}
+
+-- | A super specialized decoder to decode a postgres DataRow message
+-- more quickly than a naive implementation.
+-- Returns first the parsed DataRow (only column sizes and values) and second
+-- the left-unparsed original bytestring.
+decodeDataRow :: ByteString -> Either String (ByteString, ByteString)
+decodeDataRow bs@(InternalBS.BS _bytesPtr len) =
+  -- We have a fast path when rows are at least 8 bytes long (should be the case
+  -- for all but 0-column query results or bytestring chunks "cut in the middle of the message")
+  -- by playing with bitwise operations.
+  case unsafeDecodeWord bs 8 fromBigEndian64 of
+    Right (w64 :: Word64) ->
+      -- After fromBigEndian64, the Word64 has bytes in big-endian order:
+      -- byte 0 (msg type) in MSB, bytes 1-4 (length) next, bytes 5-6 (col count), byte 7 in LSB.
+      let msgIdentByte64 = w64 .&. 0b11111111_00000000_00000000_00000000_00000000_00000000_00000000_00000000
+          lenFullMsg = flip unsafeShiftR 24 $ w64 .&. 0b00000000_11111111_11111111_11111111_11111111_00000000_00000000_00000000
+          letterD :: Word64 = 0b01000100_00000000_00000000_00000000_00000000_00000000_00000000_00000000
+       in if msgIdentByte64 == letterD
+            then
+              toResult (fromIntegral lenFullMsg)
+            else Left "Not a DataRow (Word64 bits decoding path)"
+    Left _ ->
+      -- It is possible the DataRow has length less than 8 bytes, so
+      -- we still have to try to parse that.
+      if len >= 5
+        then
+          -- TODO: Word8 letter 'D' for comparison?
+          let (InternalBS.w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons bs
+              lenFullMsg = fromIntegral $ either error id (decodeInt32BE lenbs)
+           in if msgIdentChar == 'D'
+                then toResult lenFullMsg
+                else Left "Not a DataRow"
+        else Left "Less than enough bytes to decode a DataRow"
+  where
+    toResult lenFullMsg
+      | len >= 1 + lenFullMsg = let (a, rest) = BS.splitAt (1 + lenFullMsg) bs in Right (BS.drop 7 a, rest)
+      | otherwise = Left "Less than enough bytes to decode a full DataRow"

@@ -115,7 +115,6 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
@@ -595,22 +594,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
               fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
             Nothing -> handleUnexpectedMsg (f . Left)
 
-    -- Sadly we have to repeat the parsing of a DataRow message here, when it already
-    -- exists in the FromPgMessage instance and in the body of this function. Maybe
-    -- we can improve this later.
-    customDataRowParser = do
-      -- When we used the Cereal library to decode the int32 in here, total
-      -- memory allocated was much smaller. It's the only counter-example I found
-      -- where replacing Cereal with our own decoders made things worse, and I
-      -- didn't investigate why.
-      (w2c . BS.head -> msgIdentChar) <- Parser.take 1
-      lenLeftToFetchPlus4 <- Parser.takeInt32BE
-      let lenLeftToFetch = fromIntegral $ lenLeftToFetchPlus4 - 4
-      if msgIdentChar == 'D'
-        then do
-          rowColumnData <- BS.drop 2 <$> Parser.take lenLeftToFetch
-          pure $ DataRow rowColumnData
-        else fail "Not a DataRow"
+    customDataRowParser = DataRow <$> Parser.takeDataRow
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.

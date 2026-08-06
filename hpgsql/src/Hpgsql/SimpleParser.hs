@@ -17,6 +17,7 @@ module Hpgsql.SimpleParser
     takeInt16BE,
     takeInt32BE,
     takeInt64BE,
+    takeDataRow,
   )
 where
 
@@ -109,6 +110,15 @@ takeInt64BE = Parser $ \bs kf ks ->
   case BinSer.decodeInt64BE bs of
     Left err -> kf err
     Right v -> ks v (BS.drop 8 bs)
+
+{-# INLINE takeDataRow #-}
+
+-- | A specialized parser to parse a postgres DataRow.
+takeDataRow :: Parser ByteString
+takeDataRow = Parser $ \bs kf ks ->
+  case BinSer.decodeDataRow bs of
+    Left err -> kf err
+    Right (thisDataRow, rest) -> ks thisDataRow rest
 
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \bs' _kf ks -> let (vs, rest) = go bs' in ks vs rest
