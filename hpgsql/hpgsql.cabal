@@ -43,10 +43,10 @@ library
       Hpgsql.Types
   other-modules:
       Hpgsql.Base
-      Hpgsql.GhcParseExp
-      Hpgsql.GhcParserOpts
       Hpgsql.Internal
       Hpgsql.LanguageHaskell.FromThExtension
+      Hpgsql.LanguageHaskell.GhcParserOpts
+      Hpgsql.LanguageHaskell.ParseHaskellExpression
       Hpgsql.Locking
       Hpgsql.Msgs
       Hpgsql.Networking

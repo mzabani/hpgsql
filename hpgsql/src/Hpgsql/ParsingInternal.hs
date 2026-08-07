@@ -39,7 +39,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Hpgsql.GhcParseExp (isValidHaskellExpression)
+import Hpgsql.LanguageHaskell.ParseHaskellExpression (isValidHaskellExpression)
 import "template-haskell" Language.Haskell.TH (Extension)
 import Prelude hiding (takeWhile)
 

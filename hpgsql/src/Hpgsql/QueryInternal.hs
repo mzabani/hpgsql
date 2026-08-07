@@ -21,8 +21,8 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Hpgsql.Builder (BinaryField)
 import Hpgsql.Encoding (FieldEncoder (..), RowEncoder (..), ToPgField (..), ToPgRow (..))
-import Hpgsql.GhcParseExp (parseExp)
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements, renumberParamsFrom)
+import Hpgsql.LanguageHaskell.ParseHaskellExpression (parseHaskellExpression)
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, flattenBlocks, parseSql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
 import Language.Haskell.TH.Quote
@@ -182,7 +182,7 @@ fragmentToPartExp (NonInterpolatedSqlFragment t) =
   [|StaticSqlPart $(litE (stringL (Text.unpack t)))|]
 fragmentToPartExp (InterpolatedHaskellExpr haskellExpr) = do
   exts <- extsEnabled
-  case parseExp exts (Text.unpack haskellExpr) of
+  case parseHaskellExpression exts (Text.unpack haskellExpr) of
     Left err -> error $ "Could not parse Haskell expression '" ++ Text.unpack haskellExpr ++ "': " ++ err
     Right expr -> [|ParamPart (encodeParam $(pure expr))|]
 fragmentToPartExp SemiColonFragment =
@@ -191,7 +191,7 @@ fragmentToPartExp (WhitespaceOrCommentsFragment t) =
   [|WhitespaceOrCommenstPart $(litE (stringL (Text.unpack t)))|]
 fragmentToPartExp (EmbeddedQueryExpr haskellExpr) = do
   exts <- extsEnabled
-  case parseExp exts (Text.unpack haskellExpr) of
+  case parseHaskellExpression exts (Text.unpack haskellExpr) of
     Left err -> error $ "Could not parse Haskell expression '" ++ Text.unpack haskellExpr ++ "': " ++ err
     Right expr -> [|EmbeddedQueryPart $(pure expr)|]
 
@@ -259,7 +259,7 @@ parseBlockQuasiQuoter (QuasiQuoterExpression QQEmbeddedQuery expr) = [EmbeddedQu
 generateParamExp :: Text -> Q Exp
 generateParamExp (Text.unpack -> haskellExpr) = do
   exts <- extsEnabled
-  case parseExp exts haskellExpr of
+  case parseHaskellExpression exts haskellExpr of
     Left err -> error $ "Could not parse Haskell expression '" ++ haskellExpr ++ "': " ++ err
     Right expr ->
       [|encodeParam $(pure expr)|]

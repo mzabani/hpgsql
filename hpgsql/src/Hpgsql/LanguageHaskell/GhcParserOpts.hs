@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-missing-fields #-}
 
-module Hpgsql.GhcParserOpts (fakeSettings) where
+module Hpgsql.LanguageHaskell.GhcParserOpts (fakeSettings) where
 
 import GHC.Platform (genericPlatform)
 import GHC.Settings

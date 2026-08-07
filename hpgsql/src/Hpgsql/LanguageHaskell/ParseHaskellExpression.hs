@@ -2,7 +2,7 @@
 {-# LANGUAGE PackageImports #-}
 {- FOURMOLU_DISABLE -} -- CPP macros make fourmolu fail
 
-module Hpgsql.GhcParseExp (parseExp, isValidHaskellExpression) where
+module Hpgsql.LanguageHaskell.ParseHaskellExpression (parseHaskellExpression, isValidHaskellExpression) where
 
 import Data.Char (isUpper)
 import Data.Either (isRight)
@@ -23,7 +23,7 @@ import GHC.Types.Name.Occurrence (occNameString)
 import GHC.Types.Name.Reader (RdrName (..))
 import GHC.Types.SourceText (IntegralLit (..), rationalFromFractionalLit)
 import GHC.Types.SrcLoc (GenLocated (..), mkRealSrcLoc)
-import Hpgsql.GhcParserOpts (fakeSettings)
+import Hpgsql.LanguageHaskell.GhcParserOpts (fakeSettings)
 import Hpgsql.LanguageHaskell.FromThExtension (fromThToGhcLibExtension)
 import Language.Haskell.Syntax (FieldOcc (..), GRHS (..), GRHSs (..), HsBindLR (..), HsConDetails (..), HsConPatDetails, HsFieldBind (..), HsLit (..), HsLocalBinds, HsLocalBindsLR (..), HsOverLit (..), HsRecFields (..), HsSigType (..), HsTupArg (..), HsType (..), HsValBindsLR (..), HsWildCardBndrs (..), LHsExpr, LHsRecField, LHsSigWcType, LMatch, LPat, Match (..), MatchGroup (..), OverLitVal (..), Pat (..), PromotionFlag (..))
 import Language.Haskell.Syntax.Basic (FieldLabelString (..))
@@ -32,19 +32,19 @@ import Language.Haskell.Syntax.Module.Name (moduleNameString)
 import qualified "template-haskell" Language.Haskell.TH as TH
 
 -- | Parse a Haskell expression string into a Template Haskell Exp.
-parseExp :: [TH.Extension] -> String -> Either String TH.Exp
-parseExp callerExtensions str = do
+parseHaskellExpression :: [TH.Extension] -> String -> Either String TH.Exp
+parseHaskellExpression callerExtensions str = do
   hsExpr <- ghcParse callerExtensions str
   convertExpr hsExpr
 
 -- | Check if a string can be parsed as a Haskell expression.
 isValidHaskellExpression :: [TH.Extension] -> String -> Bool
--- NOTE: This uses `ghcParse` instead of `parseExp` on purpose.
+-- NOTE: This uses `ghcParse` instead of `parseHaskellExpression` on purpose.
 -- The reasoning is if we find a valid Haskell expression inside
 -- a quasiquoter, we want to parse it as a Haskell expression.
 -- If later on we don't support converting that to template-haskell,
 -- that's hpgsql's limitation and we want a good error to be thrown
--- to the user, which `parseExp` will do.
+-- to the user, which `parseHaskellExpression` will do.
 -- And we don't want to mislead our quasiquoter parser into skipping
 -- a valid Haskell expression inside #{} or ^{} just because hpgsql
 -- can't convert it to TH: best to fail loud and clear.
