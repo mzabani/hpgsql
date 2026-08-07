@@ -274,7 +274,7 @@ convertConPatDetails con (PrefixCon tyArgs args) = do
   args' <- traverse (\(L _ p) -> convertPat p) args
   if null tyArgs
     then Right (TH.ConP (rdrToName con) [] args')
-    else Left "Type applications in constructor patterns are unsupported in hpgsql's SQL quasi-quoter. Please file a bug report at https://github.com/mzabani/hpgsql/issues if you want this."
+    else unsupportedLanguageFeatureMsg "Type applications in constructor patterns"
 convertConPatDetails con (InfixCon (L _ l) (L _ r)) = do
   l' <- convertPat l
   r' <- convertPat r
