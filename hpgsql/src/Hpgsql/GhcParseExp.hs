@@ -31,8 +31,6 @@ import Language.Haskell.Syntax.Expr (DotFieldOcc (..), HsExpr (..))
 import Language.Haskell.Syntax.Module.Name (moduleNameString)
 import qualified "template-haskell" Language.Haskell.TH as TH
 
--- TODO: How about source locations/lines? Do we need them?
-
 -- | Parse a Haskell expression string into a Template Haskell Exp.
 parseExp :: [TH.Extension] -> String -> Either String TH.Exp
 parseExp callerExtensions str = do
