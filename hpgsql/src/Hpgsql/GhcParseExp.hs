@@ -2,7 +2,7 @@
 {-# LANGUAGE PackageImports #-}
 {- FOURMOLU_DISABLE -} -- CPP macros make fourmolu fail
 
-module Hpgsql.GhcParseExp (parseExp, canParseExp) where
+module Hpgsql.GhcParseExp (parseExp, isValidHaskellExpression) where
 
 import Data.Char (isUpper)
 import Data.Either (isRight)
@@ -39,8 +39,17 @@ parseExp callerExtensions str = do
   convertExpr hsExpr
 
 -- | Check if a string can be parsed as a Haskell expression.
-canParseExp :: [TH.Extension] -> String -> Bool
-canParseExp callerExtensions = isRight . ghcParse callerExtensions
+isValidHaskellExpression :: [TH.Extension] -> String -> Bool
+-- NOTE: This uses `ghcParse` instead of `parseExp` on purpose.
+-- The reasoning is if we find a valid Haskell expression inside
+-- a quasiquoter, we want to parse it as a Haskell expression.
+-- If later on we don't support converting that to template-haskell,
+-- that's hpgsql's limitation and we want a good error to be thrown
+-- to the user, which `parseExp` will do.
+-- And we don't want to mislead our quasiquoter parser into skipping
+-- a valid Haskell expression inside #{} or ^{} just because hpgsql
+-- can't convert it to TH: best to fail loud and clear.
+isValidHaskellExpression callerExtensions = isRight . ghcParse callerExtensions
 
 ghcParse :: [TH.Extension] -> String -> Either String (HsExpr GhcPs)
 ghcParse callerExtensions str =

@@ -39,7 +39,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Hpgsql.GhcParseExp (canParseExp)
+import Hpgsql.GhcParseExp (isValidHaskellExpression)
 import "template-haskell" Language.Haskell.TH (Extension)
 import Prelude hiding (takeWhile)
 
@@ -163,13 +163,13 @@ quasiQuoterExpressionParser callerExtensions = do
   expr <- findExpressionEnd ""
   pure $ QuasiQuoterExpression kind expr
   where
-    -- Scan for '}' left-to-right, trying parseExp at each one.
-    -- The first '}' where parseExp succeeds is the expression boundary.
+    -- Scan for '}' left-to-right, trying isValidHaskellExpression at each one.
+    -- The first '}' where isValidHaskellExpression succeeds is the expression boundary.
     findExpressionEnd acc = do
       chunk <- takeWhile (/= '}')
       void $ char '}'
       let candidate = acc <> chunk
-      if canParseExp callerExtensions (Text.unpack candidate)
+      if isValidHaskellExpression callerExtensions (Text.unpack candidate)
         then pure candidate
         else findExpressionEnd (candidate <> "}")
 
