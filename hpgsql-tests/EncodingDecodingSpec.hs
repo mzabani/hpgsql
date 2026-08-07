@@ -31,6 +31,7 @@ import qualified Data.Vector as Vector
 import DbUtils
   ( aroundConn,
     irrecoverableErrorWithMsgAndStmt,
+    testConnInfo,
     withRollback,
   )
 import GHC.Float (float2Double)
@@ -40,7 +41,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Connection (refreshTypeInfoCache)
+import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
@@ -55,9 +56,6 @@ import TestUtils (genJsonValue)
 spec :: Spec
 spec = parallel $ do
   aroundConn $ describe "Encoding and decoding" $ do
-    it
-      "0-columns results can be decoded"
-      zeroColumnsResults
     it
       "Values round-trip"
       valuesRoundTrip
@@ -159,13 +157,19 @@ spec = parallel $ do
     it
       "Generically derived types round-trip"
       queryGenericallyDerivedTypesRoundTrip
+  it
+    "0-columns results can be decoded"
+    zeroColumnsResults
 
-zeroColumnsResults :: HPgConnection -> IO ()
-zeroColumnsResults conn = do
+zeroColumnsResults :: IO ()
+zeroColumnsResults = do
+  hpgsqlConnInfo <- testConnInfo
   -- This test is important to test the "slow" decoding path of `decodeDataRow`
   -- in BinarySerializer.hs. The number of rows needs to be a bit large
-  -- for that code path to be exercised, as per some debug printing.
-  execute conn "SELECT FROM generate_series(1,20001)" `shouldReturn` 20001
+  -- and the recvChunkSize pretty small for that code path to be exercised,
+  -- as per some debug printing.
+  withConnectionOpts defaultConnectOpts {recvChunkSize = 5} hpgsqlConnInfo 10 $ \conn -> do
+    execute conn "SELECT FROM generate_series(1,601)" `shouldReturn` 601
 
 valuesRoundTrip :: HPgConnection -> IO ()
 valuesRoundTrip conn = do

@@ -227,7 +227,8 @@ defaultConnectOpts =
   ConnectOpts
     { killedThreadPollIntervalMs = 500,
       cancellationRequestResendIntervalMs = 500,
-      fillTypeInfoCache = True
+      fillTypeInfoCache = True,
+      recvChunkSize = 16000
     }
 
 data InternalConnectOrCancelRequest a where
@@ -610,7 +611,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- or an exception is thrown when receiving.
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
-            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
             atomicWriteIORef recvBuffer (currentBuffer <> LBS.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
 

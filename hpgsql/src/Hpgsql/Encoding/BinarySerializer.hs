@@ -108,7 +108,6 @@ encodeDouble n = unsafeEncodeWord (castDoubleToWord64 n) fromBigEndian64 8
 encodePgBoolean :: Bool -> ByteString
 encodePgBoolean v = if v then "\SOH" else "\NUL"
 
--- TODO: Test without INLINE
 {-# INLINE decodeDataRow #-}
 
 -- | A super specialized decoder to decode a postgres DataRow message
@@ -139,7 +138,6 @@ decodeDataRow bs@(InternalBS.BS _bytesPtr len) =
       -- we still have to try to parse that.
       if len >= 5
         then
-          -- TODO: Word8 letter 'D' for comparison?
           let (InternalBS.w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons bs
               lenFullMsg = fromIntegral $ either error id (decodeInt32BE lenbs)
            in if msgIdentChar == 'D'

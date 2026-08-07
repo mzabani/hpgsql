@@ -259,7 +259,7 @@ data ConnectOpts = ConnectOpts
     -- and you want resume using the connection and cannot wait ~500ms until Hpgsql realizes
     -- it's fine to do so.
     -- You probably don't need to worry about this or tune it.
-    killedThreadPollIntervalMs :: Int,
+    killedThreadPollIntervalMs :: !Int,
     -- | How long in ms Hpgsql will wait before re-sending a cancellation request
     -- while draining orphaned queries (queries from dead threads). The default is 500ms,
     -- and this is only relevant if you plan on interrupting your queries with
@@ -268,14 +268,19 @@ data ConnectOpts = ConnectOpts
     -- It is not recommend setting this below 100ms, because orphaned query draining
     -- alternates with resending cancellation requests, so if this is too low it is possible
     -- that draining never finishes, leading to a form of livelock.
-    cancellationRequestResendIntervalMs :: Int,
+    cancellationRequestResendIntervalMs :: !Int,
     -- | Immediately after connecting, run a query to fetch all types
     -- from the `pg_type` table. This makes them available in FromPgField
     -- instances.
     -- The default is True. You should only set it to False if you really
     -- know what you're doing, because class instances of custom types
     -- can stop working.
-    fillTypeInfoCache :: Bool
+    fillTypeInfoCache :: !Bool,
+    -- | The minimum amount of bytes to ask for when receiving from the socket.
+    -- Note that Hpgsql's internal buffer may grow beyond this to accommodate
+    -- larger result rows.
+    -- The default is 16000.
+    recvChunkSize :: !Int
   }
 
 data ErrorDetail
