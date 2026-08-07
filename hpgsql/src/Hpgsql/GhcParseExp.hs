@@ -7,6 +7,7 @@ module Hpgsql.GhcParseExp (parseExp, isValidHaskellExpression) where
 import Data.Char (isUpper)
 import Data.Either (isRight)
 import qualified Data.List as List
+import Data.Foldable (toList)
 import Data.Maybe (mapMaybe)
 import GHC.Data.FastString (mkFastString, unpackFS)
 import GHC.Data.StringBuffer (stringToStringBuffer)
@@ -24,7 +25,7 @@ import GHC.Types.SourceText (IntegralLit (..), rationalFromFractionalLit)
 import GHC.Types.SrcLoc (GenLocated (..), mkRealSrcLoc)
 import Hpgsql.GhcParserOpts (fakeSettings)
 import Hpgsql.LanguageHaskell.FromThExtension (fromThToGhcLibExtension)
-import Language.Haskell.Syntax (FieldOcc (..), GRHS (..), GRHSs (..), HsConDetails (..), HsConPatDetails, HsFieldBind (..), HsLit (..), HsLocalBinds, HsLocalBindsLR (..), HsOverLit (..), HsRecFields (..), HsSigType (..), HsTupArg (..), HsType (..), HsWildCardBndrs (..), LHsExpr, LHsRecField, LHsSigWcType, LMatch, LPat, Match (..), MatchGroup (..), OverLitVal (..), Pat (..), PromotionFlag (..))
+import Language.Haskell.Syntax (FieldOcc (..), GRHS (..), GRHSs (..), HsBindLR (..), HsConDetails (..), HsConPatDetails, HsFieldBind (..), HsLit (..), HsLocalBinds, HsLocalBindsLR (..), HsOverLit (..), HsRecFields (..), HsSigType (..), HsTupArg (..), HsType (..), HsValBindsLR (..), HsWildCardBndrs (..), LHsExpr, LHsRecField, LHsSigWcType, LMatch, LPat, Match (..), MatchGroup (..), OverLitVal (..), Pat (..), PromotionFlag (..))
 import Language.Haskell.Syntax.Basic (FieldLabelString (..))
 import Language.Haskell.Syntax.Expr (DotFieldOcc (..), HsExpr (..))
 import Language.Haskell.Syntax.Module.Name (moduleNameString)
@@ -140,6 +141,14 @@ convertExpr (RecordCon _ (L _ conName) (HsRecFields flds _)) = do
   Right $ TH.RecConE (rdrToName conName) flds'
 #endif
 convertExpr (HsCase _ (L _ caseExpr) mg) = TH.CaseE <$> convertExpr caseExpr <*> convertMatchGroup mg
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertExpr (HsLet _ localBinds (L _ body)) = do
+#else
+convertExpr (HsLet _ _ localBinds _ (L _ body)) = do
+#endif
+  decs <- convertLocalBinds localBinds
+  body' <- convertExpr body
+  Right (TH.LetE decs body')
 
 -- Now come our list of unsupported language features
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
@@ -157,7 +166,6 @@ convertExpr (HsIPVar {}) = unsupportedLanguageFeatureMsg "Implicit parameters"
 convertExpr (HsLam {}) = unsupportedLanguageFeatureMsg "Lambda"
 convertExpr (ExplicitSum {}) = unsupportedLanguageFeatureMsg "Unboxed sums"
 convertExpr (HsMultiIf {}) = unsupportedLanguageFeatureMsg "Multi-way if"
-convertExpr (HsLet {}) = unsupportedLanguageFeatureMsg "Let"
 convertExpr (HsDo {}) = unsupportedLanguageFeatureMsg "Do notation"
 convertExpr (RecordUpd {}) = unsupportedLanguageFeatureMsg "Record updates"
 convertExpr (ArithSeq {}) = unsupportedLanguageFeatureMsg "Arithmetic sequences"
@@ -197,8 +205,32 @@ convertGRHSs (GRHSs _ grhss localBinds) = do
 
 convertLocalBinds :: HsLocalBinds GhcPs -> Either String [TH.Dec]
 convertLocalBinds (EmptyLocalBinds _) = Right []
-convertLocalBinds (HsValBinds {}) = unsupportedLanguageFeatureMsg "HsValBinds"
+convertLocalBinds (HsValBinds _ (ValBinds _ binds _sigs)) =
+  traverse (\(L _ b) -> convertBind b) (toList binds)
+convertLocalBinds (HsValBinds _ (XValBindsLR {})) =
+  unsupportedLanguageFeatureMsg "XValBindsLR"
 convertLocalBinds (HsIPBinds {}) = unsupportedLanguageFeatureMsg "HsIPBinds"
+
+convertBind :: HsBindLR GhcPs GhcPs -> Either String TH.Dec
+convertBind FunBind { fun_id = L _ name, fun_matches = MG _ (L _ matches) } = do
+  clauses <- traverse convertClause matches
+  Right (TH.FunD (rdrToName name) clauses)
+convertBind PatBind { pat_lhs = L _ pat, pat_rhs = grhss } = do
+  pat' <- convertPat pat
+  (body, decs) <- convertGRHSs grhss
+  Right (TH.ValD pat' body decs)
+convertBind (VarBind{}) = unsupportedLanguageFeatureMsg "VarBind"
+convertBind (PatSynBind{}) = unsupportedLanguageFeatureMsg "Pattern Synonyms bindings"
+
+convertClause :: LMatch GhcPs (LHsExpr GhcPs) -> Either String TH.Clause
+#if MIN_VERSION_ghc_lib_parser(9,10,0)
+convertClause (L _ (Match _ _ (L _ pats) grhss)) = do
+#else
+convertClause (L _ (Match _ _ pats grhss)) = do
+#endif
+  pats' <- traverse (\(L _ p) -> convertPat p) pats
+  (body, decs) <- convertGRHSs grhss
+  Right (TH.Clause pats' body decs)
 
 -- Pattern conversion (GHC Pat to TH Pat)
 
