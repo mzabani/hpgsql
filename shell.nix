@@ -13,6 +13,8 @@ in
     packages = p: with p; [ hpgsql hpgsql-tests hpgsql-benchmarks hpgsql-simple-compat hpgsql-simple-compat-tests ];
     withHoogle = true;
     buildInputs = with pkgs; [
+     cargo
+     rustc
      concurrently
      haskellPackages.cabal-install
      haskellPackages.ghcid
