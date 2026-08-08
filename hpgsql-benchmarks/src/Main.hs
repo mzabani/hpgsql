@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -ddump-simpl -ddump-to-file #-}
+{-# OPTIONS_GHC -ddump-simpl -dno-typeable-binds -dsuppress-coercions -dsuppress-module-prefixes -dsuppress-type-applications -ddump-to-file #-}
 
 module Main where
 
@@ -24,6 +24,7 @@ import Criterion.Measurement.Types
   )
 import qualified Data.ByteString.Char8 as BS8
 import Data.Int (Int32, Int64)
+import Data.Scientific (Scientific)
 import Data.String (IsString)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -46,6 +47,7 @@ import Hpgsql.Connection (renderLibpqConnectionString)
 import qualified Hpgsql.Connection
 import qualified Hpgsql.Connection as Hpgsql
 import qualified Hpgsql.Copy
+import Hpgsql.Encoding (inlinedSingleFieldRowDecoder)
 import qualified Hpgsql.Encoding as Hpgsql
 import qualified Hpgsql.Query as Hpgsql
 import qualified Hpgsql.Types as Hpgsql
@@ -81,10 +83,18 @@ data BenchRow = BenchRow
     brMaybeInt :: !(Maybe Int),
     brMaybeText :: !(Maybe Text),
     brMaybeDouble :: !(Maybe Double),
-    brMaybeDay :: !(Maybe Day)
+    brMaybeDay :: !(Maybe Day),
+    brNumeric :: !Scientific,
+    brFloat :: !Float,
+    brBool1 :: !Bool,
+    brBool2 :: !Bool
   }
   deriving stock (Generic, Show, Eq)
   deriving anyclass (NFData, Hpgsql.FromPgRow, PGSimple.FromRow)
+
+fullyInlinedBenchRowDecoder :: Hpgsql.RowDecoder BenchRow
+fullyInlinedBenchRowDecoder =
+  BenchRow <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
 
 data HasqlBenchRow = HasqlBenchRow
   { hbrId :: !Int32,
@@ -99,7 +109,11 @@ data HasqlBenchRow = HasqlBenchRow
     hbrMaybeInt :: !(Maybe Int32),
     hbrMaybeText :: !(Maybe Text),
     hbrMaybeDouble :: !(Maybe Double),
-    hbrMaybeDay :: !(Maybe Day)
+    hbrMaybeDay :: !(Maybe Day),
+    hbrNumeric :: !Scientific,
+    hbrFloat :: !Float,
+    hbrBool1 :: Bool,
+    hbrBool2 :: Bool
   }
   deriving stock (Generic, Show, Eq)
   deriving anyclass (NFData)
@@ -165,12 +179,14 @@ main = do
 
   statsBefore <- getRTSStats
   hspecWith defaultConfig {configFormat = Just (formatterToFormat silent)} $ do
+    let sql17 = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date, g::numeric, g::float4, g%2=0, g%2=1 FROM generate_series(1,$1) g"
+        sql17Simple = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date, g::numeric, g::float4, g%2=0, g%2=1 FROM generate_series(1,?) g"
+        sql13 = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
+        sql13Simple = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g"
     describe "Parsing 13-column rows into a List" $ do
-      let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
-          pgSimpleSql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g"
-          hasqlListStmt =
+      let hasqlListStmt =
             HasqlStmt.Statement
-              sql
+              sql13
               (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
               ( HasqlDec.rowList
                   ( (,,,,,,,,,,,,)
@@ -192,7 +208,7 @@ main = do
               True
           hasqlRecordListStmt =
             HasqlStmt.Statement
-              sql
+              sql17
               (HasqlEnc.param (HasqlEnc.nonNullable HasqlEnc.int4))
               ( HasqlDec.rowList
                   ( HasqlBenchRow
@@ -209,15 +225,19 @@ main = do
                       <*> HasqlDec.column (HasqlDec.nullable HasqlDec.text)
                       <*> HasqlDec.column (HasqlDec.nullable HasqlDec.float8)
                       <*> HasqlDec.column (HasqlDec.nullable HasqlDec.date)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.numeric)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.float4)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.bool)
+                      <*> HasqlDec.column (HasqlDec.nonNullable HasqlDec.bool)
                   )
               )
               True
-      forM_ [10_000 :: Int, 100_000] $ \n -> do
+      forM_ [100_000 :: Int] $ \n -> do
         it ("hpgsql Tuple List (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                Hpgsql.queryWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                Hpgsql.queryWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql13 (Hpgsql.Only n))
         it ("hasql Tuple List (" ++ show n ++ " rows)") $
           void $
             bench ("hasql Tuple List (" ++ show n ++ " rows)") $
@@ -228,12 +248,12 @@ main = do
           void $
             bench ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day) pgSimpleConn pgSimpleSql (PGSimple.Only n)
+                PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day) pgSimpleConn sql13Simple (PGSimple.Only n)
         it ("hpgsql Record List (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Record List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                Hpgsql.queryWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                Hpgsql.queryWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
         it ("hasql Record List (" ++ show n ++ " rows)") $
           void $
             bench ("hasql Record List (" ++ show n ++ " rows)") $
@@ -244,40 +264,47 @@ main = do
           void $
             bench ("postgresql-simple Record List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.query @_ @BenchRow pgSimpleConn pgSimpleSql (PGSimple.Only n)
+                PGSimple.query @_ @BenchRow pgSimpleConn sql17Simple (PGSimple.Only n)
     describe "Parsing 13-column rows in streaming fashion" $ do
-      let sql = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
-      forM_ [10_000 :: Int, 100_000] $ \n -> do
+      forM_ [100_000 :: Int] $ \n -> do
         it ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql13 (Hpgsql.Only n))
                 S.effects res
         it ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
           void $
             bench ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
                 runResourceT @IO $ do
-                  let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n)
+                  let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn sql13Simple (PGSimple.Only n)
                   S.effects res
         it ("postgresql-simple Tuple fold (" ++ show n ++ " rows)") $
           void $
             bench ("postgresql-simple Tuple fold (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.fold pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n) () (\() (!_ :: (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) -> pure ())
+                PGSimple.fold pgSimpleConn sql13Simple (PGSimple.Only n) () (\() (!_ :: (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) -> pure ())
+    describe "Parsing 17-column rows in streaming fashion" $ do
+      forM_ [100_000 :: Int] $ \n -> do
         it ("hpgsql Record Stream (" ++ show n ++ " rows)") $
           void $
             bench ("hpgsql Record Stream (" ++ show n ++ " rows)") $ do
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql (Hpgsql.Only n))
+                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
+                S.effects res
+        it ("hpgsql Record Stream (" ++ show n ++ " rows, fully inlined row decoder)") $
+          void $
+            bench ("hpgsql Record Stream (" ++ show n ++ " rows, fully inlined row decoder)") $ do
+              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
+                res <- Hpgsql.querySWith fullyInlinedBenchRowDecoder conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
                 S.effects res
         it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
           void $
             bench ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
                 runResourceT @IO $ do
-                  let res :: Stream (Of BenchRow) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n)
+                  let res :: Stream (Of BenchRow) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn sql17Simple (PGSimple.Only n)
                   S.effects res
         it ("postgresql-simple Record fold (" ++ show n ++ " rows)") $
           void $

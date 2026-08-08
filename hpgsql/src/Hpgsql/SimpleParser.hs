@@ -24,12 +24,23 @@ module Hpgsql.SimpleParser
     takeDataRow,
     parseManyRows,
     skip,
+    parsePgFieldWithAtMost4Bytes,
+    takeInt64BEWithFieldLength,
+    takeInt32BEWithFieldLength,
+    takeInt16BEWithFieldLength,
+    takeFloatBE,
+    takeDoubleBE,
+    takeFloatBEWithFieldLength,
+    peekInt32BE,
   )
 where
 
+import Control.Applicative (Alternative (..))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
+import Foreign.Storable (Storable)
+import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.Encoding.BinarySerializer (ByteStringIdx (..))
 import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Prelude hiding (take)
@@ -64,6 +75,13 @@ instance Applicative Parser where
   Parser pf <*> Parser pa = Parser $ \idx bs kf ks ->
     pf idx bs kf (\f bs' idx' -> pa bs' idx' kf (\a bs'' idx'' -> ks (f a) bs'' idx''))
   {-# INLINE (<*>) #-}
+
+instance Alternative Parser where
+  empty = fail "empty Alternative"
+  {-# INLINE empty #-}
+  Parser p1 <|> Parser p2 = Parser $ \idx bs kf ks ->
+    p1 idx bs (\_ -> p2 idx bs kf ks) ks
+  {-# INLINE (<|>) #-}
 
 instance Monad Parser where
   return = pure
@@ -116,22 +134,81 @@ skip n = Parser $ \idx bs _ ks ->
 takeInt16BE :: Parser Int16
 takeInt16BE = Parser $ \idx bs kf ks ->
   case BinSer.decodeInt16BE idx bs of
-    Left err -> kf err
     Right v -> ks v (idx + 2) bs
+    Left err -> kf err
+
+{-# INLINE takeInt16BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int16 in a row.
+takeInt16BEWithFieldLength :: Parser (Maybe Int16)
+takeInt16BEWithFieldLength = do
+  mi16 <- parsePgFieldWithAtMost4Bytes BinSer.CWord16
+  pure $ fromIntegral <$> mi16
 
 {-# INLINE takeInt32BE #-}
 takeInt32BE :: Parser Int32
 takeInt32BE = Parser $ \idx bs kf ks ->
   case BinSer.decodeInt32BE idx bs of
-    Left err -> kf err
     Right v -> ks v (idx + 4) bs
+    Left err -> kf err
+
+{-# INLINE peekInt32BE #-}
+peekInt32BE :: Parser Int32
+peekInt32BE = Parser $ \idx bs kf ks ->
+  case BinSer.decodeInt32BE idx bs of
+    Right v -> ks v idx bs
+    Left err -> kf err
+
+{-# INLINE takeInt32BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int32 in a row.
+takeInt32BEWithFieldLength :: Parser (Maybe Int32)
+takeInt32BEWithFieldLength = do
+  mi32 <- parsePgFieldWithAtMost4Bytes BinSer.CWord32
+  pure $ fromIntegral <$> mi32
+
+{-# INLINE takeFloatBEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- a Float in a row.
+takeFloatBEWithFieldLength :: Parser (Maybe Float)
+takeFloatBEWithFieldLength = do
+  mf <- parsePgFieldWithAtMost4Bytes BinSer.CWord32
+  pure $ castWord32ToFloat <$> mf
+
+{-# INLINE takeFloatBE #-}
+takeFloatBE :: Parser Float
+takeFloatBE = Parser $ \idx bs kf ks ->
+  case BinSer.decodeWord32BE idx bs of
+    Right v -> ks (castWord32ToFloat v) (idx + 4) bs
+    Left err -> kf err
+
+{-# INLINE takeDoubleBE #-}
+takeDoubleBE :: Parser Double
+takeDoubleBE = Parser $ \idx bs kf ks ->
+  case BinSer.decodeWord64BE idx bs of
+    Right v -> ks (castWord64ToDouble v) (idx + 8) bs
+    Left err -> kf err
+
+{-# INLINE takeInt64BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int64 in a row.
+takeInt64BEWithFieldLength :: Parser (Maybe Int64)
+takeInt64BEWithFieldLength = do
+  fieldLen <- takeInt32BE
+  if fieldLen == (-1)
+    then pure Nothing
+    else Just <$> takeInt64BE
 
 {-# INLINE takeInt64BE #-}
 takeInt64BE :: Parser Int64
 takeInt64BE = Parser $ \idx bs kf ks ->
   case BinSer.decodeInt64BE idx bs of
-    Left err -> kf err
     Right v -> ks v (idx + 8) bs
+    Left err -> kf err
 
 {-# INLINE takeDataRow #-}
 
@@ -142,6 +219,18 @@ takeDataRow = Parser $ \idx bs kf ks ->
   case BinSer.decodeDataRow idx bs of
     Left err -> kf err
     Right idxRest -> ks idxRest idxRest bs
+
+{-# INLINE parsePgFieldWithAtMost4Bytes #-}
+
+-- | A specialized parser that reads a query result's
+-- field's contents.
+parsePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => BinSer.CoolWordDec a -> Parser (Maybe a)
+parsePgFieldWithAtMost4Bytes wdec =
+  let dec = BinSer.decodePgFieldWithAtMost4Bytes wdec
+   in Parser $ \idx bs kf ks ->
+        case dec idx bs of
+          Right (v, restIdx) -> ks v restIdx bs
+          Left err -> kf err
 
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'
