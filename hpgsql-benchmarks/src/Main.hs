@@ -154,7 +154,13 @@ main = do
 
   putStrLn "IMPORTANT: all measurements collected over 10 runs of each benchmark"
   when (numConcurrentConnections > 1) $ putStrLn $ "IMPORTANT: all benchmarks except COPY involve running the benchmarked query in " ++ show numConcurrentConnections ++ " connections in parallel"
+
+  -- Warm up postgres with a generate_series query and GC before tests
+  warmupConn <- hpgsqlConnect
+  void $ Hpgsql.execute warmupConn "SELECT * FROM generate_series(1,100000)"
+  Hpgsql.Connection.closeGracefully warmupConn
   performBlockingMajorGC
+
   statsBefore <- getRTSStats
   hspecWith defaultConfig {configFormat = Just (formatterToFormat silent)} $ do
     describe "Parsing 13-column rows into a List" $ do

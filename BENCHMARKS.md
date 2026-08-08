@@ -28,6 +28,8 @@ The second column is wall clock time in seconds, the third is peak heap memory a
 ### Materializing 100_000 rows with 13 columns each into a List of Records
 
 This runs with 2 concurrent queries, 10 times over:
+
+This benchmark is unfair towards both hpgsql and postgresql-simple because the row decoder is Generically derived for them while it is hand-written for hasql.
 ```csv
 postgresql-simple Record List (100000 rows),12.55,142.65M,91.5
 hasql Record List (100000 rows),6.258,142.48M,78.2
@@ -46,7 +48,10 @@ hpgsql Tuple List (100000 rows),4.779,72.07M,150.6
 ### Streaming 100_000 rows with 13 columns as Records
 
 This runs with 2 concurrent queries, 10 times over.
-Hpgsql's implementation streams directly from the socket while the others use cursors, so
+
+This benchmark is unfair towards both hpgsql and postgresql-simple because the row decoder is Generically derived for them while it is hand-written for hasql.
+
+However, Hpgsql's implementation streams directly from the socket while the others use cursors, so
 it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
 cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 ```csv
