@@ -93,18 +93,21 @@ take n = Parser $ \bs kf ks ->
       ks mempty bs
 {-# INLINE take #-}
 
+{-# INLINE takeInt16BE #-}
 takeInt16BE :: Parser Int16
 takeInt16BE = Parser $ \bs kf ks ->
   case BinSer.decodeInt16BE bs of
     Left err -> kf err
     Right v -> ks v (BS.drop 2 bs)
 
+{-# INLINE takeInt32BE #-}
 takeInt32BE :: Parser Int32
 takeInt32BE = Parser $ \bs kf ks ->
   case BinSer.decodeInt32BE bs of
     Left err -> kf err
     Right v -> ks v (BS.drop 4 bs)
 
+{-# INLINE takeInt64BE #-}
 takeInt64BE :: Parser Int64
 takeInt64BE = Parser $ \bs kf ks ->
   case BinSer.decodeInt64BE bs of
