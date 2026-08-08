@@ -2,7 +2,7 @@ module CopySpec where
 
 import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
-import Data.Int (Int32)
+import Data.Int (Int32, Int64)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TE
@@ -38,36 +38,37 @@ spec = do
       "putCopyError"
       copyError
 
-genRows :: Gen.Gen [(Int32, Text)]
+genRows :: Gen.Gen [(Int32, Text, Int64)]
 genRows = do
   numRows <- Gen.int (Gen.linear 0 1000)
   names <- Gen.list (Gen.singleton numRows) $ Gen.text (Gen.linear 1 50) Gen.alphaNum
-  pure $ zip [1 ..] names
+  numbers <- Gen.list (Gen.singleton numRows) $ Gen.int64 (Gen.linear (-100) 100)
+  pure $ zip3 [1 ..] names numbers
 
 copyTextFmtStatementSucceeding :: HPgConnection -> PropertyT IO ()
 copyTextFmtStatementSucceeding conn = hedgehog $ do
   rows <- Gen.forAll genRows
   result <- liftIO $ withRollback conn $ do
-    execute_ conn "CREATE UNLOGGED TABLE copy_test0 (id INT NOT NULL, name TEXT NOT NULL)"
+    execute_ conn "CREATE UNLOGGED TABLE copy_test0 (id INT NOT NULL, name TEXT NOT NULL, some_num BIGINT)"
     withCopy_
       conn
       "COPY copy_test0 FROM STDIN WITH (FORMAT CSV);"
-      ( forM_ rows $ \(eid, ename) ->
-          putCopyData conn $ TE.encodeUtf8 $ Text.pack (show eid) <> "," <> ename <> "\n"
+      ( forM_ rows $ \(eid, ename, somenum) ->
+          putCopyData conn $ TE.encodeUtf8 $ Text.pack (show eid) <> "," <> ename <> "," <> Text.pack (show somenum) <> "\n"
       )
-    query conn "SELECT id, name FROM copy_test0 ORDER BY id"
+    query conn "SELECT id, name, some_num FROM copy_test0 ORDER BY id"
   result === rows
 
 copyBinaryFmtStatementSucceeding :: HPgConnection -> PropertyT IO ()
 copyBinaryFmtStatementSucceeding conn = hedgehog $ do
   rows <- Gen.forAll genRows
   result <- liftIO $ withRollback conn $ do
-    execute_ conn "CREATE UNLOGGED TABLE copy_test1 (id INT NOT NULL, name TEXT NOT NULL)"
+    execute_ conn "CREATE UNLOGGED TABLE copy_test1 (id INT NOT NULL, name TEXT NOT NULL, some_num BIGINT)"
     copyFrom
       conn
       "COPY copy_test1 FROM STDIN WITH (FORMAT BINARY);"
       rows
-    query conn "SELECT id, name FROM copy_test1 ORDER BY id"
+    query conn "SELECT id, name, some_num FROM copy_test1 ORDER BY id"
   result === rows
 
 copyError :: HPgConnection -> IO ()

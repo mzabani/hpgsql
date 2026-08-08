@@ -31,6 +31,7 @@ import qualified Data.Vector as Vector
 import DbUtils
   ( aroundConn,
     irrecoverableErrorWithMsgAndStmt,
+    testConnInfo,
     withRollback,
   )
 import GHC.Float (float2Double)
@@ -40,7 +41,7 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
-import Hpgsql.Connection (refreshTypeInfoCache)
+import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
@@ -156,16 +157,22 @@ spec = parallel $ do
     it
       "Generically derived types round-trip"
       queryGenericallyDerivedTypesRoundTrip
+  it
+    "0-columns results can be decoded"
+    zeroColumnsResults
+
+zeroColumnsResults :: IO ()
+zeroColumnsResults = do
+  hpgsqlConnInfo <- testConnInfo
+  -- This test is important to test the "slow" decoding path of `decodeDataRow`
+  -- in BinarySerializer.hs. The number of rows needs to be a bit large
+  -- and the recvChunkSize pretty small for that code path to be exercised,
+  -- as per some debug printing.
+  withConnectionOpts defaultConnectOpts {recvChunkSize = 5} hpgsqlConnInfo 10 $ \conn -> do
+    execute conn "SELECT FROM generate_series(1,601)" `shouldReturn` 601
 
 valuesRoundTrip :: HPgConnection -> IO ()
 valuesRoundTrip conn = do
-  -- TODO: Property-based test to generate the values
-  -- TODO: Include NULLs
-  -- TODO: Test +-infinity for types where we can
-  -- TODO: Test all types in the regions of values close to `minBound`, 0, and `maxBound`
-  -- TODO: Test floats, timestamptz and other very granular but discrete type in the regions of values
-  --       close to `minBound`, 0, and `maxBound`, with e.g. microsecond precision/fractional values
-  -- TODO: Test +-Infinity and NaN for floats and doubles
   let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Aeson.Null)
   queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
 

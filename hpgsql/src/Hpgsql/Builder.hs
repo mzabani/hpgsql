@@ -1,12 +1,10 @@
-module Hpgsql.Builder where
-
--- \| This module replicates parts of the API of Data.ByteString.Builder but its own
+-- | This module replicates parts of the API of Data.ByteString.Builder but its own
 -- builder is length-aware, which makes other parts of the code a little bit nicer.
 -- In COPY benchmarks, this module was introduced in a commit (together with other
 -- changes, like replacing `Maybe` with `BinaryField` in `ToPgField`) that barely
 -- changed memory usage and runtime.
 -- The benefits are exclusively for code readability, then.
--- \|
+module Hpgsql.Builder where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
@@ -23,7 +21,9 @@ instance Show BinaryField where
   show SqlNull = "NULL"
   show (NotNull bs) = show bs
 
-data LengthAwareBuilder = LengthAwareBuilder !Int32 !Builder.Builder
+-- | The lazy (instead of strict/with a bang) Builder (second arg) makes
+-- our copyFromS benchmark run ~4.3% faster and allocate ~3.8% less total memory.
+data LengthAwareBuilder = LengthAwareBuilder !Int32 Builder.Builder
 
 type Builder = LengthAwareBuilder
 

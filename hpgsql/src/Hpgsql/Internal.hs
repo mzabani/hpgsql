@@ -115,7 +115,6 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
@@ -127,7 +126,6 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
-import qualified Data.Serialize as Cereal
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -138,6 +136,7 @@ import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
+import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), ConnectionString (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResetConnectionOpts (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
@@ -228,7 +227,8 @@ defaultConnectOpts =
   ConnectOpts
     { killedThreadPollIntervalMs = 500,
       cancellationRequestResendIntervalMs = 500,
-      fillTypeInfoCache = True
+      fillTypeInfoCache = True,
+      recvChunkSize = 16000
     }
 
 data InternalConnectOrCancelRequest a where
@@ -534,7 +534,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   (initialBuf, initialBufLen) <- receiveUntilBufferHasAtLeast 5
   let charAndLength = LBS.take 5 initialBuf
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
-      lenLeftToFetch :: Int64 = fromIntegral $ either error id (Cereal.decodeLazy @Int32 lenbs) - 4
+      lenLeftToFetch :: Int64 = fromIntegral $ either error id (BinSer.decodeInt32BE $ LBS.toStrict lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
   (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
   let restOfMsg = LBS.drop 5 $ LBS.take fullMessageLen nowBuf
@@ -595,18 +595,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
               fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
             Nothing -> handleUnexpectedMsg (f . Left)
 
-    -- Sadly we have to repeat the parsing of a DataRow message here, when it already
-    -- exists in the FromPgMessage instance and in the body of this function. Maybe
-    -- we can improve this later.
-    customDataRowParser = do
-      charAndLength <- Parser.take 5
-      let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons charAndLength
-          lenLeftToFetch :: Int = fromIntegral $ either error id (Cereal.decode @Int32 lenbs) - 4
-      if msgIdentChar == 'D'
-        then do
-          rowColumnData <- BS.drop 2 <$> Parser.take lenLeftToFetch
-          pure $ DataRow rowColumnData
-        else fail "Not a DataRow"
+    customDataRowParser = DataRow <$> Parser.takeDataRow
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
@@ -622,7 +611,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- or an exception is thrown when receiving.
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
-            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max 16000 $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
             atomicWriteIORef recvBuffer (currentBuffer <> LBS.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
 
