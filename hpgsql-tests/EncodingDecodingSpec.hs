@@ -11,7 +11,7 @@ import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Functor ((<&>))
 import Data.Functor.Contravariant (contramap)
-import Data.Int (Int16, Int32, Int64)
+import Data.Int (Int16, Int32, Int64, Int8)
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing)
@@ -35,6 +35,7 @@ import DbUtils
     testConnInfo,
     withRollback,
   )
+import Debug.Trace
 import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import Hedgehog (PropertyT, annotateShow, (===))
@@ -44,8 +45,7 @@ import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
-import Hpgsql.InternalTypes (DataRow (..))
-import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
+import Hpgsql.Pipeline (pipeline, pipeline1With, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid, TypeInfo (..), lookupTypeByOid)
@@ -142,6 +142,9 @@ spec = parallel $ do
     it
       "Values type round-trip"
       valuesTypeRoundTrip
+    it
+      "Especially optimized less-than-4-bytes long value decoders work"
+      smallerThan4BytesValuesAndNullsRoundtrip
   aroundConn $ describe "Custom types" $ do
     it "Composite type" queryCompositeType
     it
@@ -178,8 +181,58 @@ zeroColumnsResults = do
 
 valuesRoundTrip :: HPgConnection -> IO ()
 valuesRoundTrip conn = do
-  let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Aeson.Null)
+  let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Nothing :: Maybe Bool)
   queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
+
+smallerThan4BytesValuesAndNullsRoundtrip :: HPgConnection -> PropertyT IO ()
+smallerThan4BytesValuesAndNullsRoundtrip conn = hedgehog $ do
+  yearForDate :: Integer <- Gen.forAll $ Gen.integral (Gen.linear 1 9999)
+  month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
+  day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 28
+  date <- Gen.forAll $ Gen.element [Just $ fromGregorian yearForDate month day, Nothing]
+  let i16Boundary :: [Int16]
+      i16Boundary =
+        [minBound .. minBound + 10]
+          ++ [maxBound - 10 .. maxBound]
+          ++ [2 ^ (14 :: Int) - 10 .. 2 ^ (14 :: Int) + 10]
+          ++ [-(2 ^ (14 :: Int)) - 10 .. -(2 ^ (14 :: Int)) + 10]
+      i32Boundary :: [Int32]
+      i32Boundary =
+        [minBound .. minBound + 10]
+          ++ [maxBound - 10 .. maxBound]
+          ++ [2 ^ (30 :: Int) - 10 .. 2 ^ (30 :: Int) + 10]
+          ++ [-(2 ^ (30 :: Int)) - 10 .. -(2 ^ (30 :: Int)) + 10]
+  i16 :: Maybe Int16 <- Gen.forAll $ Gen.choice [Just <$> Gen.element i16Boundary, Just <$> Gen.integral (Gen.linear (-10) 10), pure Nothing]
+  i32 :: Maybe Int32 <- Gen.forAll $ Gen.choice [Just <$> Gen.element i32Boundary, Just <$> Gen.integral (Gen.linear (-10) 10), pure Nothing]
+  b :: Maybe Bool <- Gen.forAll $ Gen.choice [Just <$> Gen.bool, pure Nothing]
+  -- TODO: float4, char
+  -- TODO: Varying recvChunkSize sizes for this test
+  -- TODO: More variations of rows
+  -- TODO: Test `singleField fieldDecoder` as well: we now have two implementations to test for each
+  --       of these types.
+  -- TODO: test errors when trying to decode NULL::type into a non-Maybe in Haskell
+  let r1 = (date, i16, i32, b)
+      r2 = (i16, date, i32, b)
+      r3 = (i32, date, i16, b)
+      r4 = (b, date, i16, i32)
+      r5 = (b, i32, i16, date)
+      r6 = (b, date, i32, i16)
+  (resR1, resR2, resR3, resR4, resR5, resR6) <-
+    liftIO $
+      runPipeline conn $
+        (,,,,,)
+          <$> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r1]}) subq|]
+          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r2]}) subq|]
+          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r3]}) subq|]
+          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r4]}) subq|]
+          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r5]}) subq|]
+          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r6]}) subq|]
+  liftIO resR1 >>= (=== r1)
+  liftIO resR2 >>= (=== r2)
+  liftIO resR3 >>= (=== r3)
+  liftIO resR4 >>= (=== r4)
+  liftIO resR5 >>= (=== r5)
+  liftIO resR6 >>= (=== r6)
 
 byteaValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 byteaValuesRoundTrip conn = hedgehog $ do

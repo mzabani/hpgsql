@@ -181,7 +181,16 @@ singleField (FieldDecoder {..}) =
     }
 
 class FromPgField a where
+  -- | A decoder that takes
   fieldDecoder :: FieldDecoder a
+
+  -- | This should be semantically equivalent to `singleField fieldDecoder`, and
+  -- it is automatically derived to be exactly that.
+  -- So as a user, you don't need to override this.
+  -- This field exists for a performance optimization within hpgsql, or for users
+  -- that really know what they're doing.
+  singleFieldRowDecoder :: RowDecoder a
+  singleFieldRowDecoder = singleField fieldDecoder
 
 class FromPgRow a where
   rowDecoder :: RowDecoder a
@@ -254,43 +263,43 @@ compositeTypeEncoder rowEnc =
     }
 
 instance (FromPgField a) => FromPgRow (Only a) where
-  rowDecoder = Only <$> singleField fieldDecoder
+  rowDecoder = Only <$> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b) => FromPgRow (a, b) where
-  rowDecoder = (,) <$> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c) => FromPgRow (a, b, c) where
-  rowDecoder = (,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d) => FromPgRow (a, b, c, d) where
-  rowDecoder = (,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e) => FromPgRow (a, b, c, d, e) where
-  rowDecoder = (,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f) => FromPgRow (a, b, c, d, e, f) where
-  rowDecoder = (,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g) => FromPgRow (a, b, c, d, e, f, g) where
-  rowDecoder = (,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h) => FromPgRow (a, b, c, d, e, f, g, h) where
-  rowDecoder = (,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i) => FromPgRow (a, b, c, d, e, f, g, h, i) where
-  rowDecoder = (,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j) => FromPgRow (a, b, c, d, e, f, g, h, i, j) where
-  rowDecoder = (,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  rowDecoder = (,,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l) where
-  rowDecoder = (,,,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,,,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
-  rowDecoder = (,,,,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = (,,,,,,,,,,,,) <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
 
 data FieldEncoder a = FieldEncoder
   { toTypeOid :: !(EncodingContext -> Maybe Oid),
@@ -741,6 +750,19 @@ binaryIntDecoder typOid = \bs ->
       | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
+-- | Specialized/performance-oriented Big-Endian binary decoder for Haskell's various IntXX types.
+binaryIntSpecializedRowDecoder :: Parser.Parser (Maybe Int)
+binaryIntSpecializedRowDecoder = do
+  fieldLen <- Parser.takeInt32BE
+  -- TODO: We're assuming `Int` is always 64 bits, so 64bit CPUs? Is that ok?
+  -- TODO: Is there a way to optimistically assume <=4 bytes and use our custom new parser?
+  case fieldLen of
+    4 -> Just . fromIntegral <$> Parser.takeInt32BE
+    (-1) -> pure Nothing
+    8 -> Just . fromIntegral <$> Parser.takeInt64BE
+    2 -> Just . fromIntegral <$> Parser.takeInt16BE
+    _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
+
 binaryFloat4Decoder :: ByteString -> Float
 binaryFloat4Decoder = castWord32ToFloat . either error id . BinSer.decodeWord32BE
 
@@ -774,6 +796,37 @@ instance FromPgField Int where
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`",
         allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
       }
+  singleFieldRowDecoder =
+    let fromNullable = \case
+          Nothing -> fail "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`"
+          Just i -> pure i
+     in RowDecoder
+          { fullRowDecoder = const $ binaryIntSpecializedRowDecoder >>= fromNullable,
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` haskellIntOids)]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
+
+-- instance {-# OVERLAPPING #-} FromPgField (Maybe Int) where
+--   fieldDecoder = error "NOOO"
+
+--   -- FieldDecoder
+--   --   { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
+--   --       let !decode = binaryIntDecoder oid
+--   --        in \case
+--   --             Just bs -> Just <$> decode bs
+--   --             Nothing -> Right Nothing,
+--   --     allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
+--   --   }
+--   singleFieldRowDecoder =
+--     RowDecoder
+--       { fullRowDecoder = const binaryIntSpecializedRowDecoder,
+--         rowColumnsTypeCheck = \case
+--           [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` haskellIntOids)]
+--           _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+--         numExpectedColumns = 1
+--       }
 
 instance FromPgField Int16 where
   fieldDecoder =
@@ -922,6 +975,18 @@ instance FromPgField Bool where
   fieldDecoder = parsePgType [boolOid] $ \case
     Just bs -> Right $ bs == binaryTrue
     Nothing -> Left "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
+  singleFieldRowDecoder =
+    let dec = Parser.parsePgFieldWithAtMost4Bytes BinSer.TypeSize1
+        word8ToBool = \case
+          Nothing -> fail "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
+          Just w8 -> pure $ w8 == 1
+     in RowDecoder
+          { fullRowDecoder = const $ dec >>= word8ToBool,
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid == boolOid)]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
 
 instance FromPgField Char where
   fieldDecoder =
@@ -1066,6 +1131,18 @@ instance FromPgField Day where
       jd <- BinSer.decodeInt32BE 0 bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
+  singleFieldRowDecoder =
+    let dec = Parser.takeInt32BEWithFieldLength
+        int32ToDay = \case
+          Nothing -> fail "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
+          Just i32 -> let jd = fromIntegral i32 :: Integer in pure $ addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
+     in RowDecoder
+          { fullRowDecoder = const $ dec >>= int32ToDay,
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid == dateOid)]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
 
 instance FromPgField (Unbounded Day) where
   fieldDecoder = parsePgType [dateOid] $ \case
@@ -1105,15 +1182,13 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
-                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \case
+                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                    Just d -> Right d
+                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 
@@ -1151,7 +1226,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
       { fieldValueDecoder = \colInfo ->
           let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
            in \case
-                Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector (Vector a))`"
+                Nothing -> Left "Cannot decode SQL null as the Haskell (Vector (Vector a)) type. Use a `Maybe (Vector (Vector a))`"
                 Just bs -> case Parser.parseOnly arrayFieldDecoder bs of
                   Parser.ParseOk v -> Right v
                   Parser.ParseFail err -> Left err,
@@ -1184,6 +1259,8 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
               case elementParser.fieldValueDecoder elementColInfo elementBs of
                 Left err -> fail $ "Error parsing array element: " ++ show err
                 Right el -> pure el
+
+{-# INLINE genericFromPgRow #-}
 
 -- | Derives `FromPgRow` generically.
 genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a

@@ -22,10 +22,13 @@ module Hpgsql.Encoding.BinarySerializer
     encodeInt16BE,
     encodePgBoolean,
     decodeDataRow,
+    decodePgFieldWithAtMost4Bytes,
+    WordDecoding (..),
   )
 where
 
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as InternalBS
 import Data.Int (Int16, Int32, Int64)
 import Prelude hiding (encodeFloat)
@@ -130,6 +133,8 @@ encodeFloat n = unsafeEncodeWord (castFloatToWord32 n) fromBigEndian32 4
 encodeDouble :: Double -> ByteString
 encodeDouble n = unsafeEncodeWord (castDoubleToWord64 n) fromBigEndian64 8
 
+-- TODO: Encode field length together with value for small types.
+-- This can also be a performance boost by having fewer bytestrings?
 {-# INLINE encodePgBoolean #-}
 encodePgBoolean :: Bool -> ByteString
 encodePgBoolean v = if v then "\SOH" else "\NUL"
@@ -173,3 +178,53 @@ decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
     toResult lenFullMsg
       | len >= 1 + lenFullMsg + idx.idx = Right $ ByteStringIdx $ 1 + lenFullMsg + idx.idx
       | otherwise = Left "Less than enough bytes to decode a full DataRow"
+
+{-# INLINE decodePgFieldWithAtMost4Bytes #-}
+
+data WordDecoding a where
+  TypeSize1 :: WordDecoding Word8
+  TypeSize2 :: WordDecoding Word16
+  TypeSize4 :: WordDecoding Word32
+
+-- | A specialized decoder that decoders a query result's
+-- field's contents, but only for PG fields at most 4 bytes long and
+-- at least 1 byte long (so no text or void types, for example).
+-- This includes essentially int32, int16, and booleans.
+-- Pass in as type argument a Word8, Word16 or Word32 to indicate
+-- the size of the PG type you're decoding.
+decodePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => WordDecoding a -> ByteString -> Either String (Maybe a, ByteString)
+decodePgFieldWithAtMost4Bytes wdec =
+  let (pgTypeSize, endianSwap, valueMask :: Word64) = case wdec of
+        TypeSize1 -> (1, Prelude.id, 0b00000000_00000000_00000000_00000000_11111111_00000000_00000000_00000000)
+        TypeSize2 -> (2, fromBigEndian16, 0b00000000_00000000_00000000_00000000_11111111_11111111_00000000_00000000)
+        TypeSize4 -> (4, fromBigEndian32, 0b00000000_00000000_00000000_00000000_11111111_11111111_11111111_11111111)
+      valueShift :: Int = 8 * (4 - pgTypeSize)
+   in \bs ->
+        -- We try the most optimistic case first:
+        -- - Non-null 4 byte long types (like int32)
+        -- - Null int32 followed by at least one other field (not the last field in the row)
+        -- - Shorter types (int16, bool) followed by at least one other field (not the last field in the row)
+        -- In all the cases above, there are at least 8 bytes in the row, so our decoding into a Word64 will succeed.
+        case unsafeDecodeWord bs 8 fromBigEndian64 of
+          Right (w64 :: Word64) ->
+            let fieldLenW64 :: Word64 = flip unsafeShiftR 32 $ w64 .&. 0b11111111_11111111_11111111_11111111_00000000_00000000_00000000_00000000
+                fieldIfNotNull :: a = fromIntegral $ unsafeShiftR (w64 .&. valueMask) valueShift
+             in if fieldLenW64 == 0xFFFFFFFF -- (-1) in two's-complement
+                  then
+                    Right (Nothing, BS.drop 4 bs)
+                  else
+                    if fieldLenW64 <= 4 -- TODO: Maybe we omit this check and make this an unsafe function?
+                      then
+                        Right $ (Just fieldIfNotNull, BS.drop (4 + fromIntegral fieldLenW64) bs) -- This avoids another load instruction
+                      else Left "You cannot use decodePgFieldWithAtMost4Bytes to decode fields of types potentially more than 4 bytes long"
+          Left _ -> do
+            -- This is the not-as-optimistic case, which includes:
+            -- - A NULL int32 as the last field in the row
+            -- - A bool/int8/int16 that is the last field in the row
+            lenField <- decodeInt32BE 0 bs
+            if lenField >= 0
+              then do
+                -- peek after the next 4 bytes for @a
+                fieldValue <- unsafeDecodeWordOffset 4 bs (fromIntegral pgTypeSize) endianSwap
+                Right (Just fieldValue, BS.drop (4 + fromIntegral lenField) bs)
+              else Right (Nothing, BS.drop 4 bs) -- TODO: Return "" as an empty bytestring

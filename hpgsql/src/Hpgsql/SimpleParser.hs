@@ -24,6 +24,10 @@ module Hpgsql.SimpleParser
     takeDataRow,
     parseManyRows,
     skip,
+    parsePgFieldWithAtMost4Bytes,
+    takeInt64BEWithFieldLength,
+    takeInt32BEWithFieldLength,
+    takeInt16BEWithFieldLength,
   )
 where
 
@@ -31,6 +35,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
 import Hpgsql.Encoding.BinarySerializer (ByteStringIdx (..))
+import Foreign.Storable (Storable)
 import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Prelude hiding (take)
 
@@ -119,12 +124,41 @@ takeInt16BE = Parser $ \idx bs kf ks ->
     Left err -> kf err
     Right v -> ks v (idx + 2) bs
 
+{-# INLINE takeInt16BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int16 in a row.
+takeInt16BEWithFieldLength :: Parser (Maybe Int16)
+takeInt16BEWithFieldLength = do
+  mi16 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize2
+  pure $ fromIntegral <$> mi16
+
 {-# INLINE takeInt32BE #-}
 takeInt32BE :: Parser Int32
 takeInt32BE = Parser $ \idx bs kf ks ->
   case BinSer.decodeInt32BE idx bs of
     Left err -> kf err
     Right v -> ks v (idx + 4) bs
+
+{-# INLINE takeInt32BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int32 in a row.
+takeInt32BEWithFieldLength :: Parser (Maybe Int32)
+takeInt32BEWithFieldLength = do
+  mi32 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize4
+  pure $ fromIntegral <$> mi32
+
+{-# INLINE takeInt64BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int64 in a row.
+takeInt64BEWithFieldLength :: Parser (Maybe Int64)
+takeInt64BEWithFieldLength = do
+  fieldLen <- takeInt32BE
+  if fieldLen == (-1)
+    then pure Nothing
+    else Just <$> takeInt64BE
 
 {-# INLINE takeInt64BE #-}
 takeInt64BE :: Parser Int64
@@ -142,6 +176,18 @@ takeDataRow = Parser $ \idx bs kf ks ->
   case BinSer.decodeDataRow idx bs of
     Left err -> kf err
     Right idxRest -> ks idxRest idxRest bs
+
+{-# INLINE parsePgFieldWithAtMost4Bytes #-}
+
+-- | A specialized parser that reads a query result's
+-- field's contents.
+parsePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => BinSer.WordDecoding a -> Parser (Maybe a)
+parsePgFieldWithAtMost4Bytes wdec =
+  let dec = BinSer.decodePgFieldWithAtMost4Bytes wdec
+   in Parser $ \bs kf ks ->
+        case dec bs of
+          Left err -> kf err
+          Right (v, rest) -> ks v rest
 
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'
