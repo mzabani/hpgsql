@@ -61,6 +61,7 @@ fromBigEndian16 = Prelude.id
 fromBigEndian16 = byteSwap16
 #endif
 
+{-# INLINE unsafeDecodeWord #-}
 unsafeDecodeWord :: (Storable a) => ByteString -> Int -> (a -> a) -> Either String a
 unsafeDecodeWord (InternalBS.BS bytesPtr len) minLen endianConvert =
   if len >= minLen
@@ -70,41 +71,53 @@ unsafeDecodeWord (InternalBS.BS bytesPtr len) minLen endianConvert =
        in Right decodedWord
     else Left "Less than enough bytes to decode"
 
+{-# INLINE unsafeEncodeWord #-}
 unsafeEncodeWord :: (Storable a) => a -> (a -> a) -> Int -> ByteString
 unsafeEncodeWord n endianConvert len =
   InternalBS.unsafeCreate len $ \bufferPtr ->
     poke (coerce bufferPtr) $ endianConvert n
 
+{-# INLINE decodeInt16BE #-}
 decodeInt16BE :: ByteString -> Either String Int16
 decodeInt16BE bs = fromIntegral <$> unsafeDecodeWord bs 2 fromBigEndian16
 
+{-# INLINE encodeInt16BE #-}
 encodeInt16BE :: Int16 -> ByteString
 encodeInt16BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian16 2
 
+{-# INLINE decodeWord32BE #-}
 decodeWord32BE :: ByteString -> Either String Word32
 decodeWord32BE bs = unsafeDecodeWord bs 4 fromBigEndian32
 
+{-# INLINE decodeWord64BE #-}
 decodeWord64BE :: ByteString -> Either String Word64
 decodeWord64BE bs = unsafeDecodeWord bs 8 fromBigEndian64
 
+{-# INLINE decodeInt32BE #-}
 decodeInt32BE :: ByteString -> Either String Int32
 decodeInt32BE bs = fromIntegral <$> unsafeDecodeWord bs 4 fromBigEndian32
 
+{-# INLINE encodeInt32BE #-}
 encodeInt32BE :: Int32 -> ByteString
 encodeInt32BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian32 4
 
+{-# INLINE decodeInt64BE #-}
 decodeInt64BE :: ByteString -> Either String Int64
 decodeInt64BE bs = fromIntegral <$> unsafeDecodeWord bs 8 fromBigEndian64
 
+{-# INLINE encodeInt64BE #-}
 encodeInt64BE :: Int64 -> ByteString
 encodeInt64BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian64 8
 
+{-# INLINE encodeFloat #-}
 encodeFloat :: Float -> ByteString
 encodeFloat n = unsafeEncodeWord (castFloatToWord32 n) fromBigEndian32 4
 
+{-# INLINE encodeDouble #-}
 encodeDouble :: Double -> ByteString
 encodeDouble n = unsafeEncodeWord (castDoubleToWord64 n) fromBigEndian64 8
 
+{-# INLINE encodePgBoolean #-}
 encodePgBoolean :: Bool -> ByteString
 encodePgBoolean v = if v then "\SOH" else "\NUL"
 
