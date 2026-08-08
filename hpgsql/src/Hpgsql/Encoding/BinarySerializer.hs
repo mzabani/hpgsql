@@ -6,6 +6,8 @@
 -- In our tests, this is ~4.7% faster than cereal, and it also
 -- (or by virtue of) allocates ~13% less memory in some of our benchmarks.
 -- And it also means one fewer dependency.
+-- The caveat is that this module makes unaligned memory access. For the target
+-- CPU architectures of this library, this should be fine.
 module Hpgsql.Encoding.BinarySerializer
   ( decodeInt16BE,
     decodeInt32BE,
