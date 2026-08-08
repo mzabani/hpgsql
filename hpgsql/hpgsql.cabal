@@ -44,6 +44,9 @@ library
   other-modules:
       Hpgsql.Base
       Hpgsql.Internal
+      Hpgsql.LanguageHaskell.FromThExtension
+      Hpgsql.LanguageHaskell.GhcParserOpts
+      Hpgsql.LanguageHaskell.ParseHaskellExpression
       Hpgsql.Locking
       Hpgsql.Msgs
       Hpgsql.Networking
@@ -104,7 +107,7 @@ library
     crypton >= 1.0.0 && < 1.1,
     memory >= 0.18.0 && < 0.19,
     hashable >= 1.5 && < 1.6,
-    haskell-src-meta >= 0.8 && < 0.9,
+    ghc-lib-parser >= 9.6 && < 9.14,
     network >= 3.2 && < 3.3,
     network-uri >= 2.6 && < 2.7,
     safe-exceptions >= 0.1 && < 0.2,

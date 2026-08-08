@@ -299,25 +299,25 @@ spec = do
 
     it "parseSql AcceptQuasiQuoterExpressions preserves quasiquoter expressions with parentheses" $ do
       let input = "SELECT ^{escapeIdentifier (fromQuery name)}, #{someFunc (arg1) arg2}"
-          result = parseSql AcceptQuasiQuoterExpressions input
+          result = parseSql (AcceptQuasiQuoterExpressions []) input
           qqExprs = [(k, t) | QuasiQuoterExpression k t <- result]
       qqExprs `shouldBe` [(QQEmbeddedQuery, "escapeIdentifier (fromQuery name)"), (QQInterpolation, "someFunc (arg1) arg2")]
 
     it "parseSql AcceptQuasiQuoterExpressions handles nested parentheses in expressions" $ do
       let input = "SELECT #{f (g (x))}"
-          result = parseSql AcceptQuasiQuoterExpressions input
+          result = parseSql (AcceptQuasiQuoterExpressions []) input
           qqExprs = [(k, t) | QuasiQuoterExpression k t <- result]
       qqExprs `shouldBe` [(QQInterpolation, "f (g (x))")]
 
     it "parseSql AcceptQuasiQuoterExpressions inside parenthesised SQL expressions" $ do
       let input = "SELECT (#{someFunc (arg)})"
-          result = parseSql AcceptQuasiQuoterExpressions input
+          result = parseSql (AcceptQuasiQuoterExpressions []) input
           qqExprs = [(k, t) | QuasiQuoterExpression k t <- result]
       qqExprs `shouldBe` [(QQInterpolation, "someFunc (arg)")]
 
     it "parseSql AcceptQuasiQuoterExpressions handles } inside Haskell strings" $ do
       let input = "SELECT #{\"abc}\" ++ x}"
-          result = parseSql AcceptQuasiQuoterExpressions input
+          result = parseSql (AcceptQuasiQuoterExpressions []) input
           qqExprs = [(k, t) | QuasiQuoterExpression k t <- result]
       qqExprs `shouldBe` [(QQInterpolation, "\"abc}\" ++ x")]
 

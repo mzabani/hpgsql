@@ -4,16 +4,21 @@ import Control.Monad (forM_)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Char (isDigit)
+import Data.Functor.Contravariant (contramap)
+import Data.Int (Int32)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NE
+import Data.Proxy (Proxy (..))
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import qualified Data.Vector as Vector
+import GHC.Generics (Generic)
 import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
+import Hpgsql.Encoding (FromPgField, LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeEncoder, typeFieldEncoder, typeOidWithName)
 import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.ParsingInternal (ParsingOpts (..), parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
@@ -144,23 +149,69 @@ genMkQuery =
         pure (mkQuery "SELECT $1, $2, $3, $4, $5;" params, toComparableParams params)
     ]
 
+data SomeRecord = SomeRecord {field1 :: Int, field2 :: Int}
+
+data SomeGenericEnum = EVal1 | EVal2 | EVal3
+  deriving stock (Bounded, Enum, Eq, Generic, Show)
+  deriving (ToPgField) via (LowerCasedPgEnum SomeGenericEnum)
+
+data IntAndBool = IntAndBool {ibInt :: Int, ibBool :: Bool}
+  deriving stock (Eq, Show)
+
+instance ToPgField IntAndBool where
+  fieldEncoder =
+    typeFieldEncoder (typeOidWithName "int_and_bool") $
+      compositeTypeEncoder $
+        contramap (\(IntAndBool i b) -> (fromIntegral i :: Int32, b)) rowEncoder
+
+-- | This exists to test TypeApplications inside quasiquoters.
+polyFunc42 :: Proxy a -> Int
+polyFunc42 _ = 42
+
+infixFunc :: Char -> String -> String
+infixFunc c s = c : s
+
 -- | Queries built with the sql quasiquoter and #{} interpolation.
+-- These test a variety of GHC extensions and language syntax/features
+-- inside quasiquoters.
 genInterpolatedQuery :: Gen (Query, [(Maybe Oid, BinaryField)])
 genInterpolatedQuery =
   Gen.choice
     [ pure ([sql|SELECT 1, '#{x}', '^{y}';|], []),
       do
         x <- genInt
-        pure ([sql|SELECT #{x};|], toComparableParams (Only x)),
-      do
-        x <- genInt
         y <- genInt
-        pure ([sql|SELECT #{x}, #{y};|], toComparableParams (x, y)),
+        c <- genChar
+        pure ([sql|SELECT #{c `infixFunc` "abc"} #{if True then x else 0}, #{polyFunc42 (Proxy @String)}, #{Vector.fromList $ 37 : [45, y]};|], toComparableParams (c `infixFunc` "abc", x, polyFunc42 (Proxy @String), Vector.fromList [37, 45, y])),
+      do
+        x <- SomeRecord <$> genInt <*> genInt
+        y <- genInt
+        z <- Gen.bool
+        pure ([sql|SELECT #{x.field1}, #{-(x.field2)}, #{IntAndBool { ibInt = y, {- Some comment -} ibBool = z }}, #{'a'};|], toComparableParams (x.field1, -(x.field2), IntAndBool y z, 'a')),
       do
         x <- genInt
         y <- genInt
         z <- genInt
-        pure ([sql|SELECT #{x} FROM t WHERE #{y} BETWEEN 0 AND #{z};|], toComparableParams (x, y, z))
+        e :: SomeGenericEnum <- Gen.enum minBound maxBound
+        pure ([sql|SELECT #{x}, #{e} FROM t WHERE #{y} BETWEEN 0 AND #{fromIntegral z + 1.421::Float};|], toComparableParams (x, e, y, fromIntegral z + 1.421 :: Float)),
+      do
+        x <- genInt
+        b <- Gen.bool
+        pure
+          ( [sql|SELECT 42+#{let y = x + 1 in y*9}, #{fst <$> Just (b, False)}, #{case compare x 0 of
+                                                      !EQ -> "abc"::Text
+                                                      GT -> "cde"
+                                                      LT -> "xyz"
+                                                      _ -> error "Impossible"};|],
+            toComparableParams
+              ( let y = x + 1 in y * 9,
+                fst <$> Just (b, False),
+                case compare x 0 of
+                  !EQ -> "abc" :: Text
+                  GT -> "cde"
+                  LT -> "xyz"
+              )
+          )
     ]
 
 -- | Queries built with ^{} embedded queries, including reused placeholders.
