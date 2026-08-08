@@ -3,7 +3,7 @@
 
 -- |
 -- A replacement for libraries like cereal or binary.
--- In our tests, this is ~6.5% faster than cereal, and it also
+-- In our tests, this is ~4.7% faster than cereal, and it also
 -- (or by virtue of) allocates ~13% less memory in some of our benchmarks.
 -- And it also means one fewer dependency.
 module Hpgsql.Encoding.BinarySerializer
