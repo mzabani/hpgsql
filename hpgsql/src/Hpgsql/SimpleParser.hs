@@ -3,8 +3,12 @@
 -- and perform better than attoparsec, at least the way we use it in
 -- hpgsql.
 --
--- In benchmarks, this can improve performance by 12-15% materializing
--- query results.
+-- In benchmarks, this improved performance by 12-15% materializing
+-- query results when it was introduced.
+-- With the INLINE pragma in RowDecoder's Applicative's (<*>), GHC's
+-- inliner was finally able to make full use of continuation passing,
+-- and performance was improved by another ~14.3%, with total memory
+-- allocations reduced by ~6%.
 module Hpgsql.SimpleParser
   ( Parser (..),
     ParseResult (..),

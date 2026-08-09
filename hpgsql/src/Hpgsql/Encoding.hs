@@ -150,6 +150,7 @@ data RowDecoder a = RowDecoder
 
 instance Applicative RowDecoder where
   pure v = RowDecoder (const $ pure v) (map (,True)) 0
+  {-# INLINE (<*>) #-} -- This is crucial for performance. It makes our CPS Parser truly compile to CPS row decoders.
   RowDecoder p1 tc1 nc1 <*> RowDecoder p2 tc2 nc2 = RowDecoder (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in tc1 cols1 ++ tc2 cols2) (nc1 + nc2)
 
 instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowDecoder where
