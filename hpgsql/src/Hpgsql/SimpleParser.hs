@@ -7,7 +7,8 @@
 -- query results when it was introduced.
 -- With the INLINE pragma in RowDecoder's Applicative's (<*>), GHC's
 -- inliner was finally able to make full use of continuation passing,
--- and performance was improved by another ??? ?
+-- and performance was improved by another ~14.3%, with total memory
+-- allocations reduced by ~6%.
 module Hpgsql.SimpleParser
   ( Parser (..),
     ParseResult (..),

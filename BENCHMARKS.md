@@ -31,18 +31,18 @@ This runs with 2 concurrent queries, 10 times over:
 
 This benchmark is unfair towards both hpgsql and postgresql-simple because the row decoder is Generically derived for them while it is hand-written for hasql.
 ```csv
-postgresql-simple Record List (100000 rows),12.10,142.65M,120.5
-hasql Record List (100000 rows),6.314,142.48M,77.8
-hpgsql Record List (100000 rows),4.092,72.07M,119.7
+postgresql-simple Record List (100000 rows),12.07,142.59M,99.3
+hasql Record List (100000 rows),6.369,142.48M,79.0
+hpgsql Record List (100000 rows),3.908,72.07M,119.9
 ```
 
 ### Materializing 100_000 rows with 13 columns each into a List of Tuples
 
 This runs with 2 concurrent queries, 10 times over:
 ```csv
-postgresql-simple Tuple List (100000 rows),14.74,142.52M,144.9
-hasql Tuple List (100000 rows),8.263,142.48M,202.2
-hpgsql Tuple List (100000 rows),4.648,72.07M,150.4
+postgresql-simple Tuple List (100000 rows),14.37,142.54M,137.7
+hasql Tuple List (100000 rows),8.305,142.48M,201.3
+hpgsql Tuple List (100000 rows),4.541,72.07M,150.5
 ```
 
 ### Streaming 100_000 rows with 13 columns as Records
@@ -55,9 +55,9 @@ However, Hpgsql's implementation streams directly from the socket while the othe
 it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
 cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 ```csv
-streaming-postgresql-simple Record Stream (100000 rows),13.32,73.41M,0.0
-postgresql-simple Record fold (100000 rows),13.47,77.81M,0.0
-hpgsql Record Stream (100000 rows),1.421,72.07M,0.0
+streaming-postgresql-simple Record Stream (100000 rows),13.59,73.34M,0.0
+postgresql-simple Record fold (100000 rows),13.37,77.84M,0.0
+hpgsql Record Stream (100000 rows),1.307,72.07M,0.0
 ```
 
 ### Streaming 100_000 rows with 13 columns as Tuples
@@ -67,9 +67,9 @@ Hpgsql's implementation streams directly from the socket while the others use cu
 it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
 cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 ```csv
-streaming-postgresql-simple Tuple Stream (100000 rows),14.10,73.26M,0.0
-postgresql-simple Tuple fold (100000 rows),13.45,84.42M,0.0
-hpgsql Tuple Stream (100000 rows),1.025,72.07M,0.0
+streaming-postgresql-simple Tuple Stream (100000 rows),14.04,73.37M,0.0
+postgresql-simple Tuple fold (100000 rows),13.53,82.45M,0.0
+hpgsql Tuple Stream (100000 rows),880.0,72.07M,0.0
 ```
 
 ### COPY FROM STDIN
@@ -77,6 +77,6 @@ hpgsql Tuple Stream (100000 rows),1.025,72.07M,0.0
 This compares hpgsql's binary copy to a `forM` loop writing text rows.
 
 ```csv
-postgresql-simple text COPY (100000 rows),1.348,72.10M,3.8
-hpgsql copyFromS binary COPY (100000 rows),672.1,72.07M,10.8
+postgresql-simple text COPY (100000 rows),1.373,72.10M,3.8
+hpgsql copyFromS binary COPY (100000 rows),652.0,72.07M,10.8
 ```
