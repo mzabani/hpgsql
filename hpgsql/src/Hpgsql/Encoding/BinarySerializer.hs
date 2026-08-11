@@ -155,7 +155,7 @@ decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
     Left _ ->
       -- It is possible the DataRow has length less than 8 bytes, so
       -- we still have to try to parse that.
-      if len >= 5
+      if len >= 5 + idx.idx
         then
           -- TODO: Don't allocate "lenbs" and decodeInt32BE with offset=1?
           let (InternalBS.w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons $ BS.drop idx.idx bs

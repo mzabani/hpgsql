@@ -225,7 +225,8 @@ instance FromPgMessage CopyInResponse where
 
 instance FromPgMessage DataRow where
   msgParser = PgMsgParser $ \c !restOfMsg -> case c of
-    'D' -> Just $ DataRow {rowColumnData = LBS.toStrict $ LBS.drop 2 restOfMsg}
+    -- TODO: Double-check the re-encoding here is correct!
+    'D' -> Just $ DataRow {rowColumnData = BS.singleton 68 <> BinSer.encodeInt32BE (fromIntegral $ LBS.length restOfMsg + 4) <> LBS.toStrict restOfMsg}
     _ -> Nothing
 
 instance FromPgMessage NoData where

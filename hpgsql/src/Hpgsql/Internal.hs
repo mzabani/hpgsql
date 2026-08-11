@@ -115,6 +115,7 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
@@ -506,7 +507,7 @@ receiveNextMsgWithMaskedContinuation conn parser f =
     Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " <> Text.pack (show msgIdentChar) <> ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
 data ReceiveWhat a b where
-  ReceiveDataRows :: ReceiveWhat DataRow [DataRow]
+  ReceiveDataRows :: ReceiveWhat DataRow ByteString
   ReceiveArbitraryMsg :: PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> ReceiveWhat a b
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
@@ -583,19 +584,19 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
       case receiveWhat of
         ReceiveDataRows ->
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
-          case Parser.parseOnly (Parser.matchLeftUnconsumed (Parser.parseMany customDataRowParser)) (LBS.toStrict nowBuf) of
-            Parser.ParseOk (unconsumedBuffer, msgs@(_ : _)) -> do
-              debugPrint $ "Received " ++ show msgs
-              pure (LBS.fromStrict unconsumedBuffer, Just msgs)
-            _ -> handleUnexpectedMsg $ const $ pure [] -- No error when we stop receiving DataRows, only emptiness
+          let fullBuf = LBS.toStrict nowBuf
+           in case Parser.parseOnly Parser.parseManyRows fullBuf of
+                Parser.ParseOk unconsumedBufferBegin | unconsumedBufferBegin.idx > 0 -> do
+                  let (msgs, unconsumedBuffer) = BS.splitAt unconsumedBufferBegin.idx fullBuf
+                  debugPrint $ "Received one or more messages with total length " ++ show (BS.length msgs)
+                  pure (LBS.fromStrict unconsumedBuffer, Just msgs)
+                _ -> handleUnexpectedMsg $ const $ pure "" -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar restOfMsg parser of
             Just msg -> do
               debugPrint $ "Received " ++ show msg
               fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
             Nothing -> handleUnexpectedMsg (f . Left)
-
-    customDataRowParser = DataRow <$> Parser.takeDataRow
 
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
@@ -843,6 +844,8 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
           }
       pure (Just respMsg, newState)
 
+newtype DataRows = DataRows ByteString
+
 -- | After sending one or more queries to the backend, run this function for each query to fetch that query's results.
 -- You must call the returned IO function and consume the returned Stream completely until you get to the
 -- `Either ErrorResponse CommandComplete` object.
@@ -855,7 +858,7 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
 consumeResults ::
   HPgConnection ->
   QueryId ->
-  IO (Maybe (Either3 NoData RowDescription CopyInResponse), Stream (Of DataRow) IO (Either ErrorResponse CommandComplete))
+  IO (Maybe (Either3 NoData RowDescription CopyInResponse), Stream (Of DataRows) IO (Either ErrorResponse CommandComplete))
 consumeResults conn qryId = do
   -- debugPrint "++++ Inside consumeResults"
   -- We assume it's possible to receive a DataRow here even in the first call because `consumeResults`
@@ -886,29 +889,28 @@ consumeResults conn qryId = do
       pure (mERowDesc, pure $ Right cmd)
     (mERowDesc, Middle3 mDataRow) -> do
       let allOtherRows =
-            S.concat $
-              S.unfold
-                ( \() -> do
-                    mRow <- receiveNextMsgGeneric conn ReceiveDataRows
-                    case mRow of
-                      rows@(_ : _) -> pure $ Right (rows :> ())
-                      [] -> do
-                        stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-                        case stateAfterNextMsg of
-                          ErrorResponseReceived _ err -> do
-                            receiveReadyForQueryIfNecessary thisThreadId
-                            pure $ Left $ Left err
-                          CommandCompleteReceived _ cmd -> do
-                            receiveReadyForQueryIfNecessary thisThreadId
-                            pure $ Left $ Right cmd
-                          ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
-                          st -> throwIrrecoverableError $ "Internal error in Hpgsql. After the last DataRow we should get either an ErrorResponse or a CommandComplete message. State: " <> Text.pack (show st)
-                )
-                ()
+            S.unfold
+              ( \() -> do
+                  mRow <- receiveNextMsgGeneric conn ReceiveDataRows
+                  case mRow of
+                    rows | not (BS.null rows) -> pure $ Right (DataRows rows :> ())
+                    _ -> do
+                      stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+                      case stateAfterNextMsg of
+                        ErrorResponseReceived _ err -> do
+                          receiveReadyForQueryIfNecessary thisThreadId
+                          pure $ Left $ Left err
+                        CommandCompleteReceived _ cmd -> do
+                          receiveReadyForQueryIfNecessary thisThreadId
+                          pure $ Left $ Right cmd
+                        ReadyForQueryReceived errOrCmd _ -> pure $ Left errOrCmd
+                        st -> throwIrrecoverableError $ "Internal error in Hpgsql. After the last DataRow we should get either an ErrorResponse or a CommandComplete message. State: " <> Text.pack (show st)
+              )
+              ()
           finalStream = case mDataRow of
             Nothing -> allOtherRows
             Just dr ->
-              dr `S.cons` allOtherRows
+              DataRows dr.rowColumnData `S.cons` allOtherRows
       pure (mERowDesc, finalStream)
   where
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()
@@ -1409,17 +1411,18 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           let typecheckedColInfos = rtypecheck colInfos
           unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " <> Text.pack (show numResultColumns) <> " columns but row parser expected " <> Text.pack (show expectedNumCols)
           unless (all snd typecheckedColInfos) $ throwIrrecoverableErrorWithStatement qText "Query result column types do not match expected column types"
-          pure $ rparser colInfos <* Parser.endOfInput
-        MonadicRowDecoder (RowDecoderMonadic rparser) -> pure $ fmap fst $ rparser ConversionState {colsLeftToParse = colInfos} <* Parser.endOfInput
+          pure $ Parser.take 7 *> rparser colInfos -- Skip msg ident., length, number of columns, then parse fields
+        MonadicRowDecoder (RowDecoderMonadic rparser) -> pure $ Parser.take 7 *> fmap fst (rparser ConversionState {colsLeftToParse = colInfos})
       pure $ do
         errOrCmdComplete <-
-          S.mapM
-            ( \(DataRow rowColumnData) ->
-                case Parser.parseOnly rowparser rowColumnData of
-                  Parser.ParseOk row -> pure row
-                  Parser.ParseFail err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " <> Text.pack (show err)
-            )
-            rowsStream
+          S.concat $
+            S.mapM
+              ( \(DataRows rowColumnData) ->
+                  case Parser.parseOnly (Parser.parseMany rowparser <* Parser.endOfInput) rowColumnData of
+                    Parser.ParseOk rows -> pure rows
+                    Parser.ParseFail err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " <> Text.pack (show err)
+              )
+              rowsStream
         S.effect $ case errOrCmdComplete of
           Left err -> throwPostgresError qText err
           Right _cmdComplete -> pure mempty

@@ -22,6 +22,7 @@ module Hpgsql.SimpleParser
     takeInt32BE,
     takeInt64BE,
     takeDataRow,
+    parseManyRows,
   )
 where
 
@@ -137,13 +138,22 @@ takeDataRow = Parser $ \idx bs kf ks ->
     Left err -> kf err
     Right (thisDataRow, idxRest) -> ks thisDataRow idxRest bs
 
+-- TODO: Get rid of parseMany to save on List allocations for DataRows?
 parseMany :: Parser a -> Parser [a]
-parseMany p = Parser $ \bs' idx _kf ks -> let (vs, rest) = go bs' idx in ks vs 0 rest
+parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'
   where
     go idx bs = case parseOnlyOffset (matchLeftUnconsumed p) idx bs of
-      ParseOk (unconsumed, v) -> let (vs, rest) = go 0 unconsumed in (v : vs, rest)
-      ParseFail _ -> ([], bs)
+      ParseOk (unconsumedIdx, v) -> let (vs, rest) = go unconsumedIdx bs in (v : vs, rest)
+      ParseFail _ -> ([], idx)
 {-# INLINE parseMany #-}
+
+parseManyRows :: Parser ByteStringIdx
+parseManyRows = Parser $ \idx' bs' _kf ks -> let restIdx = go idx' bs' in ks restIdx restIdx bs'
+  where
+    go idx bs = case parseOnlyOffset (matchLeftUnconsumed takeDataRow) idx bs of
+      ParseOk (unconsumedIdx, _) -> go unconsumedIdx bs
+      ParseFail _ -> idx
+{-# INLINE parseManyRows #-}
 
 -- | Succeeds only when the input has been fully consumed.
 endOfInput :: Parser ()
@@ -166,14 +176,15 @@ match (Parser p) = Parser $ \idx bs kf ks ->
     )
 {-# INLINE match #-}
 
--- | Run a parser and additionally return the unconsumed/unparsed ByteString.
-matchLeftUnconsumed :: Parser a -> Parser (ByteString, a)
+-- | Run a parser and additionally return the index to the first unconsumed/unparsed byte
+-- in the supplied ByteString.
+matchLeftUnconsumed :: Parser a -> Parser (ByteStringIdx, a)
 matchLeftUnconsumed (Parser p) = Parser $ \idx bs kf ks ->
   p
     idx
     bs
     kf
     ( \a idx' bs' ->
-        ks (BS.drop idx'.idx bs', a) idx' bs'
+        ks (idx', a) idx' bs'
     )
 {-# INLINE matchLeftUnconsumed #-}
