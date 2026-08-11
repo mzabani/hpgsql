@@ -23,6 +23,7 @@ module Hpgsql.SimpleParser
     takeInt64BE,
     takeDataRow,
     parseManyRows,
+    skip,
   )
 where
 
@@ -97,16 +98,24 @@ take n = Parser $ \idx bs kf ks ->
   -- Special-casing n>0 helps reduce memory usage
   -- by ~1.5% in our behmarks without a measurable
   -- difference in run time
+  -- TODO check if the comment above still holds
   if n > 0
     then
-      let skip = n + idx.idx
-       in if BS.length bs >= skip
+      let skip' = n + idx.idx
+       in if BS.length bs >= skip'
             then case BS.take n $ BS.drop idx.idx bs of
-              !h -> ks h (ByteStringIdx skip) bs
-            else kf ("take: wanted " <> show skip <> " bytes but only " <> show (BS.length bs) <> " remain")
+              !h -> ks h (ByteStringIdx skip') bs
+            else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (BS.length bs) <> " remain")
     else
       ks mempty idx bs
 {-# INLINE take #-}
+
+-- | Consume exactly @n@ bytes of input, failing if fewer than @n@ bytes
+-- remain.
+skip :: Int -> Parser ()
+skip n = Parser $ \idx bs _ ks ->
+  ks () (ByteStringIdx $ idx.idx + n) bs
+{-# INLINE skip #-}
 
 {-# INLINE takeInt16BE #-}
 takeInt16BE :: Parser Int16
@@ -131,14 +140,14 @@ takeInt64BE = Parser $ \idx bs kf ks ->
 
 {-# INLINE takeDataRow #-}
 
--- | A specialized parser to parse a postgres DataRow.
-takeDataRow :: Parser ByteString
+-- | A specialized parser to parse a postgres DataRow,
+-- returning the index of the byte after this DataRow's last.
+takeDataRow :: Parser ByteStringIdx
 takeDataRow = Parser $ \idx bs kf ks ->
   case BinSer.decodeDataRow idx bs of
     Left err -> kf err
-    Right (thisDataRow, idxRest) -> ks thisDataRow idxRest bs
+    Right idxRest -> ks idxRest idxRest bs
 
--- TODO: Get rid of parseMany to save on List allocations for DataRows?
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'
   where
@@ -150,8 +159,8 @@ parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks
 parseManyRows :: Parser ByteStringIdx
 parseManyRows = Parser $ \idx' bs' _kf ks -> let restIdx = go idx' bs' in ks restIdx restIdx bs'
   where
-    go idx bs = case parseOnlyOffset (matchLeftUnconsumed takeDataRow) idx bs of
-      ParseOk (unconsumedIdx, _) -> go unconsumedIdx bs
+    go idx bs = case parseOnlyOffset takeDataRow idx bs of
+      ParseOk unconsumedIdx -> go unconsumedIdx bs
       ParseFail _ -> idx
 {-# INLINE parseManyRows #-}
 

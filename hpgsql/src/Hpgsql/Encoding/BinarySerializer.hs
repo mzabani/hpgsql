@@ -131,9 +131,8 @@ encodePgBoolean v = if v then "\SOH" else "\NUL"
 
 -- | A super specialized decoder to decode a postgres DataRow message
 -- more quickly than a naive implementation.
--- Returns first the parsed DataRow (only column sizes and values) and second
--- the index into the left-unparsed contents of the supplied bytestring.
-decodeDataRow :: ByteStringIdx -> ByteString -> Either String (ByteString, ByteStringIdx)
+-- Returns the index into the left-unparsed contents of the supplied bytestring.
+decodeDataRow :: ByteStringIdx -> ByteString -> Either String ByteStringIdx
 decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
   -- We have a fast path when rows are at least 8 bytes long (should be the case
   -- for all but 0-column query results or bytestring chunks "cut in the middle of the message")
@@ -166,5 +165,5 @@ decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
         else Left "Less than enough bytes to decode a DataRow"
   where
     toResult lenFullMsg
-      | len >= 1 + lenFullMsg + idx.idx = let a = BS.take (lenFullMsg - 6) (BS.drop (7 + idx.idx) bs) in Right (a, ByteStringIdx $ 1 + lenFullMsg + idx.idx)
+      | len >= 1 + lenFullMsg + idx.idx = Right $ ByteStringIdx $ 1 + lenFullMsg + idx.idx
       | otherwise = Left "Less than enough bytes to decode a full DataRow"
