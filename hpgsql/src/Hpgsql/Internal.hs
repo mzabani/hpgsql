@@ -534,7 +534,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   (initialBuf, initialBufLen) <- receiveUntilBufferHasAtLeast 5
   let charAndLength = LBS.take 5 initialBuf
   let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
-      lenLeftToFetch :: Int64 = fromIntegral $ either error id (BinSer.decodeInt32BE $ LBS.toStrict lenbs) - 4
+      lenLeftToFetch :: Int64 = fromIntegral $ either error id (BinSer.decodeInt32BE 0 $ LBS.toStrict lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
   (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
   let restOfMsg = LBS.drop 5 $ LBS.take fullMessageLen nowBuf
