@@ -95,19 +95,11 @@ parseOnlyOffset (Parser p) idx bs = p idx bs ParseFail (\a _ _ -> ParseOk a)
 -- remain.
 take :: Int -> Parser ByteString
 take n = Parser $ \idx bs kf ks ->
-  -- Special-casing n>0 helps reduce memory usage
-  -- by ~1.5% in our behmarks without a measurable
-  -- difference in run time
-  -- TODO check if the comment above still holds
-  if n > 0
-    then
-      let skip' = n + idx.idx
-       in if BS.length bs >= skip'
-            then case BS.take n $ BS.drop idx.idx bs of
-              !h -> ks h (ByteStringIdx skip') bs
-            else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (BS.length bs) <> " remain")
-    else
-      ks mempty idx bs
+  let skip' = n + idx.idx
+   in if BS.length bs >= skip'
+        then case BS.take n $ BS.drop idx.idx bs of
+          !h -> ks h (ByteStringIdx skip') bs
+        else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (BS.length bs) <> " remain")
 {-# INLINE take #-}
 
 -- | Consume exactly @n@ bytes of input, failing if fewer than @n@ bytes
