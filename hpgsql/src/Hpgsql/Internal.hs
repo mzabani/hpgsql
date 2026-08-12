@@ -910,7 +910,7 @@ consumeResults conn qryId = do
           finalStream = case mDataRow of
             Nothing -> allOtherRows
             Just dr ->
-              DataRows dr.rowColumnData `S.cons` allOtherRows
+              DataRows dr.fullDataRow `S.cons` allOtherRows
       pure (mERowDesc, finalStream)
   where
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()

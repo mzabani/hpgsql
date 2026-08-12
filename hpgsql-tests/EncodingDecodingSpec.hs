@@ -1,10 +1,11 @@
 module EncodingDecodingSpec where
 
-import Control.Monad (join, void)
+import Control.Monad (join, replicateM, void)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LBS
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
@@ -42,6 +43,7 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
+import Hpgsql.InternalTypes (DataRow (..))
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
@@ -160,6 +162,9 @@ spec = parallel $ do
   it
     "0-columns results can be decoded"
     zeroColumnsResults
+  it
+    "Specialized DataRow decoding consistency"
+    specializedDataRowDecodingConsistency
 
 zeroColumnsResults :: IO ()
 zeroColumnsResults = do
@@ -872,3 +877,49 @@ valuesTypeRoundTrip conn = hedgehog $ do
 data Person = Person {name :: Text, born :: Day, heightMeters :: Double}
   deriving stock (Generic)
   deriving anyclass (FromPgRow)
+
+specializedDataRowDecodingConsistency :: PropertyT IO ()
+specializedDataRowDecodingConsistency = hedgehog $ do
+  dataRows <- Gen.forAll $ Gen.list (Gen.linear 0 20) genDataRowBS
+  mapM_ (\drBS -> do
+    let restOfMsg = LBS.fromStrict (BS.drop 5 drBS)
+        parsed = parseDataRowFromPgMsg 'D' restOfMsg
+    fmap fullDataRow parsed === Just drBS
+    ) dataRows
+
+-- | Copy of the FromPgMessage DataRow instance's parsing logic from Hpgsql.Msgs.
+-- Keep in sync with that module's @instance FromPgMessage DataRow@.
+parseDataRowFromPgMsg :: Char -> LBS.ByteString -> Maybe DataRow
+parseDataRowFromPgMsg c !restOfMsg = case c of
+  'D' -> Just $ DataRow $ BS.singleton 68 <> testEncodeInt32BE (fromIntegral $ LBS.length restOfMsg + 4) <> LBS.toStrict restOfMsg
+  _ -> Nothing
+
+genDataRowBS :: Gen.Gen ByteString
+genDataRowBS = do
+  numFields <- Gen.int (Gen.linear 0 10)
+  -- Each NULL field adds 4 bytes overhead (length = -1). Each non-NULL field adds 4 + n bytes.
+  -- A 0-field DataRow is 7 bytes: 1 ('D') + 4 (msg length) + 2 (field count).
+  -- We target a max total of 100 bytes, so 93 bytes are available for fields.
+  let maxPerField = if numFields == 0 then 0 else max 0 ((93 - 4 * numFields) `div` numFields)
+  fields <- replicateM numFields (genField maxPerField)
+  pure $ buildDataRow fields
+  where
+    genField maxBytes = Gen.choice
+      [ pure Nothing
+      , Just <$> Gen.bytes (Gen.linear 0 maxBytes)
+      ]
+    buildDataRow :: [Maybe ByteString] -> ByteString
+    buildDataRow fields =
+      let nFields = length fields
+          fieldsBS = BS.concat $ map encodeField fields
+          payload = testEncodeInt16BE (fromIntegral nFields) <> fieldsBS
+          lenVal = fromIntegral (BS.length payload + 4) :: Int32
+      in BS.singleton 68 <> testEncodeInt32BE lenVal <> payload
+    encodeField Nothing = testEncodeInt32BE (-1)
+    encodeField (Just bs) = testEncodeInt32BE (fromIntegral (BS.length bs)) <> bs
+
+testEncodeInt32BE :: Int32 -> ByteString
+testEncodeInt32BE = LBS.toStrict . Builder.toLazyByteString . Builder.int32BE
+
+testEncodeInt16BE :: Int16 -> ByteString
+testEncodeInt16BE = LBS.toStrict . Builder.toLazyByteString . Builder.int16BE

@@ -368,7 +368,9 @@ newtype ErrorResponse = ErrorResponse (Map ErrorDetail LBS.ByteString)
 newtype CommandComplete = CommandComplete {numRows :: Int64}
   deriving stock (Show)
 
-newtype DataRow = DataRow {rowColumnData :: ByteString}
+-- | A DataRow with its leading identifying character ('D'), the 32bits self-length,
+-- the 2 bytes for the number of fields and the fields' lengths and values themselves.
+newtype DataRow = DataRow {fullDataRow :: ByteString}
 
 instance Show DataRow where
   show _ = "DataRow"
