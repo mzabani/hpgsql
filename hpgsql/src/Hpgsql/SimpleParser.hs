@@ -132,7 +132,7 @@ takeInt16BE = Parser $ \idx bs kf ks ->
 -- an Int16 in a row.
 takeInt16BEWithFieldLength :: Parser (Maybe Int16)
 takeInt16BEWithFieldLength = do
-  mi16 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize2
+  mi16 <- parsePgFieldWithAtMost4Bytes BinSer.CWord16
   pure $ fromIntegral <$> mi16
 
 {-# INLINE takeInt32BE #-}
@@ -148,7 +148,7 @@ takeInt32BE = Parser $ \idx bs kf ks ->
 -- an Int32 in a row.
 takeInt32BEWithFieldLength :: Parser (Maybe Int32)
 takeInt32BEWithFieldLength = do
-  mi32 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize4
+  mi32 <- parsePgFieldWithAtMost4Bytes BinSer.CWord32
   pure $ fromIntegral <$> mi32
 
 {-# INLINE takeInt64BEWithFieldLength #-}
@@ -183,13 +183,13 @@ takeDataRow = Parser $ \idx bs kf ks ->
 
 -- | A specialized parser that reads a query result's
 -- field's contents.
-parsePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => BinSer.WordDecoding a -> Parser (Maybe a)
+parsePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => BinSer.CoolWordDec a -> Parser (Maybe a)
 parsePgFieldWithAtMost4Bytes wdec =
   let dec = BinSer.decodePgFieldWithAtMost4Bytes wdec
-   in Parser $ \bs kf ks ->
-        case dec bs of
+   in Parser $ \idx bs kf ks ->
+        case dec idx bs of
           Left err -> kf err
-          Right (v, rest) -> ks v rest
+          Right (v, restIdx) -> ks v restIdx bs
 
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'

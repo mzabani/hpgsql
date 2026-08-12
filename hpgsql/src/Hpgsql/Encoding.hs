@@ -976,7 +976,7 @@ instance FromPgField Bool where
     Just bs -> Right $ bs == binaryTrue
     Nothing -> Left "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
   singleFieldRowDecoder =
-    let dec = Parser.parsePgFieldWithAtMost4Bytes BinSer.TypeSize1
+    let dec = Parser.parsePgFieldWithAtMost4Bytes BinSer.CWord8
         word8ToBool = \case
           Nothing -> fail "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
           Just w8 -> pure $ w8 == 1
@@ -1282,7 +1282,7 @@ instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
   -- coercing instead of fmap reduces memory usage, apparently
   -- by reducing (unnecessary) closures in the final row decoder,
   -- as per looking at GHC Core
-  genRowDecoder = coerce $ singleField $ fieldDecoder @a
+  genRowDecoder = coerce $ singleFieldRowDecoder @a
 
 genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
 genericToPgRow = contramap from genRowEncoder
