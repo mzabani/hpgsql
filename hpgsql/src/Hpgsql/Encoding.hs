@@ -181,6 +181,28 @@ singleField (FieldDecoder {..}) =
       numExpectedColumns = 1
     }
 
+{-# INLINE uniqueOidRowPa #-}
+uniqueOidRowPa :: Oid -> Parser.Parser a -> RowDecoder a
+uniqueOidRowPa tyoid p =
+  -- FromPgField instances that only accept PG values of a single PG type
+  -- are very dear to us because they allow a very important optimization:
+  -- their row decoders do not care about the `FieldInfo` argument, which
+  -- makes them inlinable by GHC at compile time (FieldInfo is only available
+  -- at run time).
+  -- These are key to produce compiled to code that almost compiles down to
+  -- a bunch of `peek` calls to a single ByteString decoding bytes into
+  -- typed values, to then call the Parser continuation, and repeat.
+  -- The only allocations (I think) when everything is inlined by this are the
+  -- decoded values themselves being boxed and the CPS Parser's ByteStringIdx
+  -- also being passed boxed between continuations.
+  RowDecoder
+    { fullRowDecoder = const p,
+      rowColumnsTypeCheck = \case
+        [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid == tyoid)]
+        _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+      numExpectedColumns = 1
+    }
+
 class FromPgField a where
   -- | A decoder that takes
   fieldDecoder :: FieldDecoder a
@@ -712,12 +734,6 @@ instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgF
 instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
   rowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j, k) -> ((a, b, c, d, e, f), (g, h, i, j, k))) rowEncoder rowEncoder
 
--- instance (ToPgField a) => ToPgRow [a] where
---   rowEncoder = RowEncoder {
---     toPgParams = \xs -> concatMap toPgParams xs
---     , toTypeOids = \_ -> concatMap (\)
---   } $ \cols -> map (\v encodingContext -> let typOid = toTypeOid (Proxy @a) encodingContext in (typOid, toPgField encodingContext v)) cols
-
 -- | The OID for `Data.Int`, which is machine dependent.
 haskellIntOid :: Oid
 
@@ -996,17 +1012,10 @@ instance FromPgField Bool where
     Just bs -> Right $ bs == binaryTrue
     Nothing -> Left "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
   singleFieldRowDecoder =
-    let dec = Parser.parsePgFieldWithAtMost4Bytes BinSer.TypeSize1
-        word8ToBool = \case
+    let word8ToBool = \case
           Nothing -> fail "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
           Just w8 -> pure $ w8 == 1
-     in RowDecoder
-          { fullRowDecoder = const $ dec >>= word8ToBool,
-            rowColumnsTypeCheck = \case
-              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid == boolOid)]
-              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-            numExpectedColumns = 1
-          }
+     in uniqueOidRowPa boolOid $ Parser.parsePgFieldWithAtMost4Bytes BinSer.TypeSize1 >>= word8ToBool
 
 instance FromPgField Char where
   fieldDecoder =
@@ -1094,13 +1103,7 @@ instance FromPgField UTCTime where
                   parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
               pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
             _ -> pure Nothing
-     in RowDecoder
-          { fullRowDecoder = const $ utcTimeDecoder >>= fromNullable,
-            rowColumnsTypeCheck = \case
-              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` [timestamptzOid])]
-              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-            numExpectedColumns = 1
-          }
+     in uniqueOidRowPa timestamptzOid $ utcTimeDecoder >>= fromNullable
 
 instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
@@ -1172,17 +1175,10 @@ instance FromPgField Day where
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
   singleFieldRowDecoder =
-    let dec = Parser.takeInt32BEWithFieldLength
-        int32ToDay = \case
+    let int32ToDay = \case
           Nothing -> fail "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
           Just i32 -> let jd = fromIntegral i32 :: Integer in pure $ addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
-     in RowDecoder
-          { fullRowDecoder = const $ dec >>= int32ToDay,
-            rowColumnsTypeCheck = \case
-              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid == dateOid)]
-              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-            numExpectedColumns = 1
-          }
+     in uniqueOidRowPa dateOid $ Parser.takeInt32BEWithFieldLength >>= int32ToDay
 
 instance FromPgField (Unbounded Day) where
   fieldDecoder = parsePgType [dateOid] $ \case
