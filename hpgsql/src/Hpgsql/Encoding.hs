@@ -1081,6 +1081,26 @@ instance FromPgField UTCTime where
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
+  singleFieldRowDecoder =
+    let fromNullable = \case
+          Nothing -> fail "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
+          Just i -> pure i
+        utcTimeDecoder = do
+          len <- Parser.takeInt32BE
+          case len of
+            8 -> do
+              totalusecs <- Parser.takeInt64BE
+              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+              pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+            _ -> pure Nothing
+     in RowDecoder
+          { fullRowDecoder = const $ utcTimeDecoder >>= fromNullable,
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` [timestamptzOid])]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
 
 instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
