@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -ddump-simpl -ddump-to-file #-}
+
 module Main where
 
 import Control.Concurrent.Async (mapConcurrently)

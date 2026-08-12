@@ -76,6 +76,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as LBS
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
+import Data.Coerce (coerce)
 import Data.Fixed (divMod')
 import Data.Functor.Contravariant (Contravariant (..))
 import Data.Int (Int16, Int32, Int64)
@@ -1192,13 +1193,19 @@ class ProductTypeDecoder f where
   genRowDecoder :: RowDecoder (f a)
 
 instance (ProductTypeDecoder a, ProductTypeDecoder b) => ProductTypeDecoder (a :*: b) where
+  {-# INLINE genRowDecoder #-}
   genRowDecoder = (:*:) <$> genRowDecoder <*> genRowDecoder
 
 instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
+  {-# INLINE genRowDecoder #-}
   genRowDecoder = M1 <$> genRowDecoder
 
 instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
-  genRowDecoder = fmap K1 $ singleField $ fieldDecoder @a
+  {-# INLINE genRowDecoder #-}
+  -- coercing instead of fmap reduces memory usage, apparently
+  -- by reducing (unnecessary) closures in the final row decoder,
+  -- as per looking at GHC Core
+  genRowDecoder = coerce $ singleField $ fieldDecoder @a
 
 genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
 genericToPgRow = contramap from genRowEncoder

@@ -36,6 +36,7 @@ executable hpgsql-tests
       ParsingSpec
       PipelineSpec
       PreparedStatementsSpec
+      RowDecoderGhcCore
       SqlQuasiquoterSpec
       TestUtils
       ThreadSafetySpec
