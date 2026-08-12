@@ -32,12 +32,10 @@ import Prelude hiding (encodeFloat)
 #if WORDS_BIGENDIAN
 import Data.Word (Word16, Word32, Word64)
 #else
-import Data.Word (Word16, Word32, Word64, byteSwap16, byteSwap32, byteSwap64)
+import Data.Word (Word16, Word32, Word64, byteSwap16, byteSwap32, byteSwap64, Word8)
 #endif
 import Data.Bits (Bits (unsafeShiftR))
-import qualified Data.ByteString as BS
 import Data.Coerce (coerce)
-import Data.Maybe (fromMaybe)
 import Foreign (Storable (..), (.&.))
 import Foreign.ForeignPtr (withForeignPtr)
 import GHC.Float (castDoubleToWord64, castFloatToWord32)
@@ -90,6 +88,10 @@ decodeInt16BE idx bs = fromIntegral <$> unsafeDecodeWord idx bs 2 fromBigEndian1
 {-# INLINE encodeInt16BE #-}
 encodeInt16BE :: Int16 -> ByteString
 encodeInt16BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian16 2
+
+{-# INLINE decodeWord8 #-}
+decodeWord8 :: ByteStringIdx -> ByteString -> Either String Word8
+decodeWord8 idx bs = unsafeDecodeWord idx bs 1 Prelude.id
 
 {-# INLINE decodeWord32BE #-}
 decodeWord32BE :: ByteString -> Either String Word32
@@ -155,13 +157,12 @@ decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
       -- It is possible the DataRow has length less than 8 bytes, so
       -- we still have to try to parse that.
       if len >= 5 + idx.idx
-        then
-          -- TODO: Don't allocate "lenbs" and decodeInt32BE with offset=1?
-          let (InternalBS.w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ BS.uncons $ BS.drop idx.idx bs
-              lenFullMsg = fromIntegral $ either error id (decodeInt32BE 0 lenbs)
-           in if msgIdentChar == 'D'
-                then toResult lenFullMsg
-                else Left "Not a DataRow"
+        then do
+          msgIdentChar <- decodeWord8 idx bs
+          lenFullMsg <- decodeInt32BE (1 + idx) bs
+          if msgIdentChar == 68 -- Letter 'D'
+            then toResult (fromIntegral lenFullMsg)
+            else Left "Not a DataRow"
         else Left "Less than enough bytes to decode a DataRow"
   where
     toResult lenFullMsg
