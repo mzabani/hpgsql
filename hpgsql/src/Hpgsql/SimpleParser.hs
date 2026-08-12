@@ -28,6 +28,8 @@ module Hpgsql.SimpleParser
     takeInt64BEWithFieldLength,
     takeInt32BEWithFieldLength,
     takeInt16BEWithFieldLength,
+    takeFloatBE,
+    takeDoubleBE,
   )
 where
 
@@ -35,6 +37,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
 import Foreign.Storable (Storable)
+import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.Encoding.BinarySerializer (ByteStringIdx (..))
 import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Prelude hiding (take)
@@ -121,8 +124,8 @@ skip n = Parser $ \idx bs _ ks ->
 takeInt16BE :: Parser Int16
 takeInt16BE = Parser $ \idx bs kf ks ->
   case BinSer.decodeInt16BE idx bs of
-    Left err -> kf err
     Right v -> ks v (idx + 2) bs
+    Left err -> kf err
 
 {-# INLINE takeInt16BEWithFieldLength #-}
 
@@ -137,8 +140,8 @@ takeInt16BEWithFieldLength = do
 takeInt32BE :: Parser Int32
 takeInt32BE = Parser $ \idx bs kf ks ->
   case BinSer.decodeInt32BE idx bs of
-    Left err -> kf err
     Right v -> ks v (idx + 4) bs
+    Left err -> kf err
 
 {-# INLINE takeInt32BEWithFieldLength #-}
 
@@ -148,6 +151,20 @@ takeInt32BEWithFieldLength :: Parser (Maybe Int32)
 takeInt32BEWithFieldLength = do
   mi32 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize4
   pure $ fromIntegral <$> mi32
+
+{-# INLINE takeFloatBE #-}
+takeFloatBE :: Parser Float
+takeFloatBE = Parser $ \idx bs kf ks ->
+  case BinSer.decodeWord32BE idx bs of
+    Right v -> ks (castWord32ToFloat v) (idx + 4) bs
+    Left err -> kf err
+
+{-# INLINE takeDoubleBE #-}
+takeDoubleBE :: Parser Double
+takeDoubleBE = Parser $ \idx bs kf ks ->
+  case BinSer.decodeWord64BE idx bs of
+    Right v -> ks (castWord64ToDouble v) (idx + 8) bs
+    Left err -> kf err
 
 {-# INLINE takeInt64BEWithFieldLength #-}
 
@@ -164,8 +181,8 @@ takeInt64BEWithFieldLength = do
 takeInt64BE :: Parser Int64
 takeInt64BE = Parser $ \idx bs kf ks ->
   case BinSer.decodeInt64BE idx bs of
-    Left err -> kf err
     Right v -> ks v (idx + 8) bs
+    Left err -> kf err
 
 {-# INLINE takeDataRow #-}
 
@@ -186,8 +203,8 @@ parsePgFieldWithAtMost4Bytes wdec =
   let dec = BinSer.decodePgFieldWithAtMost4Bytes wdec
    in Parser $ \idx bs kf ks ->
         case dec idx bs of
-          Left err -> kf err
           Right (v, restIdx) -> ks v restIdx bs
+          Left err -> kf err
 
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'

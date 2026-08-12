@@ -157,6 +157,7 @@ instance Applicative RowDecoder where
 instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowDecoder where
   (>>=) = error "inaccessible bind in Monad RowDecoder instance"
 
+{-# INLINE singleField #-} -- 1.2% wall time perf. gain with this
 singleField :: FieldDecoder a -> RowDecoder a
 singleField (FieldDecoder {..}) =
   RowDecoder
@@ -764,10 +765,10 @@ binaryIntSpecializedRowDecoder = do
     _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
 
 binaryFloat4Decoder :: ByteString -> Float
-binaryFloat4Decoder = castWord32ToFloat . either error id . BinSer.decodeWord32BE
+binaryFloat4Decoder = castWord32ToFloat . either error id . BinSer.decodeWord32BE 0
 
 binaryFloat8Decoder :: ByteString -> Double
-binaryFloat8Decoder = castWord64ToDouble . either error id . BinSer.decodeWord64BE
+binaryFloat8Decoder = castWord64ToDouble . either error id . BinSer.decodeWord64BE 0
 
 parsePgType :: [Oid] -> (Maybe ByteString -> Either String a) -> FieldDecoder a
 parsePgType !requiredTypeOids !fieldValueDecoder =
@@ -808,6 +809,8 @@ instance FromPgField Int where
             numExpectedColumns = 1
           }
 
+-- The instance below makes our Records benchmark faster and use less
+-- memory, but makes our Tuples benchmark slower. Worth investigating.
 -- instance {-# OVERLAPPING #-} FromPgField (Maybe Int) where
 --   fieldDecoder = error "NOOO"
 
@@ -831,9 +834,9 @@ instance FromPgField Int where
 instance FromPgField Int16 where
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
-          let !decode = binaryIntDecoder oid
-           in \case
+      { fieldValueDecoder =
+          let !decode = binaryIntDecoder int2Oid
+           in const $ \case
                 Just bs -> decode bs
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int16 type. Use a `Maybe Int16`",
         allowedPgTypes = (== int2Oid) . fieldTypeOid
@@ -905,6 +908,23 @@ instance FromPgField Double where
                 Nothing -> Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`",
         allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
       }
+  singleFieldRowDecoder =
+    let fromNullable = \case
+          Nothing -> fail "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`"
+          Just i -> pure i
+        float4OrDouble8Decoder = do
+          len <- Parser.takeInt32BE
+          case len of
+            8 -> Just <$> Parser.takeDoubleBE
+            4 -> Just . float2Double <$> Parser.takeFloatBE
+            _ -> pure Nothing
+     in RowDecoder
+          { fullRowDecoder = const $ float4OrDouble8Decoder >>= fromNullable,
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` [float8Oid, float4Oid])]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
 
 -- | Allows you to specify a type (and other checks, possibly) for a `FieldDecoder`.
 -- This can be useful to ensure you're not accidentally decoding a different type.
@@ -1182,15 +1202,13 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
-                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \case
+                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                    Just d -> Right d
+                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 
