@@ -34,8 +34,8 @@ where
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
-import Hpgsql.Encoding.BinarySerializer (ByteStringIdx (..))
 import Foreign.Storable (Storable)
+import Hpgsql.Encoding.BinarySerializer (ByteStringIdx (..))
 import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Prelude hiding (take)
 
@@ -184,10 +184,10 @@ takeDataRow = Parser $ \idx bs kf ks ->
 parsePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => BinSer.WordDecoding a -> Parser (Maybe a)
 parsePgFieldWithAtMost4Bytes wdec =
   let dec = BinSer.decodePgFieldWithAtMost4Bytes wdec
-   in Parser $ \bs kf ks ->
-        case dec bs of
+   in Parser $ \idx bs kf ks ->
+        case dec idx bs of
           Left err -> kf err
-          Right (v, rest) -> ks v rest
+          Right (v, restIdx) -> ks v restIdx bs
 
 parseMany :: Parser a -> Parser [a]
 parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'

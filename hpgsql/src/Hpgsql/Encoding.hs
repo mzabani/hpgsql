@@ -1182,13 +1182,15 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in \case
-                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                    Just d -> Right d
-                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
-                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
+            let
+              -- jsonb has a byte prepended to the contents and json does not
+              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in
+              \case
+                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                  Just d -> Right d
+                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 
@@ -1282,7 +1284,7 @@ instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
   -- coercing instead of fmap reduces memory usage, apparently
   -- by reducing (unnecessary) closures in the final row decoder,
   -- as per looking at GHC Core
-  genRowDecoder = coerce $ singleField $ fieldDecoder @a
+  genRowDecoder = coerce $ singleFieldRowDecoder @a
 
 genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
 genericToPgRow = contramap from genRowEncoder

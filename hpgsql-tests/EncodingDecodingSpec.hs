@@ -45,6 +45,7 @@ import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.InternalTypes (DataRow (..))
 import Hpgsql.Pipeline (pipeline, pipeline1With, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
