@@ -101,12 +101,12 @@ decodeWord8 :: ByteStringIdx -> ByteString -> Either String Word8
 decodeWord8 idx bs = decodeWord CWord8 idx bs Prelude.id
 
 {-# INLINE decodeWord32BE #-}
-decodeWord32BE :: ByteString -> Either String Word32
-decodeWord32BE bs = decodeWord CWord32 0 bs fromBigEndian32
+decodeWord32BE :: ByteStringIdx -> ByteString -> Either String Word32
+decodeWord32BE idx bs = decodeWord CWord32 idx bs fromBigEndian32
 
 {-# INLINE decodeWord64BE #-}
-decodeWord64BE :: ByteString -> Either String Word64
-decodeWord64BE bs = decodeWord CWord64 0 bs fromBigEndian64
+decodeWord64BE :: ByteStringIdx -> ByteString -> Either String Word64
+decodeWord64BE idx bs = decodeWord CWord64 idx bs fromBigEndian64
 
 {-# INLINE decodeInt32BE #-}
 decodeInt32BE :: ByteStringIdx -> ByteString -> Either String Int32
