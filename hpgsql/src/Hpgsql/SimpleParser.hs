@@ -98,6 +98,9 @@ take n = Parser $ \idx bs kf ks ->
   let skip' = n + idx.idx
    in if BS.length bs >= skip'
         then case BS.take n $ BS.drop idx.idx bs of
+          -- Strict on the bytestring because we're pretty sure
+          -- the field decoder will need to evaluate this anyway,
+          -- so no need for an extra thunk
           !h -> ks h (ByteStringIdx skip') bs
         else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (BS.length bs) <> " remain")
 {-# INLINE take #-}
