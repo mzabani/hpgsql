@@ -46,6 +46,7 @@ import Hpgsql.Connection (renderLibpqConnectionString)
 import qualified Hpgsql.Connection
 import qualified Hpgsql.Connection as Hpgsql
 import qualified Hpgsql.Copy
+import Hpgsql.Encoding (FromPgField (inlinedSingleFieldRowDecoder))
 import qualified Hpgsql.Encoding as Hpgsql
 import qualified Hpgsql.Query as Hpgsql
 import qualified Hpgsql.Types as Hpgsql
@@ -84,7 +85,10 @@ data BenchRow = BenchRow
     brMaybeDay :: !(Maybe Day)
   }
   deriving stock (Generic, Show, Eq)
-  deriving anyclass (NFData, Hpgsql.FromPgRow, PGSimple.FromRow)
+  deriving anyclass (NFData, PGSimple.FromRow)
+
+instance Hpgsql.FromPgRow BenchRow where
+  rowDecoder = BenchRow <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
 
 data HasqlBenchRow = HasqlBenchRow
   { hbrId :: !Int32,

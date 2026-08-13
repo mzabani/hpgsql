@@ -10,21 +10,28 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (Day, UTCTime)
 import GHC.Generics (Generic)
-import Hpgsql.Encoding (FromPgRow (..), fieldDecoder, genericFromPgRow, singleField, singleFieldRowDecoder)
+import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), genericFromPgRow, singleField)
 
--- | SmallRecord's purpose is to have a very small row decoder in GHC Core
--- for understanding. Also, we expect one day to maybe reach a fully inlined
+-- | BestCaseScenarioRecord's purpose is to have a very small row decoder in GHC Core
+-- for my own understanding/comprehension of what a RowDecoder gets compiled to
+-- in the best case scenario. Also, we expect one day to maybe reach a fully inlined
 -- row decoder that only peeks at bytes and allocates 3 values per row (one
--- for each field), plus one `SmallRecord` per row.
--- If we can get there, it'd be fabulous.
-data SmallRecord = SmallRecord
-  { smallId :: !Int,
-    smallDate :: !Day,
-    smallText :: !Int
+-- for each field), plus one `BestCaseScenarioRecord` per row.
+-- In the GHC Core of this module (use `run ghc-core` to output it), it helps to:
+-- - Look for the Record constructor and grep for it to find where the RowDecoder
+--   invokes it, only to find where the RowDecoder is.
+-- - Grep for numbers that exist in the decoders' implementation, such as 8#, 13#, 4#.
+--   These are a strong indicator that each decoder was inlined into the RowDecoder.
+-- There is still unnecessary allocations/boxing even with full inlining, but maybe
+-- one day we'll find a way to get rid of all of them.
+data BestCaseScenarioRecord = BestCaseScenarioRecord
+  { bcsId :: !Int,
+    bcsDate :: !Day,
+    bcsText :: !Int
   }
 
-instance FromPgRow SmallRecord where
-  rowDecoder = SmallRecord <$> singleFieldRowDecoder <*> singleFieldRowDecoder <*> singleFieldRowDecoder
+instance FromPgRow BestCaseScenarioRecord where
+  rowDecoder = BestCaseScenarioRecord <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
 
 -- data BenchRow = BenchRow
 --   { brId :: !Int,
