@@ -31,7 +31,7 @@ data BestCaseScenarioRecord = BestCaseScenarioRecord
   }
 
 instance FromPgRow BestCaseScenarioRecord where
-  rowDecoder = BestCaseScenarioRecord <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = BestCaseScenarioRecord <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
 
 -- data BenchRow = BenchRow
 --   { brId :: !Int,

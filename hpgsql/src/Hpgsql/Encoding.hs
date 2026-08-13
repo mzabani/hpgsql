@@ -216,6 +216,14 @@ class FromPgField a where
   singleFieldRowDecoder :: RowDecoder a
   singleFieldRowDecoder = singleField fieldDecoder
 
+  -- | This is just like `singleFieldDecoder`, but it inlines into your
+  -- `FromPgRow` instances aggressively. This will increase code size and
+  -- possibly compilation times somewhat, but in some cases it can make row decoders
+  -- compile down to a ByteString-peeking implementation with much fewer
+  -- allocations that can be ~10% faster than the other.
+  inlinedSingleFieldRowDecoder :: RowDecoder a
+  inlinedSingleFieldRowDecoder = singleFieldRowDecoder
+
 class FromPgRow a where
   rowDecoder :: RowDecoder a
   default rowDecoder :: (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
@@ -768,20 +776,6 @@ binaryIntDecoder typOid = \bs ->
       | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
--- | Specialized/performance-oriented Big-Endian binary decoder for Haskell's various IntXX types.
-{-# INLINE binaryIntSpecializedRowDecoder #-}
-binaryIntSpecializedRowDecoder :: Parser.Parser (Maybe Int)
-binaryIntSpecializedRowDecoder = do
-  fieldLen <- Parser.takeInt32BE
-  -- TODO: We're assuming `Int` is always 64 bits, so 64bit CPUs? Is that ok?
-  -- TODO: Is there a way to optimistically assume <=4 bytes and use our custom new parser?
-  case fieldLen of
-    4 -> Just . fromIntegral <$> Parser.takeInt32BE
-    (-1) -> pure Nothing
-    8 -> Just . fromIntegral <$> Parser.takeInt64BE
-    2 -> Just . fromIntegral <$> Parser.takeInt16BE
-    _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
-
 binaryFloat4Decoder :: ByteString -> Float
 binaryFloat4Decoder = castWord32ToFloat . either error id . BinSer.decodeWord32BE 0
 
@@ -805,6 +799,19 @@ instance FromPgField () where
         allowedPgTypes = (== voidOid) . fieldTypeOid
       }
 
+{-# INLINE intRowDecoder #-}
+intRowDecoder =
+  inlinableRowDecoder haskellIntOids $ do
+    fieldLen <- Parser.takeInt32BE
+    -- TODO: We're assuming `Int` is always 64 bits, so 64bit CPUs? Is that ok?
+    -- TODO: Is there a way to optimistically assume <=4 bytes and use our custom new parser?
+    case fieldLen of
+      4 -> fromIntegral <$> Parser.takeInt32BE
+      (-1) -> fail "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`"
+      8 -> fromIntegral <$> Parser.takeInt64BE
+      2 -> fromIntegral <$> Parser.takeInt16BE
+      _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
+
 instance FromPgField Int where
   fieldDecoder =
     FieldDecoder
@@ -816,11 +823,9 @@ instance FromPgField Int where
         allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
       }
   {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder =
-    let fromNullable = \case
-          Nothing -> fail "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`"
-          Just i -> pure i
-     in inlinableRowDecoder haskellIntOids $ binaryIntSpecializedRowDecoder >>= fromNullable
+  singleFieldRowDecoder = intRowDecoder
+  {-# INLINE inlinedSingleFieldRowDecoder #-}
+  inlinedSingleFieldRowDecoder = intRowDecoder
 
 -- The instance below makes our Records benchmark faster and use less
 -- memory, but makes our Tuples benchmark slower. Worth investigating.
@@ -909,6 +914,19 @@ instance FromPgField Float where
     Just bs -> Right $ binaryFloat4Decoder bs
     Nothing -> Left "Cannot decode SQL null as the Haskell Float type. Use a `Maybe Float`"
 
+{-# INLINE doubleRowDecoder #-}
+doubleRowDecoder =
+  let fromNullable = \case
+        Nothing -> fail "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`"
+        Just i -> pure i
+      float4OrDouble8Decoder = do
+        len <- Parser.takeInt32BE
+        case len of
+          8 -> Just <$> Parser.takeDoubleBE
+          4 -> Just . float2Double <$> Parser.takeFloatBE
+          _ -> fail "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`"
+   in inlinableRowDecoder [float8Oid, float4Oid] $ float4OrDouble8Decoder >>= fromNullable
+
 instance FromPgField Double where
   fieldDecoder =
     FieldDecoder
@@ -921,17 +939,10 @@ instance FromPgField Double where
                 Nothing -> Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`",
         allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
       }
-  singleFieldRowDecoder =
-    let fromNullable = \case
-          Nothing -> fail "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`"
-          Just i -> pure i
-        float4OrDouble8Decoder = do
-          len <- Parser.takeInt32BE
-          case len of
-            8 -> Just <$> Parser.takeDoubleBE
-            4 -> Just . float2Double <$> Parser.takeFloatBE
-            _ -> pure Nothing
-     in inlinableRowDecoder [float8Oid, float4Oid] $ float4OrDouble8Decoder >>= fromNullable
+  {-# NOINLINE singleFieldRowDecoder #-}
+  singleFieldRowDecoder = doubleRowDecoder
+  {-# INLINE inlinedSingleFieldRowDecoder #-}
+  inlinedSingleFieldRowDecoder = doubleRowDecoder
 
 -- | Allows you to specify a type (and other checks, possibly) for a `FieldDecoder`.
 -- This can be useful to ensure you're not accidentally decoding a different type.
@@ -1038,11 +1049,28 @@ instance FromPgField LBS.ByteString where
     Just bs -> Right $ LBS.fromStrict bs
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
 
+{-# INLINE textDecoder #-}
+textDecoder =
+  let fromNullable = \case
+        Nothing -> fail "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
+        Just i -> pure i
+      rp = do
+        len <- Parser.takeInt32BE
+        if len >= 0
+          -- TODO: Use some faster unsafeDecodeUtf8 function?
+          then Just . decodeUtf8 <$> Parser.take (fromIntegral len)
+          else pure Nothing
+   in inlinableRowDecoder [textOid, varcharOid, nameOid] $ rp >>= fromNullable
+
 instance FromPgField Text where
   fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
     Just bs -> Right $ decodeUtf8 bs
     -- TODO: Use some faster unsafeDecodeUtf8 function?
     Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
+  {-# NOINLINE singleFieldRowDecoder #-}
+  singleFieldRowDecoder = textDecoder
+  {-# INLINE inlinedSingleFieldRowDecoder #-}
+  inlinedSingleFieldRowDecoder = textDecoder
 
 instance FromPgField LT.Text where
   fieldDecoder = parsePgType [textOid, varcharOid, nameOid] $ \case
@@ -1072,6 +1100,22 @@ instance FromPgField (CI LT.Text) where
 instance FromPgField (CI String) where
   fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
+{-# INLINE utcTimeRowDecoder #-}
+utcTimeRowDecoder =
+  let fromNullable = \case
+        Nothing -> fail "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
+        Just i -> pure i
+      utcTimeDecoder = do
+        len <- Parser.takeInt32BE
+        case len of
+          8 -> do
+            totalusecs <- Parser.takeInt64BE
+            let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+            pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+          _ -> pure Nothing
+   in inlinableRowDecoder [timestamptzOid] $ utcTimeDecoder >>= fromNullable
+
 instance FromPgField UTCTime where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
@@ -1081,20 +1125,13 @@ instance FromPgField UTCTime where
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
-  singleFieldRowDecoder =
-    let fromNullable = \case
-          Nothing -> fail "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
-          Just i -> pure i
-        utcTimeDecoder = do
-          len <- Parser.takeInt32BE
-          case len of
-            8 -> do
-              totalusecs <- Parser.takeInt64BE
-              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
-                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-              pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-            _ -> pure Nothing
-     in inlinableRowDecoder [timestamptzOid] $ utcTimeDecoder >>= fromNullable
+  {-# NOINLINE singleFieldRowDecoder #-}
+  singleFieldRowDecoder = utcTimeRowDecoder
+  {-# NOINLINE inlinedSingleFieldRowDecoder #-}
+  inlinedSingleFieldRowDecoder = utcTimeRowDecoder
+
+-- {-# INLINE inlinedSingleFieldRowDecoder #-}
+-- inlinedSingleFieldRowDecoder = doubleRowDecoder
 
 instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
@@ -1156,6 +1193,13 @@ instance FromPgField TimeOfDay where
       Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
     Nothing -> Left "Cannot decode SQL null as the Haskell TimeOfDay type. Use a `Maybe TimeOfDay`"
 
+{-# INLINE dayRowDecoder #-}
+dayRowDecoder =
+  let int32ToDay = \case
+        Nothing -> fail "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
+        Just i32 -> let jd = fromIntegral i32 :: Integer in pure $ addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
+   in inlinableRowDecoder [dateOid] $ Parser.takeInt32BEWithFieldLength >>= int32ToDay
+
 instance FromPgField Day where
   fieldDecoder = parsePgType [dateOid] $ \case
     Just bs -> do
@@ -1166,11 +1210,9 @@ instance FromPgField Day where
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
   {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder =
-    let int32ToDay = \case
-          Nothing -> fail "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
-          Just i32 -> let jd = fromIntegral i32 :: Integer in pure $ addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
-     in inlinableRowDecoder [dateOid] $ Parser.takeInt32BEWithFieldLength >>= int32ToDay
+  singleFieldRowDecoder = dayRowDecoder
+  {-# INLINE inlinedSingleFieldRowDecoder #-}
+  inlinedSingleFieldRowDecoder = dayRowDecoder
 
 instance FromPgField (Unbounded Day) where
   fieldDecoder = parsePgType [dateOid] $ \case
