@@ -33,6 +33,7 @@ module Hpgsql.SimpleParser
   )
 where
 
+import Control.Applicative (Alternative (..))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
@@ -72,6 +73,13 @@ instance Applicative Parser where
   Parser pf <*> Parser pa = Parser $ \idx bs kf ks ->
     pf idx bs kf (\f bs' idx' -> pa bs' idx' kf (\a bs'' idx'' -> ks (f a) bs'' idx''))
   {-# INLINE (<*>) #-}
+
+instance Alternative Parser where
+  empty = fail "empty Alternative"
+  {-# INLINE empty #-}
+  Parser p1 <|> Parser p2 = Parser $ \idx bs kf ks ->
+    p1 idx bs (\_ -> p2 idx bs kf ks) ks
+  {-# INLINE (<|>) #-}
 
 instance Monad Parser where
   return = pure

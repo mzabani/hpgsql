@@ -178,12 +178,12 @@ decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
       | len >= 1 + lenFullMsg + idx.idx = Right $ ByteStringIdx $ 1 + lenFullMsg + idx.idx
       | otherwise = Left "Less than enough bytes to decode a full DataRow"
 
-{-# INLINE decodePgFieldWithAtMost4Bytes #-}
-
 data WordDecoding a where
   TypeSize1 :: WordDecoding Word8
   TypeSize2 :: WordDecoding Word16
   TypeSize4 :: WordDecoding Word32
+
+{-# INLINE decodePgFieldWithAtMost4Bytes #-}
 
 -- | A specialized decoder that decoders a query result's
 -- field's contents, but only for PG fields at most 4 bytes long and
