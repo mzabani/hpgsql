@@ -181,24 +181,25 @@ singleField (FieldDecoder {..}) =
       numExpectedColumns = 1
     }
 
-{-# INLINE uniqueOidRowPa #-}
-uniqueOidRowPa :: Oid -> Parser.Parser a -> RowDecoder a
-uniqueOidRowPa tyoid p =
-  -- FromPgField instances that only accept PG values of a single PG type
-  -- are very dear to us because they allow a very important optimization:
+{-# INLINE inlinableRowDecoder #-}
+inlinableRowDecoder :: [Oid] -> Parser.Parser a -> RowDecoder a
+inlinableRowDecoder tyoids p =
+  -- FromPgField instances whose decoders don't care about the OID of the PG type
+  -- being decoded are very dear to us because they allow a very important optimization:
   -- their row decoders do not care about the `FieldInfo` argument, which
   -- makes them inlinable by GHC at compile time (FieldInfo is only available
-  -- at run time).
+  -- at run time when the RowDescription message arrives for a given query).
   -- These are key to produce compiled to code that almost compiles down to
   -- a bunch of `peek` calls to a single ByteString decoding bytes into
   -- typed values, to then call the Parser continuation, and repeat.
   -- The only allocations (I think) when everything is inlined by this are the
   -- decoded values themselves being boxed and the CPS Parser's ByteStringIdx
-  -- also being passed boxed between continuations.
+  -- also being passed boxed between continuations (though reading GHC Core
+  -- is something I'm still learning).
   RowDecoder
     { fullRowDecoder = const p,
       rowColumnsTypeCheck = \case
-        [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid == tyoid)]
+        [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` tyoids)]
         _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
       numExpectedColumns = 1
     }
@@ -768,6 +769,7 @@ binaryIntDecoder typOid = \bs ->
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
 -- | Specialized/performance-oriented Big-Endian binary decoder for Haskell's various IntXX types.
+{-# INLINE binaryIntSpecializedRowDecoder #-}
 binaryIntSpecializedRowDecoder :: Parser.Parser (Maybe Int)
 binaryIntSpecializedRowDecoder = do
   fieldLen <- Parser.takeInt32BE
@@ -813,17 +815,12 @@ instance FromPgField Int where
                 Nothing -> Left "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`",
         allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
       }
+  {-# NOINLINE singleFieldRowDecoder #-}
   singleFieldRowDecoder =
     let fromNullable = \case
           Nothing -> fail "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`"
           Just i -> pure i
-     in RowDecoder
-          { fullRowDecoder = const $ binaryIntSpecializedRowDecoder >>= fromNullable,
-            rowColumnsTypeCheck = \case
-              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` haskellIntOids)]
-              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-            numExpectedColumns = 1
-          }
+     in inlinableRowDecoder haskellIntOids $ binaryIntSpecializedRowDecoder >>= fromNullable
 
 -- The instance below makes our Records benchmark faster and use less
 -- memory, but makes our Tuples benchmark slower. Worth investigating.
@@ -934,13 +931,7 @@ instance FromPgField Double where
             8 -> Just <$> Parser.takeDoubleBE
             4 -> Just . float2Double <$> Parser.takeFloatBE
             _ -> pure Nothing
-     in RowDecoder
-          { fullRowDecoder = const $ float4OrDouble8Decoder >>= fromNullable,
-            rowColumnsTypeCheck = \case
-              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` [float8Oid, float4Oid])]
-              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-            numExpectedColumns = 1
-          }
+     in inlinableRowDecoder [float8Oid, float4Oid] $ float4OrDouble8Decoder >>= fromNullable
 
 -- | Allows you to specify a type (and other checks, possibly) for a `FieldDecoder`.
 -- This can be useful to ensure you're not accidentally decoding a different type.
@@ -1015,7 +1006,7 @@ instance FromPgField Bool where
     let word8ToBool = \case
           Nothing -> fail "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
           Just w8 -> pure $ w8 == 1
-     in uniqueOidRowPa boolOid $ Parser.parsePgFieldWithAtMost4Bytes BinSer.CWord8 >>= word8ToBool
+     in inlinableRowDecoder [boolOid] $ Parser.parsePgFieldWithAtMost4Bytes BinSer.CWord8 >>= word8ToBool
 
 instance FromPgField Char where
   fieldDecoder =
@@ -1103,7 +1094,7 @@ instance FromPgField UTCTime where
                   parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
               pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
             _ -> pure Nothing
-     in uniqueOidRowPa timestamptzOid $ utcTimeDecoder >>= fromNullable
+     in inlinableRowDecoder [timestamptzOid] $ utcTimeDecoder >>= fromNullable
 
 instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
@@ -1174,11 +1165,12 @@ instance FromPgField Day where
       jd <- BinSer.decodeInt32BE 0 bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
+  {-# NOINLINE singleFieldRowDecoder #-}
   singleFieldRowDecoder =
     let int32ToDay = \case
           Nothing -> fail "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
           Just i32 -> let jd = fromIntegral i32 :: Integer in pure $ addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
-     in uniqueOidRowPa dateOid $ Parser.takeInt32BEWithFieldLength >>= int32ToDay
+     in inlinableRowDecoder [dateOid] $ Parser.takeInt32BEWithFieldLength >>= int32ToDay
 
 instance FromPgField (Unbounded Day) where
   fieldDecoder = parsePgType [dateOid] $ \case
