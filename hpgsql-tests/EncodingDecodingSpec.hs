@@ -367,8 +367,18 @@ byteaTextDecoding conn = hedgehog $ do
   someBs :: ByteString <- Gen.forAll $ Gen.bytes (Gen.linear 0 50)
   let lazyBs :: LBS.ByteString = LBS.fromStrict someBs
       hexStr = concatMap (\w -> let s = showHex w "" in if length s < 2 then '0' : s else s) (BS.unpack someBs)
-  res <- liftIO $ queryMay conn (fromString $ "SELECT '\\x" <> hexStr <> "'::bytea, '\\x" <> hexStr <> "'::bytea")
-  res === Just (someBs, lazyBs)
+      qry = fromString $ "SELECT '\\x" <> hexStr <> "'::bytea, '\\x" <> hexStr <> "'::bytea"
+  (res1, res2) <-
+    liftIO $
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  let expectedResult = (someBs, lazyBs)
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
 
 dateAndTimestampTextDecoding :: HPgConnection -> PropertyT IO ()
 dateAndTimestampTextDecoding conn = hedgehog $ do
@@ -388,38 +398,43 @@ dateAndTimestampTextDecoding conn = hedgehog $ do
       someNominalDiffTime :: NominalDiffTime = realToFrac $ picosecondsToDiffTime (someNominalDiffTimeMicros * 1_000_000)
       (intervalSecs, intervalRemMicros) = someIntervalTimeMicros `quotRem` 1_000_000
       (nomSecs, nomRemMicros) = someNominalDiffTimeMicros `quotRem` 1_000_000
-  res <-
+      qry =
+        fromString $
+          "SELECT '"
+            <> iso8601Show date
+            <> "'::date"
+            <> ", '"
+            <> iso8601Show timetz
+            <> "'::timestamptz"
+            <> ", '"
+            <> show someNumberOfMonths
+            <> " months "
+            <> show intervalSecs
+            <> " seconds "
+            <> show intervalRemMicros
+            <> " microseconds'::interval"
+            <> ", '"
+            <> iso8601Show timetz
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show date
+            <> "'::date"
+            <> ", '"
+            <> show nomSecs
+            <> " seconds "
+            <> show nomRemMicros
+            <> " microseconds'::interval"
+  (res1, res2) <-
     liftIO $
-      queryWith
-        rowDecoder
-        conn
-        ( fromString $
-            "SELECT '"
-              <> iso8601Show date
-              <> "'::date"
-              <> ", '"
-              <> iso8601Show timetz
-              <> "'::timestamptz"
-              <> ", '"
-              <> show someNumberOfMonths
-              <> " months "
-              <> show intervalSecs
-              <> " seconds "
-              <> show intervalRemMicros
-              <> " microseconds'::interval"
-              <> ", '"
-              <> iso8601Show timetz
-              <> "'::timestamptz"
-              <> ", '"
-              <> iso8601Show date
-              <> "'::date"
-              <> ", '"
-              <> show nomSecs
-              <> " seconds "
-              <> show nomRemMicros
-              <> " microseconds'::interval"
-        )
-  res === [(date, timetz, someCalendarDiffTime, Finite timetz, Finite date, CalendarDiffTime 0 someNominalDiffTime)]
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  let expectedResult = (date, timetz, someCalendarDiffTime, Finite timetz, Finite date, CalendarDiffTime 0 someNominalDiffTime)
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
 
 numericTextDecoding :: HPgConnection -> PropertyT IO ()
 numericTextDecoding conn = hedgehog $ do
@@ -428,30 +443,35 @@ numericTextDecoding conn = hedgehog $ do
   doubleVal :: Double <- Gen.forAll $ Gen.double $ Gen.exponentialFloatFrom 0 (-1e308) 1e308
   doubleVal2 :: Double <- Gen.forAll $ Gen.double $ Gen.linearFracFrom 0 (-1e308) 1e308
   integerVal :: Integer <- Gen.forAll $ (*) <$> (fromIntegral @Int64 <$> Gen.enumBounded) <*> (fromIntegral @Int64 <$> Gen.enumBounded)
-  res <-
+  let qry =
+        fromString $
+          "SELECT '1.521'::numeric, '1.521'::numeric(4,1), '1.521'::numeric"
+            <> ", '"
+            <> show floatVal
+            <> "'::float4"
+            <> ", '"
+            <> show floatVal2
+            <> "'::float4"
+            <> ", '"
+            <> show doubleVal
+            <> "'::float8"
+            <> ", '"
+            <> show doubleVal2
+            <> "'::float8"
+            <> ", '"
+            <> show integerVal
+            <> "'::numeric"
+  (res1, res2) <-
     liftIO $
-      queryWith
-        rowDecoder
-        conn
-        ( fromString $
-            "SELECT '1.521'::numeric, '1.521'::numeric(4,1), '1.521'::numeric"
-              <> ", '"
-              <> show floatVal
-              <> "'::float4"
-              <> ", '"
-              <> show floatVal2
-              <> "'::float4"
-              <> ", '"
-              <> show doubleVal
-              <> "'::float8"
-              <> ", '"
-              <> show doubleVal2
-              <> "'::float8"
-              <> ", '"
-              <> show integerVal
-              <> "'::numeric"
-        )
-  res === [(1.521 :: Scientific, 1.5 :: Scientific, 1.521 :: Scientific, floatVal, floatVal2, doubleVal, doubleVal2, integerVal)]
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  let expectedResult = (1.521 :: Scientific, 1.5 :: Scientific, 1.521 :: Scientific, floatVal, floatVal2, doubleVal, doubleVal2, integerVal)
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
 
 numericTextDecodingLargerTypes :: HPgConnection -> PropertyT IO ()
 numericTextDecodingLargerTypes conn = hedgehog $ do
@@ -459,63 +479,107 @@ numericTextDecodingLargerTypes conn = hedgehog $ do
   int2Val :: Int16 <- Gen.forAll Gen.enumBounded
   int4Val :: Int32 <- Gen.forAll Gen.enumBounded
   int8Val :: Int64 <- Gen.forAll Gen.enumBounded
-  res <-
+  let qry =
+        fromString $
+          "SELECT '"
+            <> show floatVal
+            <> "'::float4"
+            <> ", '"
+            <> show int2Val
+            <> "'::int2"
+            <> ", '"
+            <> show int2Val
+            <> "'::int2"
+            <> ", '"
+            <> show int2Val
+            <> "'::int2"
+            <> ", '"
+            <> show int2Val
+            <> "'::int2"
+            <> ", '"
+            <> show int4Val
+            <> "'::int4"
+            <> ", '"
+            <> show int4Val
+            <> "'::int4"
+            <> ", '"
+            <> show int4Val
+            <> "'::int4"
+            <> ", '"
+            <> show int8Val
+            <> "'::int8"
+            <> ", '"
+            <> show int8Val
+            <> "'::int8"
+  (res1, res2) <-
     liftIO $
-      queryWith
-        rowDecoder
-        conn
-        ( fromString $
-            "SELECT '"
-              <> show floatVal
-              <> "'::float4"
-              <> ", '"
-              <> show int2Val
-              <> "'::int2"
-              <> ", '"
-              <> show int2Val
-              <> "'::int2"
-              <> ", '"
-              <> show int2Val
-              <> "'::int2"
-              <> ", '"
-              <> show int2Val
-              <> "'::int2"
-              <> ", '"
-              <> show int4Val
-              <> "'::int4"
-              <> ", '"
-              <> show int4Val
-              <> "'::int4"
-              <> ", '"
-              <> show int4Val
-              <> "'::int4"
-              <> ", '"
-              <> show int8Val
-              <> "'::int8"
-              <> ", '"
-              <> show int8Val
-              <> "'::int8"
-        )
-  let rowRes = (float2Double floatVal, fromIntegral int2Val :: Int32, fromIntegral int2Val :: Int64, fromIntegral int2Val :: Integer, fromIntegral int2Val :: Scientific, fromIntegral int4Val :: Int64, fromIntegral int4Val :: Integer, fromIntegral int4Val :: Scientific, fromIntegral int8Val :: Integer, fromIntegral int8Val :: Scientific)
-  res === [rowRes]
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  let expectedResult = (float2Double floatVal, fromIntegral int2Val :: Int32, fromIntegral int2Val :: Int64, fromIntegral int2Val :: Integer, fromIntegral int2Val :: Scientific, fromIntegral int4Val :: Int64, fromIntegral int4Val :: Integer, fromIntegral int4Val :: Scientific, fromIntegral int8Val :: Integer, fromIntegral int8Val :: Scientific)
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
 
 numericExtremeTextDecoding :: HPgConnection -> IO ()
 numericExtremeTextDecoding conn = do
-  queryWith rowDecoder conn (fromString $ "SELECT '" <> show (minBound :: Int16) <> "'::int2, '" <> show (maxBound :: Int16) <> "'::int2")
-    `shouldReturn` [(minBound :: Int16, maxBound :: Int16)]
-  queryWith rowDecoder conn (fromString $ "SELECT '" <> show (minBound :: Int32) <> "'::int4, '" <> show (maxBound :: Int32) <> "'::int4")
-    `shouldReturn` [(minBound :: Int32, maxBound :: Int32)]
-  queryWith rowDecoder conn (fromString $ "SELECT '" <> show (minBound :: Int64) <> "'::int8, '" <> show (maxBound :: Int64) <> "'::int8")
-    `shouldReturn` [(minBound :: Int64, maxBound :: Int64)]
-  [(f :: Float, d :: Double)] <- queryWith rowDecoder conn "SELECT 'NaN'::float4, 'NaN'::float8"
-  f `shouldSatisfy` isNaN
-  d `shouldSatisfy` isNaN
-  queryWith rowDecoder conn "SELECT 'Infinity'::float4, '-Infinity'::float4, 'Infinity'::float8, '-Infinity'::float8"
-    `shouldReturn` [((1 / 0) :: Float, ((-1) / 0) :: Float, (1 / 0) :: Double, ((-1) / 0) :: Double)]
-  [(d1 :: Double, d2 :: Double, d3 :: Double)] <- queryWith rowDecoder conn "SELECT 'NaN'::float4, 'Infinity'::float4, '-Infinity'::float4"
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  let int16Qry = fromString $ "SELECT '" <> show (minBound :: Int16) <> "'::int2, '" <> show (maxBound :: Int16) <> "'::int2"
+      int32Qry = fromString $ "SELECT '" <> show (minBound :: Int32) <> "'::int4, '" <> show (maxBound :: Int32) <> "'::int4"
+      int64Qry = fromString $ "SELECT '" <> show (minBound :: Int64) <> "'::int8, '" <> show (maxBound :: Int64) <> "'::int8"
+      nanQry = "SELECT 'NaN'::float4, 'NaN'::float8"
+      infQry = "SELECT 'Infinity'::float4, '-Infinity'::float4, 'Infinity'::float8, '-Infinity'::float8"
+      mixQry = "SELECT 'NaN'::float4, 'Infinity'::float4, '-Infinity'::float4"
+  (int16Res1, int16Res2, int32Res1, int32Res2, int64Res1, int64Res2, nanRes1, nanRes2, infRes1, infRes2, mixRes1, mixRes2) <-
+    runPipeline conn $
+      (,,,,,,,,,,,)
+        <$> pipeline1With rowDecoder int16Qry
+        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) int16Qry
+        <*> pipeline1With rowDecoder int32Qry
+        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) int32Qry
+        <*> pipeline1With rowDecoder int64Qry
+        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) int64Qry
+        <*> pipeline1With rowDecoder nanQry
+        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) nanQry
+        <*> pipeline1With rowDecoder infQry
+        <*> pipeline1With ((,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) infQry
+        <*> pipeline1With rowDecoder mixQry
+        <*> pipeline1With ((,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) mixQry
+  -- Integer boundary values
+  int16Res1 `shouldReturn` (minBound :: Int16, maxBound :: Int16)
+  int16Res2 `shouldReturn` (minBound :: Int16, maxBound :: Int16)
+  int32Res1 `shouldReturn` (minBound :: Int32, maxBound :: Int32)
+  int32Res2 `shouldReturn` (minBound :: Int32, maxBound :: Int32)
+  int64Res1 `shouldReturn` (minBound :: Int64, maxBound :: Int64)
+  int64Res2 `shouldReturn` (minBound :: Int64, maxBound :: Int64)
+  -- NaN for Float and Double
+  (f1 :: Float, d1 :: Double) <- nanRes1
+  f1 `shouldSatisfy` isNaN
   d1 `shouldSatisfy` isNaN
-  d2 `shouldBe` (1 / 0 :: Double)
-  d3 `shouldBe` ((-1) / 0 :: Double)
+  (f2 :: Float, d2 :: Double) <- nanRes2
+  f2 `shouldSatisfy` isNaN
+  d2 `shouldSatisfy` isNaN
+  -- +-Infinity for Float and Double
+  let infRow = (posInfFloat, negInfFloat, posInfDouble, negInfDouble)
+  infRes1 `shouldReturn` infRow
+  infRes2 `shouldReturn` infRow
+  -- NaN and +-Infinity encoded as Float, decoded as Double
+  (md1 :: Double, md2 :: Double, md3 :: Double) <- mixRes1
+  md1 `shouldSatisfy` isNaN
+  md2 `shouldBe` posInfDouble
+  md3 `shouldBe` negInfDouble
+  (md4 :: Double, md5 :: Double, md6 :: Double) <- mixRes2
+  md4 `shouldSatisfy` isNaN
+  md5 `shouldBe` posInfDouble
+  md6 `shouldBe` negInfDouble
+  where
+    posInfFloat = (1 / 0) :: Float
+    negInfFloat = ((-1) / 0) :: Float
+    posInfDouble = (1 / 0) :: Double
+    negInfDouble = ((-1) / 0) :: Double
 
 jsonTextDecoding :: HPgConnection -> PropertyT IO ()
 jsonTextDecoding conn = hedgehog $ do
@@ -523,29 +587,38 @@ jsonTextDecoding conn = hedgehog $ do
   jsonVal2 :: Aeson.Value <- Gen.forAll genJsonValue
   jsonVal3 :: Aeson.Value <- Gen.forAll genJsonValue
   let encodeJson = pgEscape . Text.unpack . TE.decodeUtf8 . LBS.toStrict . Aeson.encode
-  [(v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson)] <-
+      qry =
+        fromString $
+          "SELECT '"
+            <> encodeJson jsonVal1
+            <> "'::json"
+            <> ", '"
+            <> encodeJson jsonVal1
+            <> "'::jsonb"
+            <> ", '"
+            <> encodeJson jsonVal2
+            <> "'::json"
+            <> ", '"
+            <> encodeJson jsonVal3
+            <> "'::jsonb"
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  (res1, res2) <-
     liftIO $
-      queryWith
-        rowDecoder
-        conn
-        ( fromString $
-            "SELECT '"
-              <> encodeJson jsonVal1
-              <> "'::json"
-              <> ", '"
-              <> encodeJson jsonVal1
-              <> "'::jsonb"
-              <> ", '"
-              <> encodeJson jsonVal2
-              <> "'::json"
-              <> ", '"
-              <> encodeJson jsonVal3
-              <> "'::jsonb"
-        )
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          <*> pipeline1With ((,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  (v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson) <- liftIO res1
   v1 === jsonVal1
   v2 === jsonVal1
   Aeson.toJSON v3 === jsonVal2
   Aeson.toJSON v4 === jsonVal3
+  (v5, v6, v7, v8) :: (Aeson.Value, Aeson.Value, PgJson, PgJson) <- liftIO res2
+  v5 === jsonVal1
+  v6 === jsonVal1
+  Aeson.toJSON v7 === jsonVal2
+  Aeson.toJSON v8 === jsonVal3
   where
     pgEscape = concatMap $ \case
       '\'' -> "''"
@@ -565,13 +638,18 @@ uuidTextDecoding :: HPgConnection -> PropertyT IO ()
 uuidTextDecoding conn = hedgehog $ do
   uuidBytes <- Gen.forAll $ Gen.bytes (Gen.singleton 16)
   let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
-  res <-
+      qry = fromString $ "SELECT '" <> UUID.toString uuid <> "'::uuid"
+  (res1, res2) <-
     liftIO $
-      queryWith
-        rowDecoder
-        conn
-        (fromString $ "SELECT '" <> UUID.toString uuid <> "'::uuid")
-  res === [Only uuid]
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With (Only <$> singleField fieldDecoder) qry
+  let expectedResult = Only uuid
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
 
 ciTextRoundTrip :: HPgConnection -> PropertyT IO ()
 ciTextRoundTrip conn = hedgehog $ do
@@ -599,13 +677,18 @@ ciTextRoundTrip conn = hedgehog $ do
 ciTextTextDecoding :: HPgConnection -> PropertyT IO ()
 ciTextTextDecoding conn = hedgehog $ do
   someText :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 50) (Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.unicode)
-  res <-
-    liftIO $ do
-      queryWith
-        rowDecoder
-        conn
-        (fromString $ "SELECT '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext")
-  res === [(CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))]
+  let qry = fromString $ "SELECT '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext, '" <> Text.unpack someText <> "'::citext"
+  (res1, res2) <-
+    liftIO $
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  let expectedResult = (CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
 
 timeOfDayRoundTrip :: HPgConnection -> PropertyT IO ()
 timeOfDayRoundTrip conn = hedgehog $ do
@@ -637,43 +720,48 @@ timeOfDayTextDecoding conn = hedgehog $ do
         pure $ timeToTimeOfDay $ picosecondsToDiffTime (timeOfDayMicros * 1_000_000)
   row <- Gen.forAll $ (,,,,,,,,,) <$> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay <*> genTimeOfDay
   let (t1, t2, t3, t4, t5, t6, t7, t8, t9, t10) = row
-  res <-
+      qry =
+        fromString $
+          "SELECT '"
+            <> iso8601Show t1
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t2
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t3
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t4
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t5
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t6
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t7
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t8
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t9
+            <> "'::time"
+            <> ", '"
+            <> iso8601Show t10
+            <> "'::time"
+  (res1, res2) <-
     liftIO $
-      query
-        conn
-        ( fromString $
-            "SELECT '"
-              <> iso8601Show t1
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t2
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t3
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t4
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t5
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t6
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t7
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t8
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t9
-              <> "'::time"
-              <> ", '"
-              <> iso8601Show t10
-              <> "'::time"
-        )
-  res === [row]
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  liftIO res1 >>= (=== row)
+  liftIO res2 >>= (=== row)
 
 localTimeTextDecoding :: HPgConnection -> PropertyT IO ()
 localTimeTextDecoding conn = hedgehog $ do
@@ -687,7 +775,39 @@ localTimeTextDecoding conn = hedgehog $ do
         pure $ LocalTime localDay localTimeOfDay
   row <- Gen.forAll $ (,,,,,,,,,) <$> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime <*> genLocalTime
   let (lt1, lt2, lt3, lt4, lt5, lt6, lt7, lt8, lt9, lt10) = row
-  res <-
+      qry =
+        fromString $
+          "SELECT '"
+            <> iso8601Show lt1
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt2
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt3
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt4
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt5
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt6
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt7
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt8
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt9
+            <> "'::timestamp"
+            <> ", '"
+            <> iso8601Show lt10
+            <> "'::timestamp"
+  (res1Val, res2Val) <-
     liftIO $ withRollback conn $ do
       -- Doesn't seem like the timezone matters, but we set to
       -- UTC because this is a textual representation, and the
@@ -696,42 +816,16 @@ localTimeTextDecoding conn = hedgehog $ do
       -- are the inverse of each other but produce bogus values
       -- nonetheless.
       execute conn "SET LOCAL timezone = 'UTC'"
-      queryWith
-        rowDecoder
-        conn
-        ( fromString $
-            "SELECT '"
-              <> iso8601Show lt1
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt2
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt3
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt4
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt5
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt6
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt7
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt8
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt9
-              <> "'::timestamp"
-              <> ", '"
-              <> iso8601Show lt10
-              <> "'::timestamp"
-        )
-  res === [row]
+      (res1, res2) <-
+        runPipeline conn $
+          (,)
+            <$> pipeline1With rowDecoder qry
+            -- Specialized row parsers of each type are a different implementation from
+            -- the simpler fieldDecoders, so we need to test both
+            <*> pipeline1With ((,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+      (,) <$> res1 <*> res2
+  res1Val === row
+  res2Val === row
 
 fieldDecoderSemigroup :: HPgConnection -> IO ()
 fieldDecoderSemigroup conn = do
