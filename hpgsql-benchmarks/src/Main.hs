@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -ddump-simpl -ddump-to-file #-}
+{-# OPTIONS_GHC -ddump-simpl -dno-typeable-binds -dsuppress-coercions -dsuppress-module-prefixes -dsuppress-type-applications -ddump-to-file #-}
 
 module Main where
 
