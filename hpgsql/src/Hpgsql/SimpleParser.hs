@@ -30,6 +30,7 @@ module Hpgsql.SimpleParser
     takeInt16BEWithFieldLength,
     takeFloatBE,
     takeDoubleBE,
+    takeFloatBEWithFieldLength,
   )
 where
 
@@ -38,7 +39,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
 import Foreign.Storable (Storable)
-import GHC.Float (castWord32ToFloat, castWord64ToDouble)
+import GHC.Float (castWord32ToFloat, castWord64ToDouble, word2Float)
 import Hpgsql.Encoding.BinarySerializer (ByteStringIdx (..))
 import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Prelude hiding (take)
@@ -159,6 +160,15 @@ takeInt32BEWithFieldLength :: Parser (Maybe Int32)
 takeInt32BEWithFieldLength = do
   mi32 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize4
   pure $ fromIntegral <$> mi32
+
+{-# INLINE takeFloatBEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- a Float in a row.
+takeFloatBEWithFieldLength :: Parser (Maybe Float)
+takeFloatBEWithFieldLength = do
+  mf <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize4
+  pure $ castWord32ToFloat <$> mf
 
 {-# INLINE takeFloatBE #-}
 takeFloatBE :: Parser Float
