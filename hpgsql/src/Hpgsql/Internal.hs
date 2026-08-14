@@ -115,8 +115,6 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
 import Control.Monad (forM, forM_, join, replicateM, unless, void, when)
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
-import Data.ByteString.Internal (w2c)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Data (Proxy (..))
 import Data.Either (isLeft, isRight)
@@ -137,13 +135,14 @@ import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Encoding (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
-import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), ConnectionString (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResetConnectionOpts (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
 import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
+import Hpgsql.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray, takePgMessageIdentAndLen)
+import qualified Hpgsql.PinnedByteArray as PBA
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.ScramSHA256 as ScramSHA256
 import qualified Hpgsql.SimpleParser as Parser
@@ -507,7 +506,7 @@ receiveNextMsgWithMaskedContinuation conn parser f =
     Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " <> Text.pack (show msgIdentChar) <> ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
 data ReceiveWhat a b where
-  ReceiveDataRows :: ReceiveWhat DataRow (ByteString, Int)
+  ReceiveDataRows :: ReceiveWhat DataRow (PinnedByteArray, Int)
   ReceiveArbitraryMsg :: PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> ReceiveWhat a b
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
@@ -533,13 +532,12 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   -- So we append to the buffer up until it has been fully fetched,
   -- and then extract it from the buffer in one piece.
   (initialBuf, initialBufLen) <- receiveUntilBufferHasAtLeast 5
-  let charAndLength = LBS.take 5 initialBuf
-  let (w2c -> msgIdentChar, lenbs) = fromMaybe (error "impossible") $ LBS.uncons charAndLength
-      lenLeftToFetch :: Int64 = fromIntegral $ either error id (BinSer.decodeInt32BE 0 $ LBS.toStrict lenbs) - 4
+  let (msgIdentChar, lenPlus4) = fromMaybe (error "impossible") $ takePgMessageIdentAndLen initialBuf
+  let lenLeftToFetch :: Int = fromIntegral $ lenPlus4 - 4
       fullMessageLen = 5 + lenLeftToFetch
-  (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
-  let fullMsg = LBS.take fullMessageLen nowBuf
-  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg fullMessageLen nowBuf
+  (nowBuf, nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
+  let fullMsg = PBA.toStrictN 0 fullMessageLen nowBuf
+  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg nowBuf nowBufLen
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
     Just res -> pure res
@@ -552,8 +550,9 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
-    go msgIdentChar fullMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
-      let bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
+    go msgIdentChar fullMsgPBA nowBuf nowBufLen = mask_ $ modifyIORefIO recvBuffer $ do
+      let bufferWithoutMsg = PBA.fromStrict $ PBA.toStrictN (PBA.length fullMsgPBA) (nowBufLen - PBA.length fullMsgPBA) nowBuf
+          fullMsg = LBS.fromStrict $ PBA.toByteString fullMsgPBA
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
             -- can be received _at any time_ according to the docs.
@@ -584,13 +583,13 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
       case receiveWhat of
         ReceiveDataRows ->
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
-          let fullBuf = LBS.toStrict nowBuf
-           in case Parser.parseOnly Parser.parseManyRows fullBuf of
+          let strictNowBuf = PBA.toStrict nowBuf
+           in case Parser.parseOnly Parser.parseManyRows strictNowBuf of
                 Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) | nRowsParsed > 0 -> do
-                  let (msgs, unconsumedBuffer) = BS.splitAt unconsumedBufferBegin.idx fullBuf
-                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (BS.length msgs)
-                  pure (LBS.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
-                _ -> handleUnexpectedMsg $ const $ pure ("", 0) -- No error when we stop receiving DataRows, only emptiness
+                  let (msgs, unconsumedBuffer) = PBA.splitAt unconsumedBufferBegin.idx strictNowBuf
+                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (PBA.length msgs)
+                  pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
+                _ -> handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar fullMsg parser of
             Just msg -> do
@@ -601,10 +600,10 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- \| Appends into the internal buffer by reading from the socket
     -- until the buffer has at least N bytes.
     -- Returns the current buffer and its length.
-    receiveUntilBufferHasAtLeast :: Int64 -> IO (LBS.ByteString, Int64)
+    receiveUntilBufferHasAtLeast :: Int -> IO (LazyPinnedByteArray, Int)
     receiveUntilBufferHasAtLeast minBytesNecessary = do
       currentBuffer <- readIORef recvBuffer
-      let nBytesInBuffer = LBS.length currentBuffer
+      let nBytesInBuffer = PBA.lazyLength currentBuffer
       if nBytesInBuffer >= minBytesNecessary
         then pure (currentBuffer, nBytesInBuffer)
         else do
@@ -613,7 +612,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            atomicWriteIORef recvBuffer (currentBuffer <> LBS.fromStrict someBytes)
+            atomicWriteIORef recvBuffer (currentBuffer <> PBA.fromStrict someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()
@@ -846,7 +845,7 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
 
 -- | A sequence of all the bytes of one or more DataRow messages and the total
 -- number of DataRow messages.
-newtype DataRows = DataRows (ByteString, Int)
+newtype DataRows = DataRows (PinnedByteArray, Int)
 
 -- | After sending one or more queries to the backend, run this function for each query to fetch that query's results.
 -- You must call the returned IO function and consume the returned Stream completely until you get to the

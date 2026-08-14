@@ -1,3 +1,6 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnliftedFFITypes #-}
+
 -- |
 -- This module contains code largely copied from the @network@ library
 -- (BSD-3-Clause), with modifications to remove blocking calls
@@ -18,13 +21,13 @@ where
 
 import Control.Concurrent (threadWaitRead, threadWaitWrite)
 import Control.Exception.Safe (throw)
-import Data.ByteString (ByteString)
-import Data.ByteString.Internal (createAndTrim)
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.Int (Int64)
 import Foreign (Ptr, Storable (..), Word8, allocaArray, castPtr, nullPtr, plusPtr)
-import Foreign.C (CChar (..), CInt (..), CSize (..), eAGAIN, eWOULDBLOCK, getErrno)
+import Foreign.C (CInt (..), CSize (..), eAGAIN, eWOULDBLOCK, getErrno)
+import GHC.Base (Addr#)
+import Hpgsql.PinnedByteArray (PinnedByteArray, createPinnedByteArray)
 import Network.Socket (Socket, withFdSocket)
 import System.Posix.Types (CSsize (..))
 
@@ -34,11 +37,11 @@ socketWaitRead socket = withFdSocket socket (threadWaitRead . fromIntegral)
 socketWaitWrite :: Socket -> IO ()
 socketWaitWrite socket = withFdSocket socket (threadWaitWrite . fromIntegral)
 
-recvNonBlocking :: Socket -> Int -> IO ByteString
-recvNonBlocking s nbytes = withFdSocket s $ \fd -> createAndTrim nbytes $ \buffer -> do
+recvNonBlocking :: Socket -> Int -> IO PinnedByteArray
+recvNonBlocking s nbytes = withFdSocket s $ \fd -> createPinnedByteArray nbytes $ \buffer -> do
   -- Largely copied from https://hackage-content.haskell.org/package/network-3.2.8.0/docs/src/Network.Socket.Buffer.html#recvBufNoWait and other functions from the network library,
   -- but then modified to our needs.
-  r <- c_recv fd (castPtr buffer) (fromIntegral nbytes) 0 {-flags-}
+  r <- c_recv fd buffer (fromIntegral nbytes) 0 {-flags-}
   if r >= 0
     then do
       -- putStrLn $ "Asked for " ++ show nbytes ++ ", got " ++ show r
@@ -115,7 +118,7 @@ instance Storable IOVec where
 --     pokeIov ptr (sPtr, sLen) = poke ptr $ IOVec sPtr (fromIntegral sLen)
 
 foreign import ccall unsafe "recv"
-  c_recv :: CInt -> Ptr CChar -> CSize -> CInt -> IO CInt
+  c_recv :: CInt -> Addr# -> CSize -> CInt -> IO CInt
 
 foreign import ccall unsafe "writev"
   c_writev :: CInt -> Ptr IOVec -> CInt -> IO CSsize

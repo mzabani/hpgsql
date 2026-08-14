@@ -124,6 +124,12 @@ spec = parallel $ do
       "CI Text text decoding"
       ciTextTextDecoding
     it
+      "Text values round-trip"
+      textRoundTrip
+    it
+      "Text text decoding"
+      textTextDecoding
+    it
       "TimeOfDay values round-trip"
       timeOfDayRoundTrip
     it
@@ -687,6 +693,45 @@ ciTextTextDecoding conn = hedgehog $ do
           -- the simpler fieldDecoders, so we need to test both
           <*> pipeline1With ((,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
   let expectedResult = (CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
+
+textRoundTrip :: HPgConnection -> PropertyT IO ()
+textRoundTrip conn = hedgehog $ do
+  let genText = Gen.maybe $ Gen.text (Gen.linear 0 300) (Gen.filter (/= '\0') Gen.unicode)
+      genLazyText = Gen.maybe $ LT.fromStrict <$> Gen.text (Gen.linear 0 300) (Gen.filter (/= '\0') Gen.unicode)
+      genString = Gen.maybe $ Gen.string (Gen.linear 0 300) (Gen.filter (/= '\0') Gen.unicode)
+  row <-
+    Gen.forAll $
+      (,,,,,,,,,)
+        <$> genText
+        <*> genText
+        <*> genText
+        <*> genText
+        <*> genLazyText
+        <*> genLazyText
+        <*> genLazyText
+        <*> genString
+        <*> genString
+        <*> genString
+  res <-
+    liftIO $
+      query conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10" row)
+  res === [row]
+
+textTextDecoding :: HPgConnection -> PropertyT IO ()
+textTextDecoding conn = hedgehog $ do
+  someText :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 300) (Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.unicode)
+  let qry = fromString $ "SELECT '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text"
+  (res1, res2) <-
+    liftIO $
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+  let expectedResult = (someText, LT.fromStrict someText, Text.unpack someText)
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
 
