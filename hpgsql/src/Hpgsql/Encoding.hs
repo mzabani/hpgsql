@@ -106,7 +106,8 @@ import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
 import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
-import qualified Hpgsql.Encoding.BinarySerializer as BinSer
+import Hpgsql.PinnedByteArray (PinnedByteArray)
+import qualified Hpgsql.PinnedByteArray as PBA
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeDetails (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
@@ -121,7 +122,7 @@ data FieldInfo = FieldInfo
 
 -- | A decoder for a single field/column.
 data FieldDecoder a = FieldDecoder
-  { fieldValueDecoder :: FieldInfo -> ByteString -> Either String a,
+  { fieldValueDecoder :: FieldInfo -> PinnedByteArray -> Either String a,
     decodesSqlNullTo :: Either String a,
     allowedPgTypes :: FieldInfo -> Bool
   }
@@ -322,10 +323,10 @@ compositeTypeDecoder (RowDecoder {..}) =
         !oid <- Oid . fromIntegral <$> Parser.takeInt32BE
         (sizeBs, !size) <- Parser.match $ fromIntegral <$> Parser.takeInt32BE
         !bs <- Parser.take (max 0 size)
-        pure (oid, sizeBs <> bs)
+        pure (oid, PBA.fromStrict sizeBs <> PBA.fromStrict bs)
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
       unless (all snd typecheckedCols) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
-      case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (mconcat $ map snd cols) of
+      case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (PBA.toStrict $ mconcat $ map snd cols) of
         Parser.ParseOk v -> pure v
         Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
 
@@ -436,21 +437,21 @@ instance ToPgField Int16 where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just int2Oid,
-        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt16BE n
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt16BE n
       }
 
 instance ToPgField Int32 where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just int4Oid,
-        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt32BE n
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt32BE n
       }
 
 instance ToPgField Int64 where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just int8Oid,
-        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt64BE n
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt64BE n
       }
 
 instance ToPgField Integer where
@@ -473,7 +474,7 @@ instance ToPgField Oid where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just oidOid,
-        toPgField = \_ -> \n -> NotNull $ BinSer.encodeInt32BE $ fromIntegral n
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt32BE $ fromIntegral n
       }
 
 instance ToPgField Scientific where
@@ -481,7 +482,7 @@ instance ToPgField Scientific where
     FieldEncoder
       { toTypeOid = \_ -> Just numericOid,
         toPgField = \_ -> \n ->
-          let sign = BinSer.encodeInt16BE $ if n >= 0 then 0 else 0x4000
+          let sign = PBA.encodeInt16BE $ if n >= 0 then 0 else 0x4000
               -- The number is coeff * 10^exp, but we want it in base-10000 so we convert it to
               -- new_coeff * 10^new_exp with new_exp a multiple of 4
               base10000Expon = 4 * (base10Exponent n `div` 4)
@@ -489,8 +490,8 @@ instance ToPgField Scientific where
               ndigits, weight :: Int16
               digits :: ByteString
               (ndigits, weight, digits) = calculateDigits 0 0 (abs base10000Coeff) ""
-              dscale = BinSer.encodeInt16BE (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
-           in NotNull $ BinSer.encodeInt16BE ndigits <> BinSer.encodeInt16BE (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
+              dscale = PBA.encodeInt16BE (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
+           in NotNull $ PBA.encodeInt16BE ndigits <> PBA.encodeInt16BE (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
       }
     where
       calculateDigits :: Int16 -> Int16 -> Integer -> BS.ByteString -> (Int16, Int16, BS.ByteString)
@@ -501,27 +502,27 @@ instance ToPgField Scientific where
               (ndigitsSoFar + 1)
               (weightSoFar + 1)
               quotient
-              (BinSer.encodeInt16BE rest <> encodedDigits)
+              (PBA.encodeInt16BE rest <> encodedDigits)
 
 instance ToPgField Float where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just float4Oid,
-        toPgField = \_ -> \n -> NotNull $ BinSer.encodeFloat n
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeFloat n
       }
 
 instance ToPgField Double where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just float8Oid,
-        toPgField = \_ -> \n -> NotNull $ BinSer.encodeDouble n
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeDouble n
       }
 
 instance ToPgField Bool where
   fieldEncoder =
     FieldEncoder
       { toTypeOid = \_ -> Just boolOid,
-        toPgField = \_ n -> NotNull $ BinSer.encodePgBoolean n
+        toPgField = \_ n -> NotNull $ PBA.encodePgBoolean n
       }
 
 instance ToPgField Day where
@@ -531,7 +532,7 @@ instance ToPgField Day where
     FieldEncoder
       { toTypeOid = \_ -> Just dateOid,
         -- TODO: Catch integer overflow and do what?
-        toPgField = \_ d -> NotNull $ BinSer.encodeInt32BE $ fromIntegral $ diffDays d (fromGregorian 2000 1 1)
+        toPgField = \_ d -> NotNull $ PBA.encodeInt32BE $ fromIntegral $ diffDays d (fromGregorian 2000 1 1)
       }
 
 instance ToPgField (Unbounded Day) where
@@ -540,9 +541,9 @@ instance ToPgField (Unbounded Day) where
      in FieldEncoder
           { toTypeOid = fe.toTypeOid,
             toPgField = \encCtx -> \case
-              NegInfinity -> NotNull $ BinSer.encodeInt32BE minBound
+              NegInfinity -> NotNull $ PBA.encodeInt32BE minBound
               Finite v -> fe.toPgField encCtx v
-              PosInfinity -> NotNull $ BinSer.encodeInt32BE maxBound
+              PosInfinity -> NotNull $ PBA.encodeInt32BE maxBound
           }
 
 instance ToPgField CalendarDiffTime where
@@ -551,7 +552,7 @@ instance ToPgField CalendarDiffTime where
       { toTypeOid = \_ -> Just intervalOid,
         toPgField = \_ CalendarDiffTime {..} ->
           let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400
-           in NotNull $ BinSer.encodeInt64BE (round $ timeUnderOneDay * 1_000_000) <> BinSer.encodeInt32BE days <> BinSer.encodeInt32BE (fromIntegral ctMonths)
+           in NotNull $ PBA.encodeInt64BE (round $ timeUnderOneDay * 1_000_000) <> PBA.encodeInt32BE days <> PBA.encodeInt32BE (fromIntegral ctMonths)
       }
 
 instance ToPgField NominalDiffTime where
@@ -559,7 +560,7 @@ instance ToPgField NominalDiffTime where
     FieldEncoder
       { toTypeOid = \_ -> Just intervalOid,
         toPgField = \_ ndt ->
-          NotNull $ BinSer.encodeInt64BE (round $ ndt * 1_000_000) <> BinSer.encodeInt32BE 0 <> BinSer.encodeInt32BE 0
+          NotNull $ PBA.encodeInt64BE (round $ ndt * 1_000_000) <> PBA.encodeInt32BE 0 <> PBA.encodeInt32BE 0
       }
 
 instance ToPgField UTCTime where
@@ -570,7 +571,7 @@ instance ToPgField UTCTime where
         toPgField = \_ (UTCTime parsedDate timeinday) ->
           let day :: Int64 = fromInteger $ parsedDate `diffDays` fromJulian 1999 12 19
               totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds timeinday `div` 1_000_000)
-           in NotNull $ BinSer.encodeInt64BE totalusecs
+           in NotNull $ PBA.encodeInt64BE totalusecs
       }
 
 instance ToPgField (Unbounded UTCTime) where
@@ -579,9 +580,9 @@ instance ToPgField (Unbounded UTCTime) where
      in FieldEncoder
           { toTypeOid = fe.toTypeOid,
             toPgField = \encCtx -> \case
-              NegInfinity -> NotNull $ BinSer.encodeInt64BE minBound
+              NegInfinity -> NotNull $ PBA.encodeInt64BE minBound
               Finite v -> fe.toPgField encCtx v
-              PosInfinity -> NotNull $ BinSer.encodeInt64BE maxBound
+              PosInfinity -> NotNull $ PBA.encodeInt64BE maxBound
           }
 
 instance ToPgField ZonedTime where
@@ -598,9 +599,9 @@ instance ToPgField (Unbounded ZonedTime) where
      in FieldEncoder
           { toTypeOid = fe.toTypeOid,
             toPgField = \encCtx -> \case
-              NegInfinity -> NotNull $ BinSer.encodeInt64BE minBound
+              NegInfinity -> NotNull $ PBA.encodeInt64BE minBound
               Finite v -> fe.toPgField encCtx v
-              PosInfinity -> NotNull $ BinSer.encodeInt64BE maxBound
+              PosInfinity -> NotNull $ PBA.encodeInt64BE maxBound
           }
 
 instance ToPgField LocalTime where
@@ -610,7 +611,7 @@ instance ToPgField LocalTime where
         toPgField = \_ (LocalTime localDay localTimeOfDay) ->
           let day :: Int64 = fromInteger $ localDay `diffDays` fromJulian 1999 12 19
               totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds (timeOfDayToTime localTimeOfDay) `div` 1_000_000)
-           in NotNull $ BinSer.encodeInt64BE totalusecs
+           in NotNull $ PBA.encodeInt64BE totalusecs
       }
 
 instance ToPgField TimeOfDay where
@@ -619,7 +620,7 @@ instance ToPgField TimeOfDay where
       { toTypeOid = \_ -> Just timeOid,
         toPgField = \_ tod ->
           let usecs :: Int64 = fromInteger $ diffTimeToPicoseconds (timeOfDayToTime tod) `div` 1_000_000
-           in NotNull $ BinSer.encodeInt64BE usecs
+           in NotNull $ PBA.encodeInt64BE usecs
       }
 
 instance ToPgField Char where
@@ -816,33 +817,33 @@ haskellIntOids :: [Oid]
 -- | Big-Endian binary encoder for Haskell's `Data.Int`, which is machine-dependent.
 binaryIntEncoder :: Int -> BinaryField
 binaryIntEncoder
-  | haskellIntOid == int8Oid = NotNull . BinSer.encodeInt64BE . fromIntegral
-  | haskellIntOid == int4Oid = NotNull . BinSer.encodeInt32BE . fromIntegral
-  | otherwise = NotNull . BinSer.encodeInt16BE . fromIntegral
+  | haskellIntOid == int8Oid = NotNull . PBA.encodeInt64BE . fromIntegral
+  | haskellIntOid == int4Oid = NotNull . PBA.encodeInt32BE . fromIntegral
+  | otherwise = NotNull . PBA.encodeInt16BE . fromIntegral
 
 -- | Big-Endian binary decoder for Haskell's various IntXX types.
-binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> ByteString -> Either String a
+binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> PinnedByteArray -> Either String a
 binaryIntDecoder typOid = \bs ->
   if doesFit
     then intDecoder bs
     else Left $ "Chosen integral type does not fit every value for PG type with OID " ++ show typOid
   where
     maxBoundPgType :: Integer
-    intDecoder :: ByteString -> Either String a
+    intDecoder :: PinnedByteArray -> Either String a
     (maxBoundPgType, intDecoder)
-      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . BinSer.decodeInt64BE 0)
-      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . BinSer.decodeInt32BE 0)
-      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . BinSer.decodeInt16BE 0)
+      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . PBA.decodeInt64BE 0)
+      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . PBA.decodeInt32BE 0)
+      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . PBA.decodeInt16BE 0)
       | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
-binaryFloat4Decoder :: ByteString -> Float
-binaryFloat4Decoder = castWord32ToFloat . either error id . BinSer.decodeWord32BE 0
+binaryFloat4Decoder :: PinnedByteArray -> Float
+binaryFloat4Decoder = castWord32ToFloat . either error id . PBA.decodeWord32BE 0
 
-binaryFloat8Decoder :: ByteString -> Double
-binaryFloat8Decoder = castWord64ToDouble . either error id . BinSer.decodeWord64BE 0
+binaryFloat8Decoder :: PinnedByteArray -> Double
+binaryFloat8Decoder = castWord64ToDouble . either error id . PBA.decodeWord64BE 0
 
-parsePgType :: String -> [Oid] -> (ByteString -> Either String a) -> FieldDecoder a
+parsePgType :: String -> [Oid] -> (PinnedByteArray -> Either String a) -> FieldDecoder a
 parsePgType !typeName !requiredTypeOids !fieldValueDecoder =
   FieldDecoder
     { fieldValueDecoder = \_oid -> fieldValueDecoder,
@@ -854,9 +855,11 @@ instance FromPgField () where
   {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
-      { fieldValueDecoder = \_oid -> \case
-          "" -> Right ()
-          bs -> Left $ "Invalid value '" ++ show bs ++ "' for postgres void type",
+      { fieldValueDecoder = \_oid -> \bs ->
+          if PBA.length bs == 0
+            then Right ()
+            else
+              Left $ "Invalid value for postgres void type",
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell () type. Use a `Maybe ()`",
         allowedPgTypes = (== voidOid) . fieldTypeOid
       }
@@ -1071,12 +1074,12 @@ instance FromPgField (Ratio Integer) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = toRational <$> fieldDecoder @Scientific
 
-binaryTrue :: ByteString
-binaryTrue = BinSer.encodePgBoolean True
+binaryTrue :: PinnedByteArray
+binaryTrue = PBA.fromByteString $ PBA.encodePgBoolean True
 
 {-# INLINE boolRowDecoder #-}
 boolRowDecoder :: Parser.Parser (Maybe Bool)
-boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes BinSer.CWord8
+boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
 
 instance FromPgField Bool where
   {-# INLINE fieldDecoder #-}
@@ -1094,9 +1097,7 @@ instance FromPgField Char where
               let !decodeText = textParser colInfo
                in \bs ->
                     if oid == charOid
-                      -- TODO: Postgres has values of type "char" in the pg_type.typcategory table.
-                      -- We should test this instance works with those, and we haven't yet.
-                      then Right $ BSC.head bs
+                      then Right $ BSC.head $ PBA.toByteString bs
                       else case decodeText bs of
                         Left err -> Left err
                         Right t -> if Text.length t > 1 then Left "Cannot parse text with more than one character into a Haskell Char type." else Right (Text.head t),
@@ -1107,11 +1108,11 @@ instance FromPgField Char where
 
 instance FromPgField ByteString where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "byteString" [byteaOid] Right
+  fieldDecoder = parsePgType "byteString" [byteaOid] (Right . PBA.toByteString)
 
 instance FromPgField LBS.ByteString where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "ByteString" [byteaOid] $ Right . LBS.fromStrict
+  fieldDecoder = parsePgType "ByteString" [byteaOid] $ (Right . LBS.fromStrict . PBA.toByteString)
 
 {-# INLINE textDecoder #-}
 textDecoder :: Parser.Parser (Maybe Text)
@@ -1119,23 +1120,23 @@ textDecoder = do
   len <- Parser.takeInt32BE
   if len >= 0
     -- TODO: Use some faster unsafeDecodeUtf8 function?
-    then Just . decodeUtf8 <$> Parser.take (fromIntegral len)
+    then Just . decodeUtf8 . PBA.toByteString <$> Parser.take (fromIntegral len)
     else pure Nothing
 
 instance FromPgField Text where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ decodeUtf8 bs
+  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ decodeUtf8 $ PBA.toByteString bs
 
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just textDecoder
 
 instance FromPgField LT.Text where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ LT.fromStrict $ decodeUtf8 bs
+  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ LT.fromStrict $ decodeUtf8 $ PBA.toByteString bs
 
 instance FromPgField String where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \bs -> Right $ Text.unpack $ decodeUtf8 bs
+  fieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \bs -> Right $ Text.unpack $ decodeUtf8 $ PBA.toByteString bs
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
@@ -1172,7 +1173,7 @@ instance FromPgField UTCTime where
   fieldDecoder = parsePgType "UTCTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE 0 bs
+      totalusecs <- PBA.decodeInt64BE 0 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1185,7 +1186,7 @@ instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE 0 bs
+      totalusecs <- PBA.decodeInt64BE 0 bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -1202,7 +1203,7 @@ instance FromPgField ZonedTime where
   fieldDecoder = parsePgType "ZonedTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE 0 bs
+      totalusecs <- PBA.decodeInt64BE 0 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1212,7 +1213,7 @@ instance FromPgField (Unbounded ZonedTime) where
   fieldDecoder = parsePgType "Unbounded ZonedTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE 0 bs
+      totalusecs <- PBA.decodeInt64BE 0 bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -1228,7 +1229,7 @@ instance FromPgField LocalTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "LocalTime" [timestampOid] $ \case
     bs -> do
-      totalusecs <- BinSer.decodeInt64BE 0 bs
+      totalusecs <- PBA.decodeInt64BE 0 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1237,7 +1238,7 @@ instance FromPgField TimeOfDay where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "TimeOfDay" [timeOid] $ \case
     bs -> do
-      usecs <- BinSer.decodeInt64BE 0 bs
+      usecs <- PBA.decodeInt64BE 0 bs
       Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
 
 {-# INLINE dayRowDecoder #-}
@@ -1253,7 +1254,7 @@ instance FromPgField Day where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- BinSer.decodeInt32BE 0 bs
+      jd <- PBA.decodeInt32BE 0 bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
 
   {-# INLINE inlinedConstFieldDecoder #-}
@@ -1266,7 +1267,7 @@ instance FromPgField (Unbounded Day) where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- BinSer.decodeInt32BE 0 bs
+      jd <- PBA.decodeInt32BE 0 bs
       Right $
         if jd == minBound
           then NegInfinity
@@ -1279,15 +1280,15 @@ instance FromPgField (Unbounded Day) where
 instance FromPgField CalendarDiffTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ \bs -> do
-    nMicrosecs <- BinSer.decodeInt64BE 0 bs
-    nDays <- BinSer.decodeInt32BE 8 bs
-    nMonths <- BinSer.decodeInt32BE 12 bs
+    nMicrosecs <- PBA.decodeInt64BE 0 bs
+    nDays <- PBA.decodeInt32BE 8 bs
+    nMonths <- PBA.decodeInt32BE 12 bs
     Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
 
 instance FromPgField UUID where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "UUID" [uuidOid] $ \case
-    bs -> case UUID.fromByteString (LBS.fromStrict bs) of
+    bs -> case UUID.fromByteString (LBS.fromStrict $ PBA.toByteString bs) of
       Just uuid -> Right uuid
       Nothing -> Left "Bug in Hpgsql: UUID field could not be decoded"
 
@@ -1300,7 +1301,7 @@ instance FromPgField Aeson.Value where
             let -- jsonb has a byte prepended to the contents and json does not
                 !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
              in \case
-                  bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                  bs -> case Aeson.decodeStrict $ fixJsonb (PBA.toByteString bs) of
                     Just d -> Right d
                     Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
@@ -1362,10 +1363,9 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
     FieldDecoder
       { fieldValueDecoder = \colInfo ->
           let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
-           in \case
-                bs -> case Parser.parseOnly arrayFieldDecoder bs of
-                  Parser.ParseOk v -> Right v
-                  Parser.ParseFail err -> Left err,
+           in \bs -> case Parser.parseOnly arrayFieldDecoder bs of
+                Parser.ParseOk v -> Right v
+                Parser.ParseFail err -> Left err,
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell (Vector (Vector a)) type. Use a `Maybe (Vector (Vector a))`",
         allowedPgTypes = allowOnlyArrayTypes
       }
@@ -1533,7 +1533,7 @@ rawBytesFieldDecoder :: FieldDecoder ByteString
 rawBytesFieldDecoder =
   FieldDecoder
     { fieldValueDecoder = \_oid -> \case
-        bs -> Right bs,
+        bs -> Right $ PBA.toByteString bs,
       decodesSqlNullTo = Left "Cannot decode SQL null as the `rawBytesFieldDecoder`.",
       allowedPgTypes = const True
     }
@@ -1547,12 +1547,12 @@ toPgVectorField encCtx =
    in \vec ->
         let ndim = Builder.int32BE 1
             -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
-            hasNull = Builder.byteString $ BinSer.encodeInt32BE 0
-            -- hasNull = Builder.byteString $ BinSer.encodeInt32BE (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
-            elemOidBs = Builder.byteString $ BinSer.encodeInt32BE elemOid
-            lb1 = Builder.byteString $ BinSer.encodeInt32BE 1
+            hasNull = Builder.byteString $ PBA.encodeInt32BE 0
+            -- hasNull = Builder.byteString $ PBA.encodeInt32BE (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
+            elemOidBs = Builder.byteString $ PBA.encodeInt32BE elemOid
+            lb1 = Builder.byteString $ PBA.encodeInt32BE 1
             (Sum len, encodedElements) = foldMap (\el -> (Sum 1, encodeElement el)) vec
-            dim1 = Builder.byteString $ BinSer.encodeInt32BE len
+            dim1 = Builder.byteString $ PBA.encodeInt32BE len
             fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
          in NotNull (Builder.toStrictByteString fullBs)
 
@@ -1563,10 +1563,9 @@ arrayField !replicateFunction !elementParser =
   FieldDecoder
     { fieldValueDecoder = \colInfo ->
         let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
-         in \case
-              bs -> case Parser.parseOnly arrayFieldDecoder bs of
-                Parser.ParseOk v -> Right v
-                Parser.ParseFail err -> Left err,
+         in \bs -> case Parser.parseOnly arrayFieldDecoder bs of
+              Parser.ParseOk v -> Right v
+              Parser.ParseFail err -> Left err,
       decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`",
       allowedPgTypes = allowOnlyArrayTypes
     }
