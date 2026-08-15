@@ -86,8 +86,8 @@ data BenchRow = BenchRow
     brMaybeDay :: !(Maybe Day),
     brNumeric :: !Scientific,
     brFloat :: !Float,
-    brBool1 :: Bool,
-    brBool2 :: Bool
+    brBool1 :: !Bool,
+    brBool2 :: !Bool
   }
   deriving stock (Generic, Show, Eq)
   deriving anyclass (NFData, Hpgsql.FromPgRow, PGSimple.FromRow)
