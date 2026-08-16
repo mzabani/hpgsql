@@ -76,7 +76,7 @@ tests:
         if [ -n "$NIX" ]; then
             nix-build --no-out-link -A "testsPg${pg}" --argstr hspecArgs "$TARGS"
         else
-            cabal build hpgsql-tests hpgsql-simple-compat-tests
+            cabal build hpgsql-tests
             nix-shell -A "shellPg${pg}" ./default.nix --run "./scripts/run-tests-db-internal.sh $TARGS"
         fi
     done
