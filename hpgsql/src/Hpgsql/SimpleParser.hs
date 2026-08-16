@@ -31,6 +31,7 @@ module Hpgsql.SimpleParser
     takeFloatBE,
     takeDoubleBE,
     takeFloatBEWithFieldLength,
+    peekInt32BE,
   )
 where
 
@@ -39,7 +40,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
 import Foreign.Storable (Storable)
-import GHC.Float (castWord32ToFloat, castWord64ToDouble, word2Float)
+import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.Encoding.BinarySerializer (ByteStringIdx (..))
 import qualified Hpgsql.Encoding.BinarySerializer as BinSer
 import Prelude hiding (take)
@@ -152,6 +153,13 @@ takeInt32BE = Parser $ \idx bs kf ks ->
     Right v -> ks v (idx + 4) bs
     Left err -> kf err
 
+{-# INLINE peekInt32BE #-}
+peekInt32BE :: Parser Int32
+peekInt32BE = Parser $ \idx bs kf ks ->
+  case BinSer.decodeInt32BE idx bs of
+    Right v -> ks v idx bs
+    Left err -> kf err
+
 {-# INLINE takeInt32BEWithFieldLength #-}
 
 -- | Parses both a field length and the field itself, for
@@ -241,9 +249,9 @@ parseManyRows = Parser $ \idx' bs' _kf ks -> let restIdx = go idx' bs' in ks res
 {-# INLINE parseManyRows #-}
 
 -- | Succeeds only when the input has been fully consumed.
-endOfInput :: Parser ()
-endOfInput = Parser $ \idx bs kf ks ->
-  if BS.length bs <= idx.idx then ks () idx bs else kf "endOfInput: input remaining"
+endOfInput :: String -> Parser ()
+endOfInput debugFail = Parser $ \idx bs kf ks ->
+  if BS.length bs <= idx.idx then ks () idx bs else kf $ "endOfInput: input remaining (" ++ debugFail ++ ")"
 {-# INLINE endOfInput #-}
 
 -- | Run a parser and additionally return the slice of input it consumed.
