@@ -260,9 +260,9 @@ parseManyRows = Parser $ \idx' bs' _kf ks -> let (restIdx, nParsed) = go idx' bs
 {-# INLINE parseManyRows #-}
 
 -- | Succeeds only when the input has been fully consumed.
-endOfInput :: String -> Parser ()
-endOfInput debugFail = Parser $ \idx bs kf ks ->
-  if BS.length bs <= idx.idx then ks () idx bs else kf $ "endOfInput: input remaining (" ++ debugFail ++ ")"
+endOfInput :: Parser ()
+endOfInput = Parser $ \idx bs kf ks ->
+  if BS.length bs <= idx.idx then ks () idx bs else kf "endOfInput: input remaining"
 {-# INLINE endOfInput #-}
 
 -- | Run a parser and additionally return the slice of input it consumed.
