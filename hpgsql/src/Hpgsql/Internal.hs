@@ -1418,7 +1418,7 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           S.concat $
             S.mapM
               ( \(DataRows rowColumnData) ->
-                  case Parser.parseOnly (Parser.parseMany rowparser <* Parser.endOfInput "DataRows") rowColumnData of
+                  case Parser.parseOnly (Parser.parseMany rowparser <* Parser.endOfInput) rowColumnData of
                     Parser.ParseOk rows -> pure rows
                     Parser.ParseFail err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " <> Text.pack (show err)
               )

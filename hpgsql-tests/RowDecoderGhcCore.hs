@@ -27,7 +27,7 @@ import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), genericFromPgRow, sing
 data BestCaseScenarioRecord = BestCaseScenarioRecord
   { bcsId :: !Int,
     bcsDate :: !Day,
-    bcsText :: !Int
+    bcsText :: !(Maybe Int)
   }
 
 instance FromPgRow BestCaseScenarioRecord where
