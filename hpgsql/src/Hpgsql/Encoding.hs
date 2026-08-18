@@ -27,6 +27,7 @@ module Hpgsql.Encoding
     FromPgRow (..),
     RowDecoder (..), -- TODO: Can we export ctor?
     singleField,
+    singleFieldRowDecoder,
     nullableField,
     genericFromPgRow,
 
@@ -78,6 +79,7 @@ import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
 import Data.Coerce (coerce)
 import Data.Fixed (divMod')
+import Data.Functor ((<&>))
 import Data.Functor.Contravariant (Contravariant (..))
 import Data.Int (Int16, Int32, Int64)
 import qualified Data.List as List
@@ -159,7 +161,7 @@ instance Applicative RowDecoder where
 instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowDecoder where
   (>>=) = error "inaccessible bind in Monad RowDecoder instance"
 
-{-# INLINE singleField #-} -- 1.2% wall time perf. gain with this
+{-# INLINE singleField #-}
 singleField :: FieldDecoder a -> RowDecoder a
 singleField fdec =
   RowDecoder
@@ -208,24 +210,63 @@ inlinableRowDecoder tyoids p =
     }
 
 class FromPgField a where
-  -- | A decoder that takes
+  {-# MINIMAL fieldDecoder #-}
   fieldDecoder :: FieldDecoder a
 
-  -- | This should be semantically equivalent to `singleField fieldDecoder`, and
-  -- it is automatically derived to be exactly that.
-  -- So as a user, you don't need to override this.
-  -- This field exists for a performance optimization within hpgsql, or for users
-  -- that really know what they're doing.
-  singleFieldRowDecoder :: RowDecoder a
-  singleFieldRowDecoder = singleField fieldDecoder
-
-  -- | This is just like `singleFieldDecoder`, but it inlines into your
-  -- `FromPgRow` instances aggressively. This will increase code size and
+  -- | This should be semantically equivalent to `singleField fieldDecoder`,
+  -- but it can be overridden (and is for base types) to a much faster implementation.
+  -- Using this when deriving your `FromPgRow` instances will increase code size and
   -- possibly compilation times somewhat, but in some cases it can make row decoders
   -- compile down to a ByteString-peeking implementation with much fewer
-  -- allocations that can be ~10% faster than the other.
+  -- allocations and thus better performance.
+  -- Any implementation of this _must_ return a `Nothing` for a SQL NULL value,
+  -- regardless of what `FieldDecoder` would do with a SQL NULL.
+  -- TODO: Move this to inside the FieldDecoder type?
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder :: RowDecoder (Maybe a)
+  fastFieldDecoder =
+    let fdec = fieldDecoder
+     in RowDecoder
+          { fullRowDecoder = \case
+              [singleColInfo] -> do
+                len <- Parser.takeInt32BE
+                if len == (-1)
+                  then pure Nothing
+                  else do
+                    bs <- Parser.take (fromIntegral len)
+                    case fdec.fieldValueDecoder singleColInfo bs of
+                      Left err -> fail err
+                      Right v -> pure v
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, fdec.allowedPgTypes singleColInfo)]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
+
+  {-# INLINE inlinedSingleFieldRowDecoder #-}
   inlinedSingleFieldRowDecoder :: RowDecoder a
-  inlinedSingleFieldRowDecoder = singleFieldRowDecoder
+  inlinedSingleFieldRowDecoder =
+    let fastrdec = fastFieldDecoder @a
+     in do
+          RowDecoder
+            { fullRowDecoder = \finfos -> do
+                mv <- fastrdec.fullRowDecoder finfos
+                case mv of
+                  -- This `case` is why we require `fastFieldDecoder` to decode
+                  -- SQL NULL into `Nothing`: we do check decodesSqlNullTo.
+                  Nothing -> case fieldDecoder.decodesSqlNullTo of
+                    Left err -> fail err -- Type doesn't accept NULLs
+                    Right v -> pure v
+                  Just v -> pure v,
+              rowColumnsTypeCheck = fastrdec.rowColumnsTypeCheck,
+              numExpectedColumns = fastrdec.numExpectedColumns
+            }
+
+-- TODO: better name for `singleFieldRowDecoder`?
+{-# NOINLINE singleFieldRowDecoder #-}
+singleFieldRowDecoder :: forall a. (FromPgField a) => RowDecoder a
+singleFieldRowDecoder = inlinedSingleFieldRowDecoder
 
 class FromPgRow a where
   rowDecoder :: RowDecoder a
@@ -805,6 +846,7 @@ instance FromPgField () where
         allowedPgTypes = (== voidOid) . fieldTypeOid
       }
 
+-- TODO: Inline intRowDecoder into FromPgField? And all others too?
 {-# INLINE intRowDecoder #-}
 intRowDecoder :: RowDecoder (Maybe Int)
 intRowDecoder =
@@ -828,8 +870,8 @@ instance FromPgField Int where
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`",
         allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
       }
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = intRowDecoder
   {-# INLINE inlinedSingleFieldRowDecoder #-}
   inlinedSingleFieldRowDecoder = nonNullableRowDec "Int" intRowDecoder
 
@@ -846,10 +888,8 @@ instance FromPgField Int where
 --   --             Nothing -> Right Nothing,
 --   --     allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
 --   --   }
---   {-# NOINLINE singleFieldRowDecoder #-}
---   singleFieldRowDecoder = inlinedSingleFieldRowDecoder
---   {-# INLINE inlinedSingleFieldRowDecoder #-}
---   inlinedSingleFieldRowDecoder = intRowDecoder
+--   {-# INLINE fastFieldDecoder #-}
+--   fastFieldDecoder = intRowDecoder
 
 instance FromPgField Int16 where
   fieldDecoder =
@@ -862,14 +902,14 @@ instance FromPgField Int16 where
       }
 
 {-# INLINE int32RowDecoder #-}
-int32RowDecoder :: RowDecoder Int32
+int32RowDecoder :: RowDecoder (Maybe Int32)
 int32RowDecoder =
   inlinableRowDecoder [int2Oid, int4Oid] $ do
     fieldLen <- Parser.takeInt32BE
     case fieldLen of
-      4 -> Parser.takeInt32BE
-      (-1) -> fail "Cannot decode SQL null as the Haskell Int32 type. Use a `Maybe Int32`"
-      2 -> fromIntegral <$> Parser.takeInt16BE
+      4 -> Just <$> Parser.takeInt32BE
+      (-1) -> pure Nothing
+      2 -> Just . fromIntegral <$> Parser.takeInt16BE
       _ -> fail "Trying to decode PG int4 but it's not 2 or 4 bytes long"
 
 instance FromPgField Int32 where
@@ -879,21 +919,19 @@ instance FromPgField Int32 where
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Int32 type. Use a `Maybe Int32`",
         allowedPgTypes = (`elem` [int2Oid, int4Oid]) . fieldTypeOid
       }
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = int32RowDecoder
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder = int32RowDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = int32RowDecoder
 
 {-# INLINE int64RowDecoder #-}
-int64RowDecoder :: RowDecoder Int64
+int64RowDecoder :: RowDecoder (Maybe Int64)
 int64RowDecoder =
   inlinableRowDecoder [int2Oid, int4Oid, int8Oid] $ do
     fieldLen <- Parser.takeInt32BE
     case fieldLen of
-      8 -> Parser.takeInt64BE
-      4 -> fromIntegral <$> Parser.takeInt32BE
-      (-1) -> fail "Cannot decode SQL null as the Haskell Int64 type. Use a `Maybe Int64`"
-      2 -> fromIntegral <$> Parser.takeInt16BE
+      8 -> Just <$> Parser.takeInt64BE
+      4 -> Just . fromIntegral <$> Parser.takeInt32BE
+      (-1) -> pure Nothing
+      2 -> Just . fromIntegral <$> Parser.takeInt16BE
       _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
 
 instance FromPgField Int64 where
@@ -903,10 +941,8 @@ instance FromPgField Int64 where
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Int64 type. Use a `Maybe Int64`",
         allowedPgTypes = (`elem` [int2Oid, int4Oid, int8Oid]) . fieldTypeOid
       }
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = int64RowDecoder
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder = int64RowDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = int64RowDecoder
 
 instance FromPgField Integer where
   fieldDecoder =
@@ -941,19 +977,15 @@ floatRowDecoder =
 
 instance FromPgField Float where
   fieldDecoder = parsePgType "Float" [float4Oid] $ Right . binaryFloat4Decoder
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder = nonNullableRowDec "Float" floatRowDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = floatRowDecoder
 
 -- instance {-# OVERLAPPING #-} FromPgField (Maybe Float) where
 --   -- This overlapping instance isn't pretty, but it reduces memory
 --   -- usage and improves performance a bit
 --   fieldDecoder = error "TODO Maybe Float"
---   {-# NOINLINE singleFieldRowDecoder #-}
---   singleFieldRowDecoder = inlinedSingleFieldRowDecoder
---   {-# INLINE inlinedSingleFieldRowDecoder #-}
---   inlinedSingleFieldRowDecoder = floatRowDecoder
+--   {-# INLINE fastFieldDecoder #-}
+--   fastFieldDecoder = floatRowDecoder
 
 {-# INLINE doubleRowDecoder #-}
 doubleRowDecoder :: RowDecoder (Maybe Double)
@@ -977,8 +1009,8 @@ instance FromPgField Double where
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`",
         allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
       }
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = doubleRowDecoder
   {-# INLINE inlinedSingleFieldRowDecoder #-}
   inlinedSingleFieldRowDecoder = nonNullableRowDec "Double" doubleRowDecoder
 
@@ -986,10 +1018,8 @@ instance FromPgField Double where
 --   -- This overlapping instance isn't pretty, but it reduces memory
 --   -- usage and improves performance a bit
 --   fieldDecoder = error "TODO Maybe Double"
---   {-# NOINLINE singleFieldRowDecoder #-}
---   singleFieldRowDecoder = inlinedSingleFieldRowDecoder
---   {-# INLINE inlinedSingleFieldRowDecoder #-}
---   inlinedSingleFieldRowDecoder = doubleRowDecoder
+--   {-# INLINE fastFieldDecoder #-}
+--   fastFieldDecoder = doubleRowDecoder
 
 -- | Allows you to specify a type (and other checks, possibly) for a `FieldDecoder`.
 -- This can be useful to ensure you're not accidentally decoding a different type.
@@ -1033,12 +1063,12 @@ scientificDecoder mustBeInteger = do
       parseAndMult (ndigitsLeft - 1) (currexpon - 4) (val + scientific digit currexpon)
 
 {-# INLINE numericRowParser #-}
-numericRowParser :: Parser.Parser Scientific
+numericRowParser :: Parser.Parser (Maybe Scientific)
 numericRowParser = do
   fieldLen <- Parser.takeInt32BE
   case fieldLen of
-    (-1) -> fail "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`"
-    _ -> scientificDecoder False
+    (-1) -> pure Nothing
+    _ -> Just <$> scientificDecoder False
 
 instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
@@ -1059,14 +1089,14 @@ instance FromPgField Scientific where
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`",
         allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . fieldTypeOid
       }
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder =
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder =
     RowDecoder
       { fullRowDecoder = \case
           [singleColInfo] ->
             if singleColInfo.fieldTypeOid /= numericOid
               then
-                flip scientific 0 . fromIntegral <$> (inlinedSingleFieldRowDecoder @Int64).fullRowDecoder [singleColInfo]
+                fmap (flip scientific 0 . fromIntegral) <$> (fastFieldDecoder @Int64).fullRowDecoder [singleColInfo]
               else numericRowParser
           _ -> error "singleField expected a single column OID but got 0 or >1",
         rowColumnsTypeCheck = \case
@@ -1088,19 +1118,15 @@ boolRowDecoder =
 
 instance FromPgField Bool where
   fieldDecoder = parsePgType "Bool" [boolOid] $ \bs -> Right $ bs == binaryTrue
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder = nonNullableRowDec "Bool" boolRowDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = boolRowDecoder
 
 -- instance {-# OVERLAPPING #-} FromPgField (Maybe Bool) where
 --   -- This overlapping instance isn't pretty, but it reduces memory
 --   -- usage and improves performance a bit
 --   fieldDecoder = error "TODO Maybe Bool"
---   {-# NOINLINE singleFieldRowDecoder #-}
---   singleFieldRowDecoder = inlinedSingleFieldRowDecoder
---   {-# INLINE inlinedSingleFieldRowDecoder #-}
---   inlinedSingleFieldRowDecoder = boolRowDecoder
+--   {-# INLINE fastFieldDecoder #-}
+--   fastFieldDecoder = boolRowDecoder
 
 instance FromPgField Char where
   fieldDecoder =
@@ -1140,19 +1166,15 @@ textDecoder =
 instance FromPgField Text where
   -- TODO: Use some faster unsafeDecodeUtf8 function?
   fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ decodeUtf8 bs
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder = nonNullableRowDec "Text" textDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = textDecoder
 
 -- instance {-# OVERLAPPING #-} FromPgField (Maybe Text) where
 --   -- This overlapping instance isn't pretty, but it reduces memory
 --   -- usage and improves performance a bit
 --   fieldDecoder = error "TODO Maybe Text"
---   {-# NOINLINE singleFieldRowDecoder #-}
---   singleFieldRowDecoder = inlinedSingleFieldRowDecoder
---   {-# INLINE inlinedSingleFieldRowDecoder #-}
---   inlinedSingleFieldRowDecoder = textDecoder
+--   {-# INLINE fastFieldDecoder #-}
+--   fastFieldDecoder = textDecoder
 
 instance FromPgField LT.Text where
   -- TODO: Use some faster unsafeDecodeUtf8 function?
@@ -1198,19 +1220,15 @@ instance FromPgField UTCTime where
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
-  {-# NOINLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder = nonNullableRowDec "UTCTime" utcTimeRowDecoder
+  {-# NOINLINE fastFieldDecoder #-}
+  fastFieldDecoder = utcTimeRowDecoder
 
 -- instance {-# OVERLAPPING #-} FromPgField (Maybe UTCTime) where
 --   -- This overlapping instance isn't pretty, but it reduces memory
 --   -- usage and improves performance a bit
 --   fieldDecoder = error "TODO Maybe UTCTime"
---   {-# NOINLINE singleFieldRowDecoder #-}
---   singleFieldRowDecoder = inlinedSingleFieldRowDecoder
---   {-# INLINE inlinedSingleFieldRowDecoder #-}
---   inlinedSingleFieldRowDecoder = utcTimeRowDecoder
+--   {-# INLINE fastFieldDecoder #-}
+--   fastFieldDecoder = utcTimeRowDecoder
 
 instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] $ \case
@@ -1281,8 +1299,8 @@ instance FromPgField Day where
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
       jd <- BinSer.decodeInt32BE 0 bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder = dayRowDecoder
   {-# INLINE inlinedSingleFieldRowDecoder #-}
   inlinedSingleFieldRowDecoder = nonNullableRowDec "Day" dayRowDecoder
 
@@ -1290,10 +1308,8 @@ instance FromPgField Day where
 --   -- This overlapping instance isn't pretty, but it reduces memory
 --   -- usage and improves performance a bit
 --   fieldDecoder = error "TODO Maybe Day"
---   {-# NOINLINE singleFieldRowDecoder #-}
---   singleFieldRowDecoder = inlinedSingleFieldRowDecoder
---   {-# INLINE inlinedSingleFieldRowDecoder #-}
---   inlinedSingleFieldRowDecoder = dayRowDecoder
+--   {-# INLINE fastFieldDecoder #-}
+--   fastFieldDecoder = dayRowDecoder
 
 instance FromPgField (Unbounded Day) where
   fieldDecoder = parsePgType "Unbounded Day" [dateOid] $ \case
@@ -1366,37 +1382,41 @@ nonNullableRowDec haskellTypeName rdec =
 instance (FromPgField a) => FromPgField (Maybe a) where
   fieldDecoder = nullableField fieldDecoder
 
-  {-# NOINLINE singleFieldRowDecoder #-}
-  singleFieldRowDecoder = inlinedSingleFieldRowDecoder
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder =
-    RowDecoder
-      { fullRowDecoder = \finfos ->
-          let frd = inlinedSingleFieldRowDecoder.fullRowDecoder finfos
-           in do
-                -- TODO: We're decoding the field length twice with
-                -- the peek call when the value isn't NULL.
-                -- Maybe we should make `FromPgField`'s new methods
-                -- be two `Parser` objects: one for both length and field
-                -- and another only for the field (but how would that work
-                -- without the length..? It wouldn't.)
-                -- Maybe we do the `Parser (Maybe a)` for `a` types, then.
-                -- We can build a `Parser a` from that with `decodesSqlNullTo`
-                -- and with inlining there's nothing to lose?
-                fieldLen <- Parser.peekInt32BE
-                if fieldLen == (-1)
-                  then case fieldDecoder.decodesSqlNullTo of
-                    Left err -> fail err
-                    Right v -> Parser.skip 4 >> pure v
-                  else do
-                    Just <$> frd,
-        rowColumnsTypeCheck =
-          let fdec = fieldDecoder @a
-           in \case
-                [singleColInfo] -> [(singleColInfo, fdec.allowedPgTypes singleColInfo)]
-                _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-        numExpectedColumns = 1
-      }
+  {-# INLINE fastFieldDecoder #-}
+  fastFieldDecoder =
+    fastFieldDecoder <&> \case
+      Nothing -> Nothing
+      Just v -> Just (Just v)
+
+-- let ffdec = fastFieldDecoder @a
+-- in
+-- RowDecoder
+--   { fullRowDecoder = \finfos ->
+--       let frd = fastFieldDecoder.fullRowDecoder finfos
+--        in do
+--             -- TODO: We're decoding the field length twice with
+--             -- the peek call when the value isn't NULL.
+--             -- Maybe we should make `FromPgField`'s new methods
+--             -- be two `Parser` objects: one for both length and field
+--             -- and another only for the field (but how would that work
+--             -- without the length..? It wouldn't.)
+--             -- Maybe we do the `Parser (Maybe a)` for `a` types, then.
+--             -- We can build a `Parser a` from that with `decodesSqlNullTo`
+--             -- and with inlining there's nothing to lose?
+--             fieldLen <- Parser.peekInt32BE
+--             if fieldLen == (-1)
+--               then case fieldDecoder.decodesSqlNullTo of
+--                 Left err -> fail err
+--                 Right v -> Parser.skip 4 >> pure v
+--               else do
+--                 Just <$> frd,
+--     rowColumnsTypeCheck =
+--       let fdec = fieldDecoder @a
+--        in \case
+--             [singleColInfo] -> [(singleColInfo, fdec.allowedPgTypes singleColInfo)]
+--             _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+--     numExpectedColumns = 1
+--   }
 
 allowOnlyArrayTypes :: FieldInfo -> Bool
 allowOnlyArrayTypes fieldInfo =
