@@ -47,7 +47,7 @@ import Hpgsql.Connection (renderLibpqConnectionString)
 import qualified Hpgsql.Connection
 import qualified Hpgsql.Connection as Hpgsql
 import qualified Hpgsql.Copy
-import Hpgsql.Encoding (FromPgField (inlinedSingleFieldRowDecoder))
+import Hpgsql.Encoding (inlinedSingleFieldRowDecoder)
 import qualified Hpgsql.Encoding as Hpgsql
 import qualified Hpgsql.Query as Hpgsql
 import qualified Hpgsql.Types as Hpgsql
