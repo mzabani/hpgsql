@@ -267,17 +267,18 @@ class FromPgField a where
   inlinedSingleFieldRowDecoder = case inlinedConstFieldDecoder @a of
     Nothing -> singleField fieldDecoder
     Just p ->
-      let fdec = fieldDecoder @a
+      let !valueForNull = case (fieldDecoder @a).decodesSqlNullTo of
+            Left err -> fail err
+            Right v -> pure v
+          !typeCheck = (fieldDecoder @a).allowedPgTypes
        in RowDecoder
             { fullRowDecoder = const $ do
                 mv <- p
                 case mv of
-                  Nothing -> case fdec.decodesSqlNullTo of
-                    Left err -> fail err
-                    Right v -> pure v
+                  Nothing -> valueForNull
                   Just v -> pure v,
               rowColumnsTypeCheck = \case
-                [singleColInfo] -> [(singleColInfo, fdec.allowedPgTypes singleColInfo)]
+                [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
                 _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
               numExpectedColumns = 1
             }
@@ -858,6 +859,7 @@ parsePgType !typeName !requiredTypeOids !fieldValueDecoder =
     }
 
 instance FromPgField () where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \_oid -> \case
@@ -914,6 +916,7 @@ instance FromPgField Int where
 --   fieldAndValueDecoder = intRowDecoder
 
 instance FromPgField Int16 where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder =
@@ -935,6 +938,7 @@ int32RowDecoder =
       _ -> fail "Trying to decode PG int4 but it's not 2 or 4 bytes long"
 
 instance FromPgField Int32 where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} -> binaryIntDecoder oid,
@@ -957,6 +961,7 @@ int64RowDecoder =
       _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
 
 instance FromPgField Int64 where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} -> binaryIntDecoder oid,
@@ -967,6 +972,7 @@ instance FromPgField Int64 where
   fieldAndValueDecoder = int64RowDecoder
 
 instance FromPgField Integer where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
@@ -983,6 +989,7 @@ instance FromPgField Integer where
       }
 
 instance FromPgField Oid where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \_ -> \case
@@ -997,7 +1004,9 @@ instance FromPgField Oid where
 -- floatRowDecoder = Parser.takeFloatBEWithFieldLength
 
 instance FromPgField Float where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Float" [float4Oid] $ Right . binaryFloat4Decoder
+
   -- {-# INLINE fieldAndValueDecoder #-}
   -- fieldAndValueDecoder = floatRowDecoder
   {-# INLINE inlinedConstFieldDecoder #-}
@@ -1020,6 +1029,7 @@ doubleRowDecoder = do
     _ -> pure Nothing
 
 instance FromPgField Double where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
@@ -1094,6 +1104,7 @@ numericRowParser = do
 
 instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \FieldInfo {fieldTypeOid} ->
@@ -1128,6 +1139,7 @@ instance FromPgField Scientific where
       }
 
 instance FromPgField (Ratio Integer) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = toRational <$> fieldDecoder @Scientific
 
 binaryTrue :: ByteString
@@ -1138,7 +1150,9 @@ boolRowDecoder :: Parser.Parser (Maybe Bool)
 boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes BinSer.TypeSize1
 
 instance FromPgField Bool where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Bool" [boolOid] $ \bs -> Right $ bs == binaryTrue
+
   -- {-# INLINE fieldAndValueDecoder #-}
   -- fieldAndValueDecoder = boolRowDecoder
   {-# INLINE inlinedConstFieldDecoder #-}
@@ -1152,6 +1166,7 @@ instance FromPgField Bool where
 --   fieldAndValueDecoder = boolRowDecoder
 
 instance FromPgField Char where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     let textParser = fieldValueDecoder (fieldDecoder @Text)
      in FieldDecoder
@@ -1171,23 +1186,26 @@ instance FromPgField Char where
           }
 
 instance FromPgField ByteString where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "byteString" [byteaOid] Right
 
 instance FromPgField LBS.ByteString where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "ByteString" [byteaOid] $ Right . LBS.fromStrict
 
 {-# INLINE textDecoder #-}
 textDecoder :: Parser.Parser (Maybe Text)
 textDecoder = do
-    len <- Parser.takeInt32BE
-    if len >= 0
-      -- TODO: Use some faster unsafeDecodeUtf8 function?
-      then Just . decodeUtf8 <$> Parser.take (fromIntegral len)
-      else pure Nothing
+  len <- Parser.takeInt32BE
+  if len >= 0
+    -- TODO: Use some faster unsafeDecodeUtf8 function?
+    then Just . decodeUtf8 <$> Parser.take (fromIntegral len)
+    else pure Nothing
 
 instance FromPgField Text where
-  -- TODO: Use some faster unsafeDecodeUtf8 function?
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ decodeUtf8 bs
+
   -- {-# INLINE fieldAndValueDecoder #-}
   -- fieldAndValueDecoder = textDecoder
   {-# INLINE inlinedConstFieldDecoder #-}
@@ -1201,41 +1219,45 @@ instance FromPgField Text where
 --   fieldAndValueDecoder = textDecoder
 
 instance FromPgField LT.Text where
-  -- TODO: Use some faster unsafeDecodeUtf8 function?
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ LT.fromStrict $ decodeUtf8 bs
 
 instance FromPgField String where
-  -- TODO: Use some faster unsafeDecodeUtf8 function?
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \bs -> Right $ Text.unpack $ decodeUtf8 bs
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
 instance FromPgField (CI Text) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
 instance FromPgField (CI LT.Text) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
 instance FromPgField (CI String) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
 {-# INLINE utcTimeRowDecoder #-}
 utcTimeRowDecoder :: Parser.Parser (Maybe UTCTime)
 utcTimeRowDecoder = do
-    len <- Parser.takeInt32BE
-    case len of
-      8 -> do
-        totalusecs <- Parser.takeInt64BE
-        let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
-            parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-        pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-      _ -> pure Nothing
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> do
+      totalusecs <- Parser.takeInt64BE
+      let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+          parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+      pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    _ -> pure Nothing
 
 instance FromPgField UTCTime where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "UTCTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
@@ -1243,6 +1265,7 @@ instance FromPgField UTCTime where
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+
   -- {-# NOINLINE fieldAndValueDecoder #-}
   -- fieldAndValueDecoder = utcTimeRowDecoder
   {-# INLINE inlinedConstFieldDecoder #-}
@@ -1256,6 +1279,7 @@ instance FromPgField UTCTime where
 --   fieldAndValueDecoder = utcTimeRowDecoder
 
 instance FromPgField (Unbounded UTCTime) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
@@ -1272,6 +1296,7 @@ instance FromPgField (Unbounded UTCTime) where
                  in Finite $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 instance FromPgField ZonedTime where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "ZonedTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
@@ -1281,6 +1306,7 @@ instance FromPgField ZonedTime where
       Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 instance FromPgField (Unbounded ZonedTime) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Unbounded ZonedTime" [timestamptzOid] $ \case
     bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
@@ -1297,6 +1323,7 @@ instance FromPgField (Unbounded ZonedTime) where
                  in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 instance FromPgField LocalTime where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "LocalTime" [timestampOid] $ \case
     bs -> do
       totalusecs <- BinSer.decodeInt64BE 0 bs
@@ -1305,6 +1332,7 @@ instance FromPgField LocalTime where
       Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 instance FromPgField TimeOfDay where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "TimeOfDay" [timeOid] $ \case
     bs -> do
       usecs <- BinSer.decodeInt64BE 0 bs
@@ -1317,6 +1345,7 @@ dayRowDecoder =
    in fmap int32ToDay <$> Parser.takeInt32BEWithFieldLength
 
 instance FromPgField Day where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Day" [dateOid] $ \case
     bs -> do
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
@@ -1338,6 +1367,7 @@ instance FromPgField Day where
 --   fieldAndValueDecoder = dayRowDecoder
 
 instance FromPgField (Unbounded Day) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "Unbounded Day" [dateOid] $ \case
     bs -> do
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
@@ -1354,6 +1384,7 @@ instance FromPgField (Unbounded Day) where
                 Finite $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
 
 instance FromPgField CalendarDiffTime where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ \bs -> do
     nMicrosecs <- BinSer.decodeInt64BE 0 bs
     nDays <- BinSer.decodeInt32BE 8 bs
@@ -1361,12 +1392,14 @@ instance FromPgField CalendarDiffTime where
     Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
 
 instance FromPgField UUID where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = parsePgType "UUID" [uuidOid] $ \case
     bs -> case UUID.fromByteString (LBS.fromStrict bs) of
       Just uuid -> Right uuid
       Nothing -> Left "Bug in Hpgsql: UUID field could not be decoded"
 
 instance FromPgField Aeson.Value where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder =
@@ -1406,6 +1439,7 @@ nonNullableRowDec haskellTypeName rdec =
         }
 
 instance (FromPgField a) => FromPgField (Maybe a) where
+  {-# INLINE fieldDecoder #-}
   fieldDecoder = nullableField fieldDecoder
 
   {-# INLINE inlinedConstFieldDecoder #-}
