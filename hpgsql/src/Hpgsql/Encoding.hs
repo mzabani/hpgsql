@@ -162,6 +162,7 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 {-# INLINE singleField #-}
 singleField :: FieldDecoder a -> RowDecoder a
 singleField fdec =
+  -- TODO: Float out decodesSqlNullTo to here. Does it make a difference?
   RowDecoder
     { fullRowDecoder = \case
         [singleColInfo] ->
@@ -221,10 +222,16 @@ class FromPgField a where
   -- allocations and thus better performance.
   -- Any implementation of this _must_ return a `Nothing` for a SQL NULL value,
   -- regardless of what `FieldDecoder` would do with a SQL NULL.
-  -- TODO: Move this to inside the FieldDecoder type?
   {-# NOINLINE fieldAndValueDecoder #-}
   fieldAndValueDecoder :: RowDecoder (Maybe a)
   fieldAndValueDecoder =
+    -- TODO: Float out allowedPgTypes? Does it matter at all?
+    -- TODO: This method is.. only useful for the `Scientific` type,
+    -- which can provide a faster row decoder but still needs to know
+    -- the type's OID. Maybe it's useful for our Aeson types too?
+    -- In any case, this class has many methods, and their names should
+    -- better reflect when they're useful and what they do, and `fieldAndValueDecoder`
+    -- might not be doing the best job in the world at that.
     RowDecoder
       { fullRowDecoder =
           case inlinedConstFieldDecoder of
@@ -261,7 +268,8 @@ class FromPgField a where
 
   -- | Semantically equivalent to `singleField fieldDecoder`, but for
   -- some types it can provide a much faster `RowDecoder`. Beware that
-  -- this will produce more code in row decoders.
+  -- using will produce more code in your row decoders, which can affect
+  -- compilation times and binary size.
   {-# INLINE inlinedSingleFieldRowDecoder #-}
   inlinedSingleFieldRowDecoder :: RowDecoder a
   inlinedSingleFieldRowDecoder = case inlinedConstFieldDecoder @a of
@@ -1328,14 +1336,12 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \case
+                  bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                    Just d -> Right d
+                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
