@@ -1,5 +1,2 @@
 - Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
-- Make every FromPgField instance have a dedicated singleFieldRowDecoder override, change our benchmarks to exercise other types we're not, like `numeric` and `Float`
-- Investigate why overlapping (Maybe a) instance is better for record decoding but worse for Tuple decoding
-  - Revert things: derive the overlapping (Maybe a) instance, derive the `FromPgField a` using that under the hood.
-- Try to achieve a 100% inlined row decoder for a small record type
+- Some types (the Aeson ones, for example) still don't derive specialized row decoders
