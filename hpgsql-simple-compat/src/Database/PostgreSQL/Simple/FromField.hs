@@ -177,9 +177,13 @@ class FromField a where
     let dec = Hpgsql.fieldDecoder
      in \f ->
           if Hpgsql.allowedPgTypes dec f
-            then \mbs -> Conversion $ \_encCtx -> case Hpgsql.fieldValueDecoder dec f mbs of
-              Right v -> Ok v
-              Left err -> Errors [toException $ userError err]
+            then \mbs -> Conversion $ \_encCtx -> case mbs of
+              Nothing -> case dec.decodesSqlNullTo of
+                Left err -> Errors [toException $ userError err]
+                Right v -> Ok v
+              Just bs -> case Hpgsql.fieldValueDecoder dec f bs of
+                Right v -> Ok v
+                Left err -> Errors [toException $ userError err]
             else \_ -> Conversion $ \_encCtx -> Errors [toException $ userError "Invalid type OID for FromField instance"]
 
 instance FromField ()
