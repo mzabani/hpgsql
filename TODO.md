@@ -1,2 +1,2 @@
 - Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
-- Some types (the Aeson ones, for example) still don't derive specialized row decoders
+- Some types (the Aeson ones, for example, but more) still don't derive specialized row decoders
