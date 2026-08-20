@@ -64,7 +64,7 @@ instance forall a b. (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
 instance (FromPgRow a, FromPgRow b) => FromPgRow (a :. b) where
   rowDecoder = (:.) <$> rowDecoder <*> rowDecoder
 
--- | A JSON type that does not incur the costs of deserializing
+-- | A JSON type that does not incur the costs of JSON/aeson deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates
 -- valid JSON. Useful for extra performance if its opaqueness is not a problem.
 -- Although it does have a `toJSON` method, using it will incur a
@@ -89,11 +89,9 @@ instance FromPgField PgJson where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \bs -> Right $ PgJson $ fixJsonb bs,
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \bs -> Right $ PgJson $ fixJsonb bs,
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
@@ -111,13 +109,11 @@ instance (FromJSON a) => FromPgField (Aeson a) where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                Just v -> Right $ Aeson v
-                Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?",
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                  Just v -> Right $ Aeson v
+                  Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?",
         decodesSqlNullTo = Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
