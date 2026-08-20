@@ -21,7 +21,7 @@
 -- of fields), check "Hpgsql.Encoding.RowDecoderMonadic".
 module Hpgsql.Encoding
   ( -- * Decoding
-    FromPgField (fieldDecoder, inlinedSingleFieldRowDecoder), -- Don't export the other internal perf-oriented methods yet
+    FromPgField (..), -- We export the other internal perf-oriented methods, which isn't great because we may want to change them
     FieldDecoder (..), -- TODO: Can we export ctor?
     FieldInfo (..),
     FromPgRow (..),
@@ -207,8 +207,9 @@ class FromPgField a where
   inlinedConstFieldDecoder :: Maybe (Parser.Parser (Maybe a))
   inlinedConstFieldDecoder = Nothing
 
-  -- | For types that can't implement `inlinedConstFieldDecoder`, this is the next
-  -- best thing: also a specialized field+value decoder that can be faster than
+  -- | For types that can't implement `inlinedConstFieldDecoder` because they
+  -- need to know the value's OID for decoding, this is the next best thing:
+  -- also a specialized field+value decoder that can be faster than the
   -- one derived from `fieldDecoder`.
   --
   -- Any implementation of this _must_ return a `Nothing` for a SQL NULL value,
@@ -1058,25 +1059,13 @@ instance FromPgField Scientific where
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`",
         allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . fieldTypeOid
       }
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder =
+  {-# INLINE notConstFieldDecoder #-}
+  notConstFieldDecoder =
     let !int64RowDec = fromMaybe (error "Bug in HPgsql: Int64 does not have an inlinedConstFieldDecoder") $ inlinedConstFieldDecoder @Int64
-     in RowDecoder
-          { fullRowDecoder = \case
-              [singleColInfo] -> do
-                msci <-
-                  if singleColInfo.fieldTypeOid /= numericOid
-                    then fmap (flip scientific 0 . fromIntegral) <$> int64RowDec
-                    else numericRowParser
-                case msci of
-                  Nothing -> fail "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`"
-                  Just sci -> pure sci
-              _ -> error "singleField expected a single column OID but got 0 or >1",
-            rowColumnsTypeCheck = \case
-              [singleColInfo] -> [(singleColInfo, singleColInfo.fieldTypeOid `elem` [numericOid, int2Oid, int4Oid, int8Oid])]
-              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-            numExpectedColumns = 1
-          }
+     in \singleColInfo ->
+          if singleColInfo.fieldTypeOid /= numericOid
+            then fmap (flip scientific 0 . fromIntegral) <$> int64RowDec
+            else numericRowParser
 
 instance FromPgField (Ratio Integer) where
   {-# INLINE fieldDecoder #-}
@@ -1333,6 +1322,13 @@ nullableField FieldDecoder {..} =
 instance (FromPgField a) => FromPgField (Maybe a) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = nullableField fieldDecoder
+
+  {-# INLINE notConstFieldDecoder #-}
+  notConstFieldDecoder finfo = do
+    mv <- notConstFieldDecoder @a finfo
+    case mv of
+      Nothing -> pure Nothing
+      jv -> pure $ Just jv
 
   {-# INLINE inlinedConstFieldDecoder #-}
   -- \| For types where there is a fast way to decode fields+values

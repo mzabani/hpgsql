@@ -1,2 +1,3 @@
 - Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
 - Some types (the Aeson ones, for example, but more) still don't derive specialized row decoders
+- "Oh no! No colInfo here.. what do we do!?" in hpgsql-simple-compat. This might require a big rethinking of things..
