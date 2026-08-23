@@ -91,9 +91,11 @@ instance FromPgField PgJson where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in \bs -> Right $ PgJson $ fixJsonb (PBA.toByteString bs),
+            let
+              -- jsonb has a byte prepended to the contents and json does not
+              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in
+              \bs -> Right $ PgJson $ fixJsonb (PBA.toByteString bs),
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
@@ -121,11 +123,13 @@ instance (FromJSON a) => FromPgField (Aeson a) where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in \bs -> case Aeson.decodeStrict $ fixJsonb (PBA.toByteString bs) of
-                  Just v -> Right $ Aeson v
-                  Nothing -> Left "Failed to decode the postgres JSON value into your `Aeson a` type with aeson",
+            let
+              -- jsonb has a byte prepended to the contents and json does not
+              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in
+              \bs -> case Aeson.decodeStrict $ fixJsonb (PBA.toByteString bs) of
+                Just v -> Right $ Aeson v
+                Nothing -> Left "Failed to decode the postgres JSON value into your `Aeson a` type with aeson",
         decodesSqlNullTo = Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }

@@ -63,6 +63,7 @@ module Hpgsql.PinnedByteArray
     decodePgFieldWithAtMost4Bytes,
     CoolWordDec (..),
     WordDecoding (..),
+    unsafeToUtf8Text,
   )
 where
 
@@ -87,8 +88,10 @@ import Data.Word (Word16, Word32, Word64)
 #else
 import Data.Word (Word16, Word64, byteSwap16, byteSwap64, Word8, byteSwap32)
 #endif
+import Data.Array.Byte (ByteArray (..))
 import Data.Bits (Bits (unsafeShiftR))
 import Data.Coerce (coerce)
+import Data.Text.Internal (Text (..))
 import Foreign (Storable (..), (.&.))
 import GHC.Float (castDoubleToWord64, castFloatToWord32)
 import GHC.Word (Word16 (..), Word64 (..), Word8 (..))
@@ -135,6 +138,12 @@ fromByteString (BS fptr len) = unsafeDupablePerformIO $ createPinnedByteArray le
 toByteString :: PinnedByteArray -> ByteString
 toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ BS.create len $ \dst ->
   copyBytes dst (Ptr (byteArrayContents# src) `plusPtr` start) len
+
+{-# INLINE unsafeToUtf8Text #-}
+-- Assuming the pinned byte array contains valid UTF8 text, creates
+-- returns an instance of `Text` with the same contents (but does make a copy).
+unsafeToUtf8Text :: ByteStringIdx -> Int -> PinnedByteArray -> Either String Text
+unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray _ actualLen _) = if actualLen < desiredLen then Left "Not enough bytes to convert to Text" else let !(PinnedByteArray start arrLen arr#) = toStrictN idx.idx desiredLen (fromStrict pba) in Right $ Text (ByteArray arr#) start arrLen
 
 takePgMessageIdentAndLen :: LazyPinnedByteArray -> Maybe (Char, Int32)
 takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =

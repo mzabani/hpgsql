@@ -33,11 +33,13 @@ module Hpgsql.SimpleParser
     takeDoubleBE,
     takeFloatBEWithFieldLength,
     peekInt32BE,
+    takeUtf8Text,
   )
 where
 
 import Control.Applicative (Alternative (..))
 import Data.Int (Int16, Int32, Int64)
+import Data.Text (Text)
 import Foreign.Storable (Storable)
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.PinnedByteArray (ByteStringIdx (..), PinnedByteArray)
@@ -114,6 +116,7 @@ take :: Int -> Parser PinnedByteArray
 take n = Parser $ \idx sbs kf ks ->
   let skip' = n + idx.idx
    in if PBA.length sbs >= skip'
+        -- TODO: dropAndTake in a single call
         then case PBA.take n $ PBA.drop idx.idx sbs of
           -- Strict on the bytestring because we're pretty sure
           -- the field decoder will need to evaluate this anyway,
@@ -121,6 +124,19 @@ take n = Parser $ \idx sbs kf ks ->
           !h -> ks h (ByteStringIdx skip') sbs
         else kf "take: insufficient bytes"
 {-# INLINE take #-}
+
+-- | Consume exactly `n` bytes of input, failing if fewer than `n` bytes
+-- remain, and assumes those next `n` bytes are UTF8 text, so returns them
+-- as `Text`.
+takeUtf8Text :: Int -> Parser Text
+takeUtf8Text n = Parser $ \idx sbs kf ks ->
+  let skip' = n + idx.idx
+   in if PBA.length sbs >= skip'
+        then case PBA.unsafeToUtf8Text idx n sbs of
+          Left err -> kf err
+          Right t -> ks t (ByteStringIdx skip') sbs
+        else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (PBA.length sbs) <> " remain")
+{-# INLINE takeUtf8Text #-}
 
 -- | Consume exactly @n@ bytes of input, failing if fewer than @n@ bytes
 -- remain.

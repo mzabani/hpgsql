@@ -64,7 +64,7 @@ import Data.Ratio (Ratio)
 import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.Lazy as LT
 import qualified Data.Text.Lazy.Encoding as LT
 import Data.Time (CalendarDiffDays (..), CalendarDiffTime (..), Day, LocalTime (..), NominalDiffTime, TimeOfDay, UTCTime (..), ZonedTime, diffDays, diffTimeToPicoseconds, fromGregorian, picosecondsToDiffTime, secondsToNominalDiffTime, timeOfDayToTime, timeToTimeOfDay, utc, utcToZonedTime, zonedTimeToUTC)
@@ -1101,24 +1101,23 @@ textDecoder :: Parser.Parser (Maybe Text)
 textDecoder = do
   len <- Parser.takeInt32BE
   if len >= 0
-    -- TODO: Use some faster unsafeDecodeUtf8 function?
-    then Just . decodeUtf8 . PBA.toByteString <$> Parser.take (fromIntegral len)
+    then Just <$> Parser.takeUtf8Text (fromIntegral len)
     else pure Nothing
 
 instance FromPgField Text where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ decodeUtf8 $ PBA.toByteString bs
+  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> PBA.unsafeToUtf8Text 0 (PBA.length bs) bs
 
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just textDecoder
 
 instance FromPgField LT.Text where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> Right $ LT.fromStrict $ decodeUtf8 $ PBA.toByteString bs
+  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \bs -> LT.fromStrict <$> PBA.unsafeToUtf8Text 0 (PBA.length bs) bs
 
 instance FromPgField String where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \bs -> Right $ Text.unpack $ decodeUtf8 $ PBA.toByteString bs
+  fieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \bs -> Text.unpack <$> PBA.unsafeToUtf8Text 0 (PBA.length bs) bs
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
@@ -1280,12 +1279,14 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in \case
-                  bs -> case Aeson.decodeStrict $ fixJsonb (PBA.toByteString bs) of
-                    Just d -> Right d
-                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+            let
+              -- jsonb has a byte prepended to the contents and json does not
+              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in
+              \case
+                bs -> case Aeson.decodeStrict $ fixJsonb (PBA.toByteString bs) of
+                  Just d -> Right d
+                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
