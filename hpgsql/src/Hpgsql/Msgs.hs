@@ -34,7 +34,7 @@ class ToPgMessage a where
 newtype PgMsgParser a
   = PgMsgParser
       ( Char ->
-        -- \| Message contents after the Int32 length attribute
+        -- \| Full PG message contents, including the message identifier byte, the rest-of-message length and the message contents.
         LBS.ByteString ->
         Maybe a
       )
@@ -137,7 +137,7 @@ data Terminate = Terminate
   deriving stock (Show)
 
 instance FromPgMessage AuthenticationResponse where
-  msgParser = PgMsgParser $ \c restOfMsg -> case c of
+  msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) -> case c of
     'R' -> case first (BinSer.decodeInt32BE 0 . LBS.toStrict) $ LBS.splitAt 4 restOfMsg of
       (Right 0, _) -> Just $ AuthenticationResponse AuthOk
       (Right 2, _) -> Just $ AuthenticationResponse AuthKerberosV5
@@ -154,19 +154,19 @@ instance FromPgMessage AuthenticationResponse where
     _ -> Nothing
 
 instance FromPgMessage BackendKeyData where
-  msgParser = PgMsgParser $ \c (LBS.splitAt 4 -> (pidBS, backendSecretKey)) -> case c of
+  msgParser = PgMsgParser $ \c (LBS.splitAt 4 . LBS.drop 5 -> (pidBS, backendSecretKey)) -> case c of
     'K' -> case BinSer.decodeInt32BE 0 $ LBS.toStrict pidBS of
       Right pid -> Just $ BackendKeyData {backendPid = pid, backendSecretKey = LBS.toStrict backendSecretKey}
       Left _ -> Nothing
     _ -> Nothing
 
 instance FromPgMessage BindComplete where
-  msgParser = PgMsgParser $ \c _restOfMsg -> case c of
+  msgParser = PgMsgParser $ \c _ -> case c of
     '2' -> Just BindComplete
     _ -> Nothing
 
 instance FromPgMessage CommandComplete where
-  msgParser = PgMsgParser $ \c restOfMsg -> case c of
+  msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) -> case c of
     'C' ->
       let astext = decodeASCII $ LBS.toStrict $ LBS.dropEnd 1 restOfMsg
        in case TextParsec.parseOnly ((ins <|> del <|> upd <|> merge <|> sel <|> move <|> fetch <|> copy) <* TextParsec.endOfInput) astext of
@@ -224,9 +224,8 @@ instance FromPgMessage CopyInResponse where
     _ -> Nothing
 
 instance FromPgMessage DataRow where
-  msgParser = PgMsgParser $ \c !restOfMsg -> case c of
-    -- TODO: Double-check the re-encoding here is correct!
-    'D' -> Just $ DataRow {fullDataRow = BS.singleton 68 <> BinSer.encodeInt32BE (fromIntegral $ LBS.length restOfMsg + 4) <> LBS.toStrict restOfMsg}
+  msgParser = PgMsgParser $ \c !fullDataRow -> case c of
+    'D' -> Just $ DataRow {fullDataRow = LBS.toStrict fullDataRow}
     _ -> Nothing
 
 instance FromPgMessage NoData where
@@ -235,7 +234,7 @@ instance FromPgMessage NoData where
     _ -> Nothing
 
 instance FromPgMessage ParameterStatus where
-  msgParser = PgMsgParser $ \c !restOfMsg -> case c of
+  msgParser = PgMsgParser $ \c !(LBS.drop 5 -> restOfMsg) -> case c of
     'S' -> case LazyParsec.parseOnly (((,) <$> nulTerminatedCStringParser <*> nulTerminatedCStringParser) <* Parsec.endOfInput) restOfMsg of
       Left _ -> error "Failed parsing ParameterStatus"
       Right (parameterName, parameterValue) -> Just $ ParameterStatus {..}
@@ -349,14 +348,14 @@ instance ToPgMessage StartupMessage where
         Builder.int32BE (4 + contentsLen) <> contents
 
 instance FromPgMessage ReadyForQuery where
-  msgParser = PgMsgParser $ \c restOfMsg -> case (c, restOfMsg) of
+  msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) -> case (c, restOfMsg) of
     ('Z', "I") -> Just $ ReadyForQuery TransIdle
     ('Z', "T") -> Just $ ReadyForQuery TransInTrans
     ('Z', "E") -> Just $ ReadyForQuery TransInError
     _ -> Nothing
 
 instance FromPgMessage RowDescription where
-  msgParser = PgMsgParser $ \c restOfMsg ->
+  msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) ->
     if c == 'T'
       then
         let (numColsBS, colContents) = LBS.splitAt 2 restOfMsg
@@ -369,7 +368,7 @@ instance FromPgMessage RowDescription where
       else Nothing
 
 instance FromPgMessage ErrorResponse where
-  msgParser = PgMsgParser $ \c restOfMsg ->
+  msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) ->
     if c /= 'E'
       then Nothing
       else
@@ -385,7 +384,7 @@ instance FromPgMessage ErrorResponse where
              in Just $ ErrorResponse $ Map.fromList $ mapMaybe parseSingleErrorField errorFields
 
 instance FromPgMessage NoticeResponse where
-  msgParser = PgMsgParser $ \c restOfMsg ->
+  msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) ->
     if c /= 'N'
       then Nothing
       else
@@ -402,7 +401,7 @@ instance FromPgMessage NoticeResponse where
              in Just $ NoticeResponse $ Map.fromList $ mapMaybe parseSingleErrorField errorFields
 
 instance FromPgMessage NotificationResponse where
-  msgParser = PgMsgParser $ \c restOfMsg ->
+  msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) ->
     if c /= 'A'
       then Nothing
       else

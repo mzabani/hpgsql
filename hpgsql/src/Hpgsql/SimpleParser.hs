@@ -102,7 +102,7 @@ take n = Parser $ \idx bs kf ks ->
           -- the field decoder will need to evaluate this anyway,
           -- so no need for an extra thunk
           !h -> ks h (ByteStringIdx skip') bs
-        else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (BS.length bs) <> " remain")
+        else kf "take: insufficient bytes"
 {-# INLINE take #-}
 
 -- | Consume exactly @n@ bytes of input, failing if fewer than @n@ bytes

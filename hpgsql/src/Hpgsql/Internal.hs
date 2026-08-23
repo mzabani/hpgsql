@@ -538,8 +538,8 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
       lenLeftToFetch :: Int64 = fromIntegral $ either error id (BinSer.decodeInt32BE 0 $ LBS.toStrict lenbs) - 4
       fullMessageLen = 5 + lenLeftToFetch
   (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
-  let restOfMsg = LBS.drop 5 $ LBS.take fullMessageLen nowBuf
-  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar restOfMsg fullMessageLen nowBuf
+  let fullMsg = LBS.take fullMessageLen nowBuf
+  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg fullMessageLen nowBuf
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
     Just res -> pure res
@@ -552,12 +552,12 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
-    go msgIdentChar restOfMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
+    go msgIdentChar fullMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
       let bufferWithoutMsg = LBS.drop fullMessageLen nowBuf
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
             -- can be received _at any time_ according to the docs.
-            case parsePgMessage msgIdentChar restOfMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
+            case parsePgMessage msgIdentChar fullMsg (Left3 <$> msgParser @NotificationResponse <|> Middle3 <$> msgParser @NoticeResponse <|> Right3 <$> msgParser @ParameterStatus) of
               Just (Left3 notifResponse) -> do
                 debugPrint "Received notification. Will add it to internal queue."
                 STM.atomically $ do
@@ -579,7 +579,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
               Nothing -> do
                 -- Just in case this is a postgres error, it might include useful information,
                 -- so we spit that out
-                let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar restOfMsg (msgParser @ErrorResponse)
+                let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar fullMsg (msgParser @ErrorResponse)
                 fmap (nowBuf,) $ Just <$> STM.atomically (onNotAnyReasonableMsg (msgIdentChar, mPgError))
       case receiveWhat of
         ReceiveDataRows ->
@@ -592,7 +592,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
                   pure (LBS.fromStrict unconsumedBuffer, Just msgs)
                 _ -> handleUnexpectedMsg $ const $ pure "" -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
-          case parsePgMessage msgIdentChar restOfMsg parser of
+          case parsePgMessage msgIdentChar fullMsg parser of
             Just msg -> do
               debugPrint $ "Received " ++ show msg
               fmap (bufferWithoutMsg,) $ Just <$> STM.atomically (f (Right msg))
