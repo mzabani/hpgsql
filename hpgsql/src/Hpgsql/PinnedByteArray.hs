@@ -4,6 +4,29 @@
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE UnliftedFFITypes #-}
 
+-- |
+-- Why our own `PinnedByteArray` type instead of just using `ByteString`?
+-- It all started when upon inspecting our row decoder's GHC Core, I saw
+-- `lazy`, `keepAlive` and boxing+unboxing of Word32s that seemed completely
+-- unnecessary. Claude suggested `lazy` - which appeared in GHC Core - acted
+-- like an optimization fence, and I don't remember the details now, but
+-- basically a `ByteString` uses a `ForeignPtr` under the hood, which requires
+-- `withForeignPtr`, which uses `keepAlive#`, adding a lot of code to peek a
+-- Word from a pointer.
+-- Whether Claude's assumption that that code acts as an optimization fence
+-- is correct is inconsequential, what matters is that we can remove all that
+-- code by using pinned `ByteArray`s, and that the extra Word boxing+unboxing
+-- indeed goes away with that.
+--
+-- After I wrote this, I realized _maybe_ I could've moved `withForeignPtr`
+-- higher up in the call stack and in a single location, then pass down the
+-- `Ptr Word8` in a newtype instead of doing this. But it wasn't only late,
+-- `PinnedByteArray` has the advantage that I can push it down even to user
+-- facing methods without being concerned with everything happening inside
+-- the context of `withForeignPtr` (though I don't think it would've been a
+-- problem). Also, we only use pinned byte arrays for our receive buffer,
+-- which has such a short life span (it gets decoded into user rows immediately)
+-- that heap fragmentation doesn't sound too concerning.
 module Hpgsql.PinnedByteArray
   ( PinnedByteArray (..),
     LazyPinnedByteArray,
