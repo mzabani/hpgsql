@@ -364,43 +364,43 @@ compositeTypeEncoder rowEnc =
     }
 
 instance (FromPgField a) => FromPgRow (Only a) where
-  rowDecoder = Only <$> inlinedSingleFieldRowDecoder
+  rowDecoder = Only <$> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b) => FromPgRow (a, b) where
-  rowDecoder = (,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c) => FromPgRow (a, b, c) where
-  rowDecoder = (,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d) => FromPgRow (a, b, c, d) where
-  rowDecoder = (,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e) => FromPgRow (a, b, c, d, e) where
-  rowDecoder = (,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f) => FromPgRow (a, b, c, d, e, f) where
-  rowDecoder = (,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g) => FromPgRow (a, b, c, d, e, f, g) where
-  rowDecoder = (,,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h) => FromPgRow (a, b, c, d, e, f, g, h) where
-  rowDecoder = (,,,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i) => FromPgRow (a, b, c, d, e, f, g, h, i) where
-  rowDecoder = (,,,,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j) => FromPgRow (a, b, c, d, e, f, g, h, i, j) where
-  rowDecoder = (,,,,,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  rowDecoder = (,,,,,,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l) where
-  rowDecoder = (,,,,,,,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
-  rowDecoder = (,,,,,,,,,,,,) <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
 
 data FieldEncoder a = FieldEncoder
   { toTypeOid :: !(EncodingContext -> Maybe Oid),
