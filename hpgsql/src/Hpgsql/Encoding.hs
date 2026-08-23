@@ -235,7 +235,15 @@ class FromPgField a where
               Right v -> pure v
 
   -- | Semantically equivalent to `singleField fieldDecoder`, but for
-  -- some types it can provide a much faster `RowDecoder`. Beware that
+  -- most types it can provide a much faster `RowDecoder`. This doesn't
+  -- cause the same amount of size blowup that `inlinedSingleFieldRowDecoder`
+  -- does, but is also not as fast as that.
+  {-# NOINLINE notInlinedSingleFieldRowDecoder #-}
+  notInlinedSingleFieldRowDecoder :: RowDecoder a
+  notInlinedSingleFieldRowDecoder = inlinedSingleFieldRowDecoder
+
+  -- | Semantically equivalent to `singleField fieldDecoder`, but for
+  -- most types it can provide a much faster `RowDecoder`. Beware that
   -- using will produce more code in your row decoders, which can affect
   -- compilation times and binary size.
   {-# INLINE inlinedSingleFieldRowDecoder #-}
@@ -1424,7 +1432,7 @@ instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
   -- coercing instead of fmap reduces memory usage, apparently
   -- by reducing (unnecessary) closures in the final row decoder,
   -- as per looking at GHC Core
-  genRowDecoder = coerce $ inlinedSingleFieldRowDecoder @a
+  genRowDecoder = coerce $ notInlinedSingleFieldRowDecoder @a
 
 genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
 genericToPgRow = contramap from genRowEncoder
