@@ -1,1 +1,9 @@
-- If ShortByteStrings are really beneficial, consider breaking API change to take a ShortByteString instead in FromPgField to avoid so much converting between ByteString and ShortByteString
+- Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
+- Do _not_ expose new FromPgField methods. Add new EncodingInternal module, instead.
+  - Check that the non-exposed methods are safe wrt bytearray bounds access by construction, and users can't break that. If that's true, we can omit bounds checks in our row decoding, making row decoders smaller and maybe faster.
+- Some types might still not derive specialized row decoders
+- "Oh no! No colInfo here.. what do we do!?" in hpgsql-simple-compat. This might require a big rethinking of things..
+- Double-check which row encoders we want to use the inlined versions for and which we don't. Tuples?
+- Text internals might be easier to use now?
+- Expose in the FromPgField class two new methods.. inlined and non inlined row decoders with/without bounds checks. Use with-bounds-checks for MonadicRowDecoder, and without-bounds-checks for regular row decoder, because the latter checks type oids
+- Is `notInlinedSingleFieldRowDecoder` worth keeping? The Generically derived decoder is almost as fast. Maybe for types that aren't records it's a different story, though?
