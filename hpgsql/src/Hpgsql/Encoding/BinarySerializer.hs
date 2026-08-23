@@ -62,15 +62,20 @@ fromBigEndian16 = Prelude.id
 fromBigEndian16 = byteSwap16
 #endif
 
-{-# INLINE unsafeDecodeWord #-}
-unsafeDecodeWord :: (Storable a) => ByteStringIdx -> ByteString -> Int -> (a -> a) -> Either String a
-unsafeDecodeWord idx (InternalBS.BS bytesPtr len) minLen endianConvert =
-  if len >= minLen + idx.idx
-    then
-      -- A bang (strictness) in `decodedWord` makes our benchmarks allocate more memory and run slower!
-      let decodedWord = endianConvert $ unsafeDupablePerformIO $ withForeignPtr bytesPtr $ \ptr -> peekByteOff (coerce ptr) idx.idx
-       in Right decodedWord
-    else Left "Less than enough bytes to decode"
+data CoolWordDec a where
+  CWord8 :: CoolWordDec Word8
+  CWord16 :: CoolWordDec Word16
+  CWord32 :: CoolWordDec Word32
+  CWord64 :: CoolWordDec Word64
+
+{-# INLINE decodeWord #-}
+decodeWord :: CoolWordDec a -> ByteStringIdx -> ByteString -> (a -> a) -> Either String a
+decodeWord wdec idx (InternalBS.BS bytesPtr len) endianConvert =
+  case wdec of
+    CWord8 -> if len < 1 + idx.idx then Left "Less than enough bytes to decode" else Right $ endianConvert $ unsafeDupablePerformIO $ withForeignPtr bytesPtr $ \ptr -> peekByteOff (coerce ptr) idx.idx
+    CWord16 -> if len < 2 + idx.idx then Left "Less than enough bytes to decode" else Right $ endianConvert $ unsafeDupablePerformIO $ withForeignPtr bytesPtr $ \ptr -> peekByteOff (coerce ptr) idx.idx
+    CWord32 -> if len < 4 + idx.idx then Left "Less than enough bytes to decode" else Right $ endianConvert $ unsafeDupablePerformIO $ withForeignPtr bytesPtr $ \ptr -> peekByteOff (coerce ptr) idx.idx
+    CWord64 -> if len < 8 + idx.idx then Left "Less than enough bytes to decode" else Right $ endianConvert $ unsafeDupablePerformIO $ withForeignPtr bytesPtr $ \ptr -> peekByteOff (coerce ptr) idx.idx
 
 {-# INLINE unsafeEncodeWord #-}
 unsafeEncodeWord :: (Storable a) => a -> (a -> a) -> Int -> ByteString
@@ -83,7 +88,7 @@ newtype ByteStringIdx = ByteStringIdx {idx :: Int}
 
 {-# INLINE decodeInt16BE #-}
 decodeInt16BE :: ByteStringIdx -> ByteString -> Either String Int16
-decodeInt16BE idx bs = fromIntegral <$> unsafeDecodeWord idx bs 2 fromBigEndian16
+decodeInt16BE idx bs = fromIntegral <$> decodeWord CWord16 idx bs fromBigEndian16
 
 {-# INLINE encodeInt16BE #-}
 encodeInt16BE :: Int16 -> ByteString
@@ -91,19 +96,19 @@ encodeInt16BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian16 2
 
 {-# INLINE decodeWord8 #-}
 decodeWord8 :: ByteStringIdx -> ByteString -> Either String Word8
-decodeWord8 idx bs = unsafeDecodeWord idx bs 1 Prelude.id
+decodeWord8 idx bs = decodeWord CWord8 idx bs Prelude.id
 
 {-# INLINE decodeWord32BE #-}
 decodeWord32BE :: ByteString -> Either String Word32
-decodeWord32BE bs = unsafeDecodeWord 0 bs 4 fromBigEndian32
+decodeWord32BE bs = decodeWord CWord32 0 bs fromBigEndian32
 
 {-# INLINE decodeWord64BE #-}
 decodeWord64BE :: ByteString -> Either String Word64
-decodeWord64BE bs = unsafeDecodeWord 0 bs 8 fromBigEndian64
+decodeWord64BE bs = decodeWord CWord64 0 bs fromBigEndian64
 
 {-# INLINE decodeInt32BE #-}
 decodeInt32BE :: ByteStringIdx -> ByteString -> Either String Int32
-decodeInt32BE idx bs = fromIntegral <$> unsafeDecodeWord idx bs 4 fromBigEndian32
+decodeInt32BE idx bs = fromIntegral <$> decodeWord CWord32 idx bs fromBigEndian32
 
 {-# INLINE encodeInt32BE #-}
 encodeInt32BE :: Int32 -> ByteString
@@ -111,7 +116,7 @@ encodeInt32BE n = unsafeEncodeWord (fromIntegral n) fromBigEndian32 4
 
 {-# INLINE decodeInt64BE #-}
 decodeInt64BE :: ByteStringIdx -> ByteString -> Either String Int64
-decodeInt64BE idx bs = fromIntegral <$> unsafeDecodeWord idx bs 8 fromBigEndian64
+decodeInt64BE idx bs = fromIntegral <$> decodeWord CWord64 idx bs fromBigEndian64
 
 {-# INLINE encodeInt64BE #-}
 encodeInt64BE :: Int64 -> ByteString
@@ -142,7 +147,7 @@ decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
   -- Whether this is worth keeping is sort of questionable. It's complex
   -- (even if I think it's safe and well tested) and reduces runtime of one of
   -- our benchmarks by 2% compared to not having it.
-  case unsafeDecodeWord idx bs 8 fromBigEndian64 of
+  case decodeWord CWord64 idx bs fromBigEndian64 of
     Right (w64 :: Word64) ->
       -- After fromBigEndian64, the Word64 has bytes in big-endian order:
       -- byte 0 (msg type) in MSB, bytes 1-4 (length) next, bytes 5-6 (col count), byte 7 in LSB.

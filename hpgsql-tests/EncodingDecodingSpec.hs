@@ -43,8 +43,8 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
-import Hpgsql.InternalTypes (DataRow (..))
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.InternalTypes (DataRow (..))
 import Hpgsql.Pipeline (pipeline, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -881,11 +881,13 @@ data Person = Person {name :: Text, born :: Day, heightMeters :: Double}
 specializedDataRowDecodingConsistency :: PropertyT IO ()
 specializedDataRowDecodingConsistency = hedgehog $ do
   dataRows <- Gen.forAll $ Gen.list (Gen.linear 0 20) genDataRowBS
-  mapM_ (\drBS -> do
-    let restOfMsg = LBS.fromStrict (BS.drop 5 drBS)
-        parsed = parseDataRowFromPgMsg 'D' restOfMsg
-    fmap fullDataRow parsed === Just drBS
-    ) dataRows
+  mapM_
+    ( \drBS -> do
+        let restOfMsg = LBS.fromStrict (BS.drop 5 drBS)
+            parsed = parseDataRowFromPgMsg 'D' restOfMsg
+        fmap fullDataRow parsed === Just drBS
+    )
+    dataRows
 
 -- | Copy of the FromPgMessage DataRow instance's parsing logic from Hpgsql.Msgs.
 -- Keep in sync with that module's @instance FromPgMessage DataRow@.
@@ -904,17 +906,18 @@ genDataRowBS = do
   fields <- replicateM numFields (genField maxPerField)
   pure $ buildDataRow fields
   where
-    genField maxBytes = Gen.choice
-      [ pure Nothing
-      , Just <$> Gen.bytes (Gen.linear 0 maxBytes)
-      ]
+    genField maxBytes =
+      Gen.choice
+        [ pure Nothing,
+          Just <$> Gen.bytes (Gen.linear 0 maxBytes)
+        ]
     buildDataRow :: [Maybe ByteString] -> ByteString
     buildDataRow fields =
       let nFields = length fields
           fieldsBS = BS.concat $ map encodeField fields
           payload = testEncodeInt16BE (fromIntegral nFields) <> fieldsBS
           lenVal = fromIntegral (BS.length payload + 4) :: Int32
-      in BS.singleton 68 <> testEncodeInt32BE lenVal <> payload
+       in BS.singleton 68 <> testEncodeInt32BE lenVal <> payload
     encodeField Nothing = testEncodeInt32BE (-1)
     encodeField (Just bs) = testEncodeInt32BE (fromIntegral (BS.length bs)) <> bs
 
