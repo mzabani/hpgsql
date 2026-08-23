@@ -143,7 +143,7 @@ takeInt16BE = Parser $ \idx bs kf ks ->
 -- an Int16 in a row.
 takeInt16BEWithFieldLength :: Parser (Maybe Int16)
 takeInt16BEWithFieldLength = do
-  mi16 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize2
+  mi16 <- parsePgFieldWithAtMost4Bytes BinSer.CWord16
   pure $ fromIntegral <$> mi16
 
 {-# INLINE takeInt32BE #-}
@@ -166,7 +166,7 @@ peekInt32BE = Parser $ \idx bs kf ks ->
 -- an Int32 in a row.
 takeInt32BEWithFieldLength :: Parser (Maybe Int32)
 takeInt32BEWithFieldLength = do
-  mi32 <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize4
+  mi32 <- parsePgFieldWithAtMost4Bytes BinSer.CWord32
   pure $ fromIntegral <$> mi32
 
 {-# INLINE takeFloatBEWithFieldLength #-}
@@ -175,7 +175,7 @@ takeInt32BEWithFieldLength = do
 -- a Float in a row.
 takeFloatBEWithFieldLength :: Parser (Maybe Float)
 takeFloatBEWithFieldLength = do
-  mf <- parsePgFieldWithAtMost4Bytes BinSer.TypeSize4
+  mf <- parsePgFieldWithAtMost4Bytes BinSer.CWord32
   pure $ castWord32ToFloat <$> mf
 
 {-# INLINE takeFloatBE #-}

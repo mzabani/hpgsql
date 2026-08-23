@@ -64,14 +64,14 @@ fromBigEndian16 = Prelude.id
 fromBigEndian16 = byteSwap16
 #endif
 
-data CoolWordDec a where
-  CWord8 :: CoolWordDec Word8
-  CWord16 :: CoolWordDec Word16
-  CWord32 :: CoolWordDec Word32
-  CWord64 :: CoolWordDec Word64
+data WordDecoding a where
+  CWord8 :: WordDecoding Word8
+  CWord16 :: WordDecoding Word16
+  CWord32 :: WordDecoding Word32
+  CWord64 :: WordDecoding Word64
 
 {-# INLINE decodeWord #-}
-decodeWord :: CoolWordDec a -> ByteStringIdx -> ByteString -> (a -> a) -> Either String a
+decodeWord :: WordDecoding a -> ByteStringIdx -> ByteString -> (a -> a) -> Either String a
 decodeWord wdec idx (InternalBS.BS bytesPtr len) endianConvert =
   case wdec of
     CWord8 -> if len < 1 + idx.idx then Left "Less than enough bytes to decode" else Right $ endianConvert $ unsafeDupablePerformIO $ withForeignPtr bytesPtr $ \ptr -> peekByteOff (coerce ptr) idx.idx
@@ -102,11 +102,11 @@ decodeWord8 idx bs = decodeWord CWord8 idx bs Prelude.id
 
 {-# INLINE decodeWord32BE #-}
 decodeWord32BE :: ByteStringIdx -> ByteString -> Either String Word32
-decodeWord32BE idx bs = unsafeDecodeWord idx bs 4 fromBigEndian32
+decodeWord32BE idx bs = decodeWord CWord32 idx bs fromBigEndian32
 
 {-# INLINE decodeWord64BE #-}
 decodeWord64BE :: ByteStringIdx -> ByteString -> Either String Word64
-decodeWord64BE idx bs = unsafeDecodeWord idx bs 8 fromBigEndian64
+decodeWord64BE idx bs = decodeWord CWord64 idx bs fromBigEndian64
 
 {-# INLINE decodeInt32BE #-}
 decodeInt32BE :: ByteStringIdx -> ByteString -> Either String Int32
@@ -178,11 +178,6 @@ decodeDataRow idx bs@(InternalBS.BS _bytesPtr len) =
       | len >= 1 + lenFullMsg + idx.idx = Right $ ByteStringIdx $ 1 + lenFullMsg + idx.idx
       | otherwise = Left "Less than enough bytes to decode a full DataRow"
 
-data WordDecoding a where
-  TypeSize1 :: WordDecoding Word8
-  TypeSize2 :: WordDecoding Word16
-  TypeSize4 :: WordDecoding Word32
-
 {-# INLINE decodePgFieldWithAtMost4Bytes #-}
 
 -- | A specialized decoder that decoders a query result's
@@ -195,9 +190,10 @@ data WordDecoding a where
 decodePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => WordDecoding a -> ByteStringIdx -> ByteString -> Either String (Maybe a, ByteStringIdx)
 decodePgFieldWithAtMost4Bytes wdec =
   let (pgTypeSize, endianSwap, valueMask :: Word64) = case wdec of
-        TypeSize1 -> (1, Prelude.id, 0b00000000_00000000_00000000_00000000_11111111_00000000_00000000_00000000)
-        TypeSize2 -> (2, fromBigEndian16, 0b00000000_00000000_00000000_00000000_11111111_11111111_00000000_00000000)
-        TypeSize4 -> (4, fromBigEndian32, 0b00000000_00000000_00000000_00000000_11111111_11111111_11111111_11111111)
+        CWord8 -> (1, Prelude.id, 0b00000000_00000000_00000000_00000000_11111111_00000000_00000000_00000000)
+        CWord16 -> (2, fromBigEndian16, 0b00000000_00000000_00000000_00000000_11111111_11111111_00000000_00000000)
+        CWord32 -> (4, fromBigEndian32, 0b00000000_00000000_00000000_00000000_11111111_11111111_11111111_11111111)
+        CWord64 -> error "Cannot try to decode 64bit words with this function"
       valueShift :: Int = 8 * (4 - pgTypeSize)
    in \idx bs ->
         -- We try the most optimistic case first:
@@ -205,7 +201,7 @@ decodePgFieldWithAtMost4Bytes wdec =
         -- - Null int32 followed by at least one other field (not the last field in the row)
         -- - Shorter types (int16, bool) followed by at least one other field (not the last field in the row)
         -- In all the cases above, there are at least 8 bytes in the row, so our decoding into a Word64 will succeed.
-        case unsafeDecodeWord idx bs 8 fromBigEndian64 of
+        case decodeWord CWord64 idx bs fromBigEndian64 of
           Right (w64 :: Word64) ->
             let fieldLenW64 :: Word64 = flip unsafeShiftR 32 $ w64 .&. 0b11111111_11111111_11111111_11111111_00000000_00000000_00000000_00000000
                 fieldIfNotNull :: a = fromIntegral $ unsafeShiftR (w64 .&. valueMask) valueShift
@@ -225,6 +221,6 @@ decodePgFieldWithAtMost4Bytes wdec =
             if lenField >= 0
               then do
                 -- peek after the next 4 bytes for @a
-                fieldValue <- unsafeDecodeWord (idx + 4) bs (fromIntegral pgTypeSize) endianSwap
+                fieldValue <- decodeWord wdec (idx + 4) bs endianSwap
                 Right (Just fieldValue, idx + 4 + fromIntegral lenField)
               else Right (Nothing, idx + 4)

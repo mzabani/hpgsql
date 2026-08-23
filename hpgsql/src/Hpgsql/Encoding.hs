@@ -1076,7 +1076,7 @@ binaryTrue = BinSer.encodePgBoolean True
 
 {-# INLINE boolRowDecoder #-}
 boolRowDecoder :: Parser.Parser (Maybe Bool)
-boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes BinSer.TypeSize1
+boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes BinSer.CWord8
 
 instance FromPgField Bool where
   {-# INLINE fieldDecoder #-}
@@ -1297,12 +1297,14 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in \case
-                  bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                    Just d -> Right d
-                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+            let
+              -- jsonb has a byte prepended to the contents and json does not
+              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in
+              \case
+                bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                  Just d -> Right d
+                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
