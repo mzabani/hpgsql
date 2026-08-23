@@ -107,6 +107,5 @@ tests-compat:
 
 ghc-core:
     set -eo pipefail
-    rm -f dist-newstyle/build/x86_64-linux/ghc-9.10.3/hpgsql-tests-0.1.0.0/x/hpgsql-tests/build/hpgsql-tests/hpgsql-tests-tmp/RowDecoderGhcCore.thr.dump-simpl
     cabal build hpgsql-tests 1>&2
     cat dist-newstyle/build/x86_64-linux/ghc-9.10.3/hpgsql-tests-0.1.0.0/x/hpgsql-tests/build/hpgsql-tests/hpgsql-tests-tmp/RowDecoderGhcCore.thr.dump-simpl
