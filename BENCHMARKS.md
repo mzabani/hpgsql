@@ -31,9 +31,9 @@ This runs with 2 concurrent queries, 10 times over:
 
 This benchmark is unfair towards both hpgsql and postgresql-simple because the row decoder is Generically derived for them while it is hand-written for hasql.
 ```csv
-postgresql-simple Record List (100000 rows),12.07,142.59M,99.3
-hasql Record List (100000 rows),6.369,142.48M,79.0
-hpgsql Record List (100000 rows),3.908,72.07M,119.9
+postgresql-simple Record List (100000 rows),12.23,142.52M,91.3
+hasql Record List (100000 rows),6.119,142.48M,78.5
+hpgsql Record List (100000 rows),3.719,72.07M,120.2
 ```
 
 ### Materializing 100_000 rows with 13 columns each into a List of Tuples
@@ -55,9 +55,9 @@ However, Hpgsql's implementation streams directly from the socket while the othe
 it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
 cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 ```csv
-streaming-postgresql-simple Record Stream (100000 rows),13.59,73.34M,0.0
-postgresql-simple Record fold (100000 rows),13.37,77.84M,0.0
-hpgsql Record Stream (100000 rows),1.307,72.07M,0.0
+streaming-postgresql-simple Record Stream (100000 rows),13.05,73.30M,0.0
+postgresql-simple Record fold (100000 rows),12.23,76.22M,0.0
+hpgsql Record Stream (100000 rows),1.117,72.07M,0.0
 ```
 
 ### Streaming 100_000 rows with 13 columns as Tuples
