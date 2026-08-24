@@ -1,6 +1,6 @@
 module EncodingDecodingSpec where
 
-import Control.Monad (join, replicateM, void)
+import Control.Monad (join, void)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
