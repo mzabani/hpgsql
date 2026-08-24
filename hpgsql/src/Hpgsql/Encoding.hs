@@ -735,9 +735,9 @@ binaryIntDecoder typOid = \bs ->
     maxBoundPgType :: Integer
     intDecoder :: ByteString -> Either String a
     (maxBoundPgType, intDecoder)
-      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . BinSer.decodeInt64BE)
-      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . BinSer.decodeInt32BE)
-      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . BinSer.decodeInt16BE)
+      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . BinSer.decodeInt64BE 0)
+      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . BinSer.decodeInt32BE 0)
+      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . BinSer.decodeInt16BE 0)
       | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
     doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
 
@@ -991,7 +991,7 @@ instance FromPgField UTCTime where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE bs
+      totalusecs <- BinSer.decodeInt64BE 0 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1001,7 +1001,7 @@ instance FromPgField (Unbounded UTCTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE bs
+      totalusecs <- BinSer.decodeInt64BE 0 bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -1018,7 +1018,7 @@ instance FromPgField ZonedTime where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE bs
+      totalusecs <- BinSer.decodeInt64BE 0 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1028,7 +1028,7 @@ instance FromPgField (Unbounded ZonedTime) where
   fieldDecoder = parsePgType [timestamptzOid] $ \case
     Just bs -> do
       -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-      totalusecs <- BinSer.decodeInt64BE bs
+      totalusecs <- BinSer.decodeInt64BE 0 bs
       Right $
         if totalusecs == minBound
           then NegInfinity
@@ -1044,7 +1044,7 @@ instance FromPgField (Unbounded ZonedTime) where
 instance FromPgField LocalTime where
   fieldDecoder = parsePgType [timestampOid] $ \case
     Just bs -> do
-      totalusecs <- BinSer.decodeInt64BE bs
+      totalusecs <- BinSer.decodeInt64BE 0 bs
       let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
           parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
       Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1053,7 +1053,7 @@ instance FromPgField LocalTime where
 instance FromPgField TimeOfDay where
   fieldDecoder = parsePgType [timeOid] $ \case
     Just bs -> do
-      usecs <- BinSer.decodeInt64BE bs
+      usecs <- BinSer.decodeInt64BE 0 bs
       Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
     Nothing -> Left "Cannot decode SQL null as the Haskell TimeOfDay type. Use a `Maybe TimeOfDay`"
 
@@ -1063,7 +1063,7 @@ instance FromPgField Day where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- BinSer.decodeInt32BE bs
+      jd <- BinSer.decodeInt32BE 0 bs
       Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
     Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
 
@@ -1073,7 +1073,7 @@ instance FromPgField (Unbounded Day) where
       -- There is a very specific conversion function for these, which I poorly translated to Haskell
       -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
       -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- BinSer.decodeInt32BE bs
+      jd <- BinSer.decodeInt32BE 0 bs
       Right $
         if jd == minBound
           then NegInfinity
@@ -1087,9 +1087,9 @@ instance FromPgField (Unbounded Day) where
 instance FromPgField CalendarDiffTime where
   fieldDecoder = parsePgType [intervalOid] $ \case
     Just bs -> do
-      nMicrosecs <- BinSer.decodeInt64BE bs
-      nDays <- BinSer.decodeInt32BE (BS.drop 8 bs)
-      nMonths <- BinSer.decodeInt32BE (BS.drop 12 bs)
+      nMicrosecs <- BinSer.decodeInt64BE 0 bs
+      nDays <- BinSer.decodeInt32BE 8 bs
+      nMonths <- BinSer.decodeInt32BE 12 bs
       Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
     Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime type. Use a `Maybe CalendarDiffTime`"
 
