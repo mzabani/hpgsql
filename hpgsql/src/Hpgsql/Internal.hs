@@ -535,9 +535,9 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   let (msgIdentChar, lenPlus4) = fromMaybe (error "impossible") $ takePgMessageIdentAndLen initialBuf
   let lenLeftToFetch :: Int = fromIntegral $ lenPlus4 - 4
       fullMessageLen = 5 + lenLeftToFetch
-  (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
+  (nowBuf, nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
   let fullMsg = PBA.toStrictN 0 fullMessageLen nowBuf
-  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg nowBuf
+  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg nowBuf nowBufLen
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
     Just res -> pure res
@@ -550,8 +550,8 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
-    go msgIdentChar fullMsgPBA nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
-      let bufferWithoutMsg = PBA.fromStrict $ PBA.toStrictN (PBA.length fullMsgPBA) (maxBound @Int) nowBuf
+    go msgIdentChar fullMsgPBA nowBuf nowBufLen = mask_ $ modifyIORefIO recvBuffer $ do
+      let bufferWithoutMsg = PBA.fromStrict $ PBA.toStrictN (PBA.length fullMsgPBA) (nowBufLen - PBA.length fullMsgPBA) nowBuf
           fullMsg = LBS.fromStrict $ PBA.toByteString fullMsgPBA
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
