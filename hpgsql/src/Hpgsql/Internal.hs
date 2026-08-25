@@ -535,11 +535,9 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   let (msgIdentChar, lenPlus4) = fromMaybe (error "impossible") $ takePgMessageIdentAndLen initialBuf
   let lenLeftToFetch :: Int = fromIntegral $ lenPlus4 - 4
       fullMessageLen = 5 + lenLeftToFetch
-  (PBA.toStrict -> nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
-  let fullMsg = LBS.fromStrict $ PBA.toByteString $ PBA.take fullMessageLen nowBuf
-  -- TODO: `toStrict` on the entire buffer might be overkill unless we know we're receiving
-  -- DataRows, already. Best to do this later on inside the critical section.
-  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg fullMessageLen nowBuf
+  (nowBuf, _nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
+  let fullMsg = PBA.toStrictN 0 fullMessageLen nowBuf
+  receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg nowBuf
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
     Just res -> pure res
@@ -552,8 +550,9 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- the recvBuffer, then we _must_ remove that message from recvBuffer.
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
-    go msgIdentChar fullMsg fullMessageLen nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
-      let bufferWithoutMsg = PBA.fromStrict $ PBA.drop fullMessageLen nowBuf
+    go msgIdentChar fullMsgPBA nowBuf = mask_ $ modifyIORefIO recvBuffer $ do
+      let bufferWithoutMsg = PBA.fromStrict $ PBA.toStrictN (PBA.length fullMsgPBA) (maxBound @Int) nowBuf
+          fullMsg = LBS.fromStrict $ PBA.toByteString fullMsgPBA
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
             -- can be received _at any time_ according to the docs.
@@ -580,16 +579,17 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
                 -- Just in case this is a postgres error, it might include useful information,
                 -- so we spit that out
                 let mPgError = mkPostgresError "" <$> parsePgMessage msgIdentChar fullMsg (msgParser @ErrorResponse)
-                fmap (PBA.fromStrict nowBuf,) $ Just <$> STM.atomically (onNotAnyReasonableMsg (msgIdentChar, mPgError))
+                fmap (nowBuf,) $ Just <$> STM.atomically (onNotAnyReasonableMsg (msgIdentChar, mPgError))
       case receiveWhat of
         ReceiveDataRows ->
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
-          case Parser.parseOnly Parser.parseManyRows nowBuf of
-            Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) | nRowsParsed > 0 -> do
-              let (msgs, unconsumedBuffer) = PBA.splitAt unconsumedBufferBegin.idx nowBuf
-              debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (PBA.length msgs)
-              pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
-            _ -> handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
+          let strictNowBuf = PBA.toStrict nowBuf
+           in case Parser.parseOnly Parser.parseManyRows strictNowBuf of
+                Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) | nRowsParsed > 0 -> do
+                  let (msgs, unconsumedBuffer) = PBA.splitAt unconsumedBufferBegin.idx strictNowBuf
+                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (PBA.length msgs)
+                  pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
+                _ -> handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar fullMsg parser of
             Just msg -> do

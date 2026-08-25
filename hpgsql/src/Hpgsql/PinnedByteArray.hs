@@ -32,7 +32,6 @@ module Hpgsql.PinnedByteArray
     LazyPinnedByteArray,
     createPinnedByteArray,
     takePgMessageIdentAndLen,
-    takeMessageWithoutLength,
     drop,
     fromStrict,
     toStrict,
@@ -153,10 +152,6 @@ takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =
        in Just (C# (indexWord8ArrayAsChar# arr# start), fromIntegral $ fromBigEndian32 $ W32# (indexWord8ArrayAsWord32# arr# (start +# 1#)))
     else Nothing
 
--- | Skips 5 bytes for a message's header and takes the next `n` bytes.
-takeMessageWithoutLength :: Int -> LazyPinnedByteArray -> PinnedByteArray
-takeMessageWithoutLength n = toStrictN 5 n
-
 -- | Drops the next `n` bytes.
 drop :: Int -> PinnedByteArray -> PinnedByteArray
 drop n (PinnedByteArray start len arr#) =
@@ -180,7 +175,7 @@ toStrict (LazyPinnedByteArray _ [pba]) = pba
 toStrict lpba@(LazyPinnedByteArray totalLen _) = toStrictN 0 totalLen lpba
 
 -- | Creates strict PBA from a Lazy one, but just with the first @n@
--- bytes after the first @skip@ (or less if they're not all there).
+-- bytes after the first `skip` (or less if they're not all there).
 toStrictN :: Int -> Int -> LazyPinnedByteArray -> PinnedByteArray
 toStrictN skip n' (LazyPinnedByteArray totalLen' chunks) =
   let n = min n' totalLen'
