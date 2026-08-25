@@ -35,7 +35,8 @@
 -- decoding code is inlined. Fully inlined row decoders can be ~15% faster than not fully
 -- inlined row decoders.
 --
--- However, bear in mind that fully inlined row decoders will generate more code and can possibly slow down compilation.
+-- However, bear in mind that fully inlined row decoders will generate more code and can possibly slow down compilation,
+-- and that often the bottleneck is in query processing, not row decoding.
 --
 -- Some notes:
 --

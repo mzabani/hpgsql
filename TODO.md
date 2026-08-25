@@ -1,3 +1,4 @@
+- Check that users can define their own types and create FromPgField instances that derive performant instances. Do they override the specialized methods? How do they do that?
 - Expose a `PinnedByteArray` with `toByteString` to users, move current module to PinnedByteArray.Internal
 - Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
 - Do _not_ expose new FromPgField methods. Add new EncodingInternal module, instead.
