@@ -8,4 +8,7 @@
 - Double-check which row encoders we want to use the inlined versions for and which we don't. Tuples?
 - Text internals might be easier to use now?
 - Expose in the FromPgField class two new methods.. inlined and non inlined row decoders with/without bounds checks. Use with-bounds-checks for MonadicRowDecoder, and without-bounds-checks for regular row decoder, because the latter checks type oids
+  - The specialized row decoders are already a problem here! They don't check type OIDs and can read bytes partially. We should ensure this mismatch is not possible.
 - Is `notInlinedSingleFieldRowDecoder` worth keeping? The Generically derived decoder is almost as fast. Maybe for types that aren't records it's a different story, though?
+- Check that we're not holding on to internal buffers when Record fields being materialized into aren't strict
+- Write property-based tests for PinnedByteArray functions
