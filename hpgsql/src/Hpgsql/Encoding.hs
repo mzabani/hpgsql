@@ -17,6 +17,30 @@
 -- type check query results and field counts even when queries return zero rows. If you need
 -- to write a row decoder that is monadic (because decoding can change depending on the values
 -- of fields), check "Hpgsql.Encoding.RowDecoderMonadic".
+--
+-- = Performant row decoders
+--
+-- Hpgsql provides roughly two* ways to derive row decoders from your types.
+-- You can use `notInlinedSingleFieldRowDecoder` or `inlinedSingleFieldRowDecoder` for each field.
+-- For example you can define:
+--
+-- > data Car = Car { model :: Text, year :: Maybe Int, inGoodCondition :: Bool }
+-- >
+-- > instance FromPgRow Car where
+-- >   rowDecoder = Car <$> inlinedSingleFieldRowDecoder
+-- >                    <*> inlinedSingleFieldRowDecoder
+-- >                    <*> inlinedSingleFieldRowDecoder
+--
+-- And hpgsql will derive a row decoder that is extremely fast because almost all the
+-- decoding code is inlined. Fully inlined row decoders can be ~15% faster than not fully
+-- inlined row decoders.
+--
+-- However, bear in mind that fully inlined row decoders will generate more code and can possibly slow down compilation.
+--
+-- Some notes:
+--
+-- * Generically derived row decoders are not fully inlined, and perform as well as hand-written row decoders built with `notInlinedSingleFieldRowDecoder`.
+-- * Another derivation method is to use `singleField fieldDecoder`. That is the least performant way of deriving row decoders, and is only useful if you need the ability to compose `FieldDecoder`s in ways that you can't otherwise. If you can, use `notInlinedSingleFieldRowDecoder` instead.
 module Hpgsql.Encoding
   ( -- * Decoding
     FromPgField (fieldDecoder, notInlinedSingleFieldRowDecoder, inlinedSingleFieldRowDecoder), --  Do not export other methods so we can change them

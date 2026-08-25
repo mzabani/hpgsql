@@ -1,3 +1,4 @@
+- Expose a `PinnedByteArray` with `toByteString` to users, move current module to PinnedByteArray.Internal
 - Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
 - Do _not_ expose new FromPgField methods. Add new EncodingInternal module, instead.
   - Check that the non-exposed methods are safe wrt bytearray bounds access by construction, and users can't break that. If that's true, we can omit bounds checks in our row decoding, making row decoders smaller and maybe faster.
