@@ -5,6 +5,7 @@ module Hpgsql.Encoding.RowDecoderMonadic
   )
 where
 
+import Control.Monad (unless)
 import Data.Bifunctor (first)
 import qualified Data.List as List
 import Hpgsql.Encoding (FieldInfo, RowDecoder (..))
@@ -47,9 +48,12 @@ instance Monad RowDecoderMonadic where
 -- any rows from the response) and transforms it into a Monadic row parser, which has no such
 -- type-checking.
 toMonadicRowDecoder :: RowDecoder a -> RowDecoderMonadic a
-toMonadicRowDecoder RowDecoder {fullRowDecoder, numExpectedColumns} = RowDecoderMonadic $ \cs -> do
+toMonadicRowDecoder RowDecoder {fullRowDecoder, numExpectedColumns, rowColumnsTypeCheck} = RowDecoderMonadic $ \cs -> do
   let numActualCols = length cs.colsLeftToParse
   case compare numActualCols numExpectedColumns of
-    EQ -> (,numExpectedColumns) <$> fullRowDecoder cs.colsLeftToParse
-    GT -> (,numExpectedColumns) <$> fullRowDecoder (List.take numExpectedColumns cs.colsLeftToParse)
-    LT -> fail $ "More number of columns expected by the row parser than found in query results. Expected " ++ show numExpectedColumns ++ " but got " ++ show numActualCols
+    LT -> fail $ "More columns expected by the row parser than found in query results. Expected " ++ show numExpectedColumns ++ " but got " ++ show numActualCols
+    _ -> do
+      let colsForNow = List.take numExpectedColumns cs.colsLeftToParse
+      let typecheckedCols = rowColumnsTypeCheck colsForNow
+      unless (all snd typecheckedCols) $ fail "Query result column types do not match expected column types"
+      (,numExpectedColumns) <$> fullRowDecoder colsForNow
