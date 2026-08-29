@@ -128,12 +128,12 @@ jobs:
 
     - name: Check code is formatted
       run: |
-        nix-shell --run 'run format-hs'
+        nix-shell --run 'run format'
         if [ -n "$(git diff --name-only)" ]; then
           echo "The following files are not properly formatted:"
           git diff --name-only
           echo ""
-          echo "Run 'run format-hs' locally and commit the changes."
+          echo "Run 'run format' locally and commit the changes."
           exit 1
         fi
 

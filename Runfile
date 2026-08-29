@@ -47,8 +47,8 @@ ci-tests:
 
 
 ##
-# Formats all Haskell files with fourmolu.
-format-hs:
+# Formats all Haskell files with fourmolu and lints with hlint.
+format:
     set -eo pipefail
 
     readarray -d '' FILES < <(git ls-files -z '*.hs')
@@ -57,6 +57,9 @@ format-hs:
         echo "Formatting $f..."
         fourmolu --mode inplace "$f"
     done
+
+    echo "--- Running hlint"
+    hlint .
 
 ##
 # Runs all tests.
@@ -77,9 +80,6 @@ tests:
             nix-shell -A "shellPg${pg}" ./default.nix --run "./scripts/run-tests-db-internal.sh $TARGS"
         fi
     done
-
-    echo "--- Running hlint"
-    hlint .
 
 ##
 # Runs tests 100 times, reporting how many passed and how many failed.
