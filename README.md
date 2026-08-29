@@ -77,7 +77,7 @@ Commands:
   benchmarks      Runs benchmarks with a postgresql DB listening.
   bench-single    Runs the benchmarks executable without all the CSV-producing and memory usage collecting tooling around it.
   ci-tests        Runs all tests that CI runs, exactly like CI runs them.
-  format-hs       Formats all Haskell files with fourmolu.
+  format          Formats all Haskell files with fourmolu and lints with hlint.
   tests           Runs all tests.
   tests-stress    Runs tests 100 times, reporting how many passed and how many failed.
   tests-compat    Runs hpgsql-simple-compat's tests.

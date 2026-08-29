@@ -16,7 +16,7 @@
 -- > persons :: [Person] <- query conn "SELECT * FROM persons"
 --
 -- Note that Hpgsql's `RowDecoder` does not have a `Monad` instance because that allows it to
--- type check query results and field counts even when queries return zero rows. If you need
+-- type check query results and field counts only once per query. If you need
 -- to write a row decoder that is monadic (because decoding can change depending on the values
 -- of fields), check "Hpgsql.Encoding.RowDecoderMonadic".
 module Hpgsql.Encoding

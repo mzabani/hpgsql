@@ -5,6 +5,7 @@ import Data.Text (Text)
 import DbUtils
   ( aroundConn,
     irrecoverableErrorWithMsg,
+    irrecoverableErrorWithMsgAndStmt,
     pgErrorMustContain,
     withRollback,
   )
@@ -13,7 +14,7 @@ import Hpgsql.Connection (getParameterStatus)
 import Hpgsql.Encoding (FromPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (toMonadicRowDecoder)
 import Hpgsql.Pipeline (pipelineExec, pipelineExec_, runPipeline)
-import Hpgsql.Query (mkQuery, sql)
+import Hpgsql.Query (mkQuery, sql, sqlPrep)
 import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
 import Hpgsql.Types (Only (..))
 import Streaming (Of (..))
@@ -125,17 +126,23 @@ queryMWithismatchInNumberOfColumns :: HPgConnection -> IO ()
 queryMWithismatchInNumberOfColumns conn = do
   queryWith (rowDecoder @(Bool, Bool)) conn "select 1, 2, 3"
     `shouldThrow` pgErrorMustContain "select 1, 2, 3" [(ErrorCode, "08P01"), (ErrorHumanReadableMsg, "bind message has 2 result formats but query has 3 columns")]
+  queryMWith (toMonadicRowDecoder $ rowDecoder @(Bool, Bool)) conn "select 1, 2, 3"
+    `shouldThrow` irrecoverableErrorWithMsgAndStmt "select 1, 2, 3" "Query result column types do not match expected column types"
+  queryWith (rowDecoder @(Int, Int, Int, String)) conn "select 1, 2, 3"
+    `shouldThrow` pgErrorMustContain "select 1, 2, 3" [(ErrorCode, "08P01"), (ErrorHumanReadableMsg, "bind message has 4 result formats but query has 3 columns")]
+  queryMWith (toMonadicRowDecoder $ rowDecoder @(Int, Int, Int, String)) conn "select 1, 2, 3"
+    `shouldThrow` irrecoverableErrorWithMsgAndStmt "select 1, 2, 3" "More columns expected by the row parser than found in query results. Expected 4 but got 3"
 
 queryMWithismatchInTypesOfColumns :: HPgConnection -> IO ()
 queryMWithismatchInTypesOfColumns conn = do
   queryWith (rowDecoder @(Bool, Bool)) conn "select 1, 2"
     `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+  queryMWith (toMonadicRowDecoder $ rowDecoder @(Bool, Bool)) conn "select 1, 2"
+    `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
 
 queryThatErrorsFollowedBySuccessfulQuery :: HPgConnection -> IO ()
 queryThatErrorsFollowedBySuccessfulQuery conn = do
   -- TODO: Test empty query string
-  -- TODO: Test multiple statements inside the same query string
-  -- TODO: Test error statement + empty statement + normal statement all inside the same query string
   queryWith (rowDecoder @(Only Bool)) conn "select 1/(x - 2) > 0 from generate_series(1,2) subq(x)"
     `shouldThrow` pgErrorMustContain "select 1/(x - 2) > 0 from generate_series(1,2) subq(x)" [(ErrorCode, "22012"), (ErrorHumanReadableMsg, "division by zero")]
   queryWith (rowDecoder @(Only Bool)) conn "select FALSE from generate_series(1,2) subq(x)"
@@ -163,13 +170,16 @@ wellFormedPreparedStatements conn = withRollback conn $ do
   execute_ conn "DROP TABLE xx;"
 
 preparedStatementWrongTypes :: HPgConnection -> IO ()
-preparedStatementWrongTypes conn =
-  queryWith (rowDecoder @(Int, Text)) conn "SELECT 1, 2" `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+preparedStatementWrongTypes conn = do
+  queryWith (rowDecoder @(Int, Text)) conn [sqlPrep|SELECT 1, 2|] `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+  queryMWith (toMonadicRowDecoder $ rowDecoder @(Int, Text)) conn [sqlPrep|SELECT 1, 2|] `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
 
 preparedStatementWrongTypesThrowsEvenWithZeroReturnedRows :: HPgConnection -> IO ()
-preparedStatementWrongTypesThrowsEvenWithZeroReturnedRows conn =
-  -- TODO: Test prepared statement with a query that fails the parser
-  queryWith (rowDecoder @(Int, Text)) conn "SELECT 1, 2 WHERE FALSE -- No rows still throws" `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+preparedStatementWrongTypesThrowsEvenWithZeroReturnedRows conn = do
+  queryWith (rowDecoder @(Int, Text)) conn [sqlPrep|SELECT 1, 2 WHERE FALSE -- No rows still throws|] `shouldThrow` irrecoverableErrorWithMsg "Query result column types do not match expected column types"
+  -- Monadic Row Decoder doesn't check types per query; it checks them per field per row. This
+  -- is because a monadic row decoder can change how it decodes a field depending on the values.
+  queryMWith (toMonadicRowDecoder $ rowDecoder @(Int, Text)) conn [sqlPrep|SELECT 1, 2 WHERE FALSE|] `shouldReturn` []
 
 checkCommandCounts :: HPgConnection -> IO ()
 checkCommandCounts conn = withRollback conn $ do

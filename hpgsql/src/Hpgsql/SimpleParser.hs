@@ -151,12 +151,15 @@ parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks
       ParseFail _ -> ([], idx)
 {-# INLINE parseMany #-}
 
-parseManyRows :: Parser ByteStringIdx
-parseManyRows = Parser $ \idx' bs' _kf ks -> let restIdx = go idx' bs' in ks restIdx restIdx bs'
+-- | Parses as many PG rows as there are available, returns
+-- the index/offset of the first left-unparsed byte and the
+-- number of rows parsed.
+parseManyRows :: Parser (ByteStringIdx, Int)
+parseManyRows = Parser $ \idx' bs' _kf ks -> let (restIdx, nParsed) = go idx' bs' 0 in ks (restIdx, nParsed) restIdx bs'
   where
-    go idx bs = case parseOnlyOffset takeDataRow idx bs of
-      ParseOk unconsumedIdx -> go unconsumedIdx bs
-      ParseFail _ -> idx
+    go idx bs !nParsedSoFar = case parseOnlyOffset takeDataRow idx bs of
+      ParseOk unconsumedIdx -> go unconsumedIdx bs (nParsedSoFar + 1)
+      ParseFail _ -> (idx, nParsedSoFar)
 {-# INLINE parseManyRows #-}
 
 -- | Succeeds only when the input has been fully consumed.

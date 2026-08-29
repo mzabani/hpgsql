@@ -113,7 +113,7 @@ import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
-import Control.Monad (forM, forM_, join, unless, void, when)
+import Control.Monad (forM, forM_, join, replicateM, unless, void, when)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
@@ -507,7 +507,7 @@ receiveNextMsgWithMaskedContinuation conn parser f =
     Left (msgIdentChar, mPgError) -> throw IrrecoverableHpgsqlError {hpgsqlDetails = "Could not parse postgres message with ident char " <> Text.pack (show msgIdentChar) <> ". This is an internal error in Hpgsql. Please report it.", innerException = toException <$> mPgError, relatedStatement = Nothing}
 
 data ReceiveWhat a b where
-  ReceiveDataRows :: ReceiveWhat DataRow ByteString
+  ReceiveDataRows :: ReceiveWhat DataRow (ByteString, Int)
   ReceiveArbitraryMsg :: PgMsgParser a -> (Either (Char, Maybe PostgresError) a -> STM b) -> ReceiveWhat a b
 
 -- | Masks asynchronous exceptions in between the moment the message is extracted from
@@ -586,11 +586,11 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
           let fullBuf = LBS.toStrict nowBuf
            in case Parser.parseOnly Parser.parseManyRows fullBuf of
-                Parser.ParseOk unconsumedBufferBegin | unconsumedBufferBegin.idx > 0 -> do
+                Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) | nRowsParsed > 0 -> do
                   let (msgs, unconsumedBuffer) = BS.splitAt unconsumedBufferBegin.idx fullBuf
-                  debugPrint $ "Received one or more messages with total length " ++ show (BS.length msgs)
-                  pure (LBS.fromStrict unconsumedBuffer, Just msgs)
-                _ -> handleUnexpectedMsg $ const $ pure "" -- No error when we stop receiving DataRows, only emptiness
+                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (BS.length msgs)
+                  pure (LBS.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
+                _ -> handleUnexpectedMsg $ const $ pure ("", 0) -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar fullMsg parser of
             Just msg -> do
@@ -844,7 +844,9 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
           }
       pure (Just respMsg, newState)
 
-newtype DataRows = DataRows ByteString
+-- | A sequence of all the bytes of one or more DataRow messages and the total
+-- number of DataRow messages.
+newtype DataRows = DataRows (ByteString, Int)
 
 -- | After sending one or more queries to the backend, run this function for each query to fetch that query's results.
 -- You must call the returned IO function and consume the returned Stream completely until you get to the
@@ -891,10 +893,10 @@ consumeResults conn qryId = do
       let allOtherRows =
             S.unfold
               ( \() -> do
-                  mRow <- receiveNextMsgGeneric conn ReceiveDataRows
-                  case mRow of
-                    rows | not (BS.null rows) -> pure $ Right (DataRows rows :> ())
-                    _ -> do
+                  mRow@(_, nRows) <- receiveNextMsgGeneric conn ReceiveDataRows
+                  if nRows > 0
+                    then pure $ Right (DataRows mRow :> ())
+                    else do
                       stateAfterNextMsg <- snd <$> receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
                       case stateAfterNextMsg of
                         ErrorResponseReceived _ err -> do
@@ -910,7 +912,7 @@ consumeResults conn qryId = do
           finalStream = case mDataRow of
             Nothing -> allOtherRows
             Just dr ->
-              DataRows dr.fullDataRow `S.cons` allOtherRows
+              DataRows (dr.fullDataRow, 1) `S.cons` allOtherRows
       pure (mERowDesc, finalStream)
   where
     receiveReadyForQueryIfNecessary :: WeakThreadId -> IO ()
@@ -1417,8 +1419,8 @@ consumeStreamingResults rp conn qryId = S.effect $ do
         errOrCmdComplete <-
           S.concat $
             S.mapM
-              ( \(DataRows rowColumnData) ->
-                  case Parser.parseOnly (Parser.parseMany rowparser <* Parser.endOfInput) rowColumnData of
+              ( \(DataRows (rowColumnData, nRows)) ->
+                  case Parser.parseOnly (replicateM nRows rowparser <* Parser.endOfInput) rowColumnData of
                     Parser.ParseOk rows -> pure rows
                     Parser.ParseFail err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " <> Text.pack (show err)
               )

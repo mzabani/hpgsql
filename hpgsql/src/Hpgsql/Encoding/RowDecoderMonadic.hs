@@ -5,6 +5,7 @@ module Hpgsql.Encoding.RowDecoderMonadic
   )
 where
 
+import Control.Monad (unless)
 import Data.Bifunctor (first)
 import qualified Data.List as List
 import Hpgsql.Encoding (FieldInfo, RowDecoder (..))
@@ -14,8 +15,9 @@ import qualified Hpgsql.SimpleParser as Parser
 -- You should prefer to use @Hpgsql.Encoding.RowDecoder@ (through @FromPgRow@ instances)
 -- instead of this, and use this only if your row decoder is complex enough that
 -- decoded fields can change the behaviour of other decoded fields.
--- The regular @RowDecoder@ can even type-check queries that return no results, while
--- this can't.
+-- The regular @RowDecoder@ pays the price of type-checking only once per query and can
+-- even type-check queries that return no results, while this pays the price of type-checking
+-- for every field of every row, and won't type-check zero-rows results.
 -- Look for the 'query' and 'pipeline' functions with an 'M' in them for ways to query
 -- with this kind of row decoder.
 newtype RowDecoderMonadic a = RowDecoderMonadic
@@ -43,13 +45,16 @@ instance Monad RowDecoderMonadic where
     let RowDecoderMonadic {fullRowDecoder = parserOfRemainder} = f row
     parserOfRemainder cs0 {colsLeftToParse = List.drop numColsParsed cs0.colsLeftToParse}
 
--- | Takes an Applicative row parser (which can type-check result rows before even fetching
--- any rows from the response) and transforms it into a Monadic row parser, which has no such
--- type-checking.
+-- | Takes an Applicative row parser (which type-checks result rows only once per query)
+-- and transforms it into a Monadic row parser, which is more flexible, but pays the
+-- price of type-checking every field in every row returned in queries.
 toMonadicRowDecoder :: RowDecoder a -> RowDecoderMonadic a
-toMonadicRowDecoder RowDecoder {fullRowDecoder, numExpectedColumns} = RowDecoderMonadic $ \cs -> do
+toMonadicRowDecoder RowDecoder {fullRowDecoder, numExpectedColumns, rowColumnsTypeCheck} = RowDecoderMonadic $ \cs -> do
   let numActualCols = length cs.colsLeftToParse
   case compare numActualCols numExpectedColumns of
-    EQ -> (,numExpectedColumns) <$> fullRowDecoder cs.colsLeftToParse
-    GT -> (,numExpectedColumns) <$> fullRowDecoder (List.take numExpectedColumns cs.colsLeftToParse)
-    LT -> fail $ "More number of columns expected by the row parser than found in query results. Expected " ++ show numExpectedColumns ++ " but got " ++ show numActualCols
+    LT -> fail $ "More columns expected by the row parser than found in query results. Expected " ++ show numExpectedColumns ++ " but got " ++ show numActualCols
+    _ -> do
+      let colsForNow = List.take numExpectedColumns cs.colsLeftToParse
+      let typecheckedCols = rowColumnsTypeCheck colsForNow
+      unless (all snd typecheckedCols) $ fail "Query result column types do not match expected column types"
+      (,numExpectedColumns) <$> fullRowDecoder colsForNow
