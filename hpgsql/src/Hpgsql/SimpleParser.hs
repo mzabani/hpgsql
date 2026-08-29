@@ -38,6 +38,7 @@ module Hpgsql.SimpleParser
 where
 
 import Control.Applicative (Alternative (..))
+import Control.Monad (replicateM)
 import Data.Int (Int16, Int32, Int64)
 import Data.Text (Text)
 import Foreign.Storable (Storable)
