@@ -139,10 +139,11 @@ toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ BS.creat
   copyBytes dst (Ptr (byteArrayContents# src) `plusPtr` start) len
 
 {-# INLINE unsafeToUtf8Text #-}
--- Assuming the pinned byte array contains valid UTF8 text, creates
+
+-- | Assuming the pinned byte array contains valid UTF8 text, creates
 -- returns an instance of `Text` with the same contents (but does make a copy).
 unsafeToUtf8Text :: ByteStringIdx -> Int -> PinnedByteArray -> Either String Text
-unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray _ actualLen _) = if actualLen < desiredLen then Left "Not enough bytes to convert to Text" else let !(PinnedByteArray start arrLen arr#) = toStrictN idx.idx desiredLen (fromStrict pba) in Right $ Text (ByteArray arr#) start arrLen
+unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray _ _ _) = let !(PinnedByteArray start arrLen arr#) = toStrictN idx.idx desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
 
 takePgMessageIdentAndLen :: LazyPinnedByteArray -> Maybe (Char, Int32)
 takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =
