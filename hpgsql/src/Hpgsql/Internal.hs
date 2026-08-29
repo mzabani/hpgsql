@@ -113,7 +113,7 @@ import Control.Concurrent.MVar (MVar, newMVar)
 import Control.Concurrent.STM (STM, TVar)
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), MonadThrow, SomeException, bracket, bracketOnError, finally, handleJust, mask, mask_, onException, throw, toException, tryJust)
-import Control.Monad (forM, forM_, join, unless, void, when)
+import Control.Monad (forM, forM_, join, replicateM, unless, void, when)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.ByteString.Internal (w2c)
@@ -1420,7 +1420,7 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           S.concat $
             S.mapM
               ( \(DataRows (rowColumnData, nRows)) ->
-                  case Parser.parseOnly (Parser.parseExactlyN nRows rowparser <* Parser.endOfInput) rowColumnData of
+                  case Parser.parseOnly (replicateM nRows rowparser <* Parser.endOfInput) rowColumnData of
                     Parser.ParseOk rows -> pure rows
                     Parser.ParseFail err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " <> Text.pack (show err)
               )

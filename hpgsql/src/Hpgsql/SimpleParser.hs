@@ -24,11 +24,9 @@ module Hpgsql.SimpleParser
     takeDataRow,
     parseManyRows,
     skip,
-    parseExactlyN,
   )
 where
 
-import Control.Monad (replicateM)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Int (Int16, Int32, Int64)
@@ -152,12 +150,6 @@ parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks
       ParseOk (unconsumedIdx, v) -> let (vs, rest) = go unconsumedIdx bs in (v : vs, rest)
       ParseFail _ -> ([], idx)
 {-# INLINE parseMany #-}
-
--- | Applies the supplied parser repeatedly exactly `n` times.
--- Fails if any of them fails.
-parseExactlyN :: Int -> Parser a -> Parser [a]
-parseExactlyN = replicateM
-{-# INLINE parseExactlyN #-}
 
 -- | Parses as many PG rows as there are available, returns
 -- the index/offset of the first left-unparsed byte and the
