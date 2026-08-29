@@ -388,18 +388,22 @@ decodePgFieldWithAtMost4Bytes wdec =
                   then
                     Right (Nothing, idx + 4)
                   else
-                    if fieldLenW64 <= 4
+                    if fromIntegral fieldLenW64 == pgTypeSize
                       then
                         Right (Just fieldIfNotNull, idx + 4 + fromIntegral fieldLenW64)
-                      else Left "You cannot use decodePgFieldWithAtMost4Bytes to decode fields of types potentially more than 4 bytes long"
+                      else Left "decodePgFieldWithAtMost4Bytes being used to decode field with different length than the one asked for"
           Left _ -> do
             -- This is the not-as-optimistic case, which includes:
             -- - A NULL int32 as the last field in the row
             -- - A bool/int8/int16 that is the last field in the row
             lenField <- decodeInt32BE idx bs
-            if lenField >= 0
+            if lenField == fromIntegral pgTypeSize
               then do
                 -- peek after the next 4 bytes for @a
                 fieldValue <- decodeWord (fromWordDec wdec) (idx + 4) bs endianSwap
                 Right (Just fieldValue, idx + 4 + fromIntegral lenField)
-              else Right (Nothing, idx + 4)
+              else
+                if lenField == (-1)
+                  then
+                    Right (Nothing, idx + 4)
+                  else Left "decodePgFieldWithAtMost4Bytes being used to decode field with different length than the one asked for"
