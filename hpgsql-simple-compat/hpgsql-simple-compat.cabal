@@ -1,6 +1,6 @@
 cabal-version: 2.0
 name:               hpgsql-simple-compat
-version:            0.2.0.0
+version:            0.3.0
 synopsis:           Fork of postgresql-simple implemented with hpgsql instead of postgresql-libpq.
 description:
   This is a fork of postgresql-simple that tries to preserve its API as much as possible, but
@@ -97,7 +97,7 @@ library
     , text >= 2.0 && < 2.2
     , aeson >= 2.2 && < 2.3
     , attoparsec >= 0.14 && < 0.15
-    , hpgsql >= 0.2 && < 0.3
+    , hpgsql >= 0.3 && < 0.4
     , hashable >= 1.5 && < 1.6
     , mtl >= 2.3 && < 2.4
     , time-compat >= 1.9 && < 1.10
