@@ -1414,7 +1414,14 @@ consumeStreamingResults rp conn qryId = S.effect $ do
           unless (numResultColumns == expectedNumCols) $ throwIrrecoverableErrorWithStatement qText $ "Query result contains " <> Text.pack (show numResultColumns) <> " columns but row parser expected " <> Text.pack (show expectedNumCols)
           unless (all snd typecheckedColInfos) $ throwIrrecoverableErrorWithStatement qText "Query result column types do not match expected column types"
           pure $ Parser.skip 7 *> rparser colInfos -- Skip msg ident., length, number of columns, then parse fields
-        MonadicRowDecoder (RowDecoderMonadic rparser) -> pure $ Parser.skip 7 *> fmap fst (rparser ConversionState {colsLeftToParse = colInfos})
+        MonadicRowDecoder (RowDecoderMonadic rparser) ->
+          pure $
+            Parser.skip 7 *> do
+              (row, numColsParsed) <- rparser ConversionState {colsLeftToParse = colInfos}
+              unless (numColsParsed == numResultColumns) $
+                fail $
+                  "Query result contains " ++ show numResultColumns ++ " columns but the row parser only consumed " ++ show numColsParsed
+              pure row
       pure $ do
         errOrCmdComplete <-
           S.concat $

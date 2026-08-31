@@ -133,6 +133,16 @@ queryMWithismatchInNumberOfColumns conn = do
   queryMWith (toMonadicRowDecoder $ rowDecoder @(Int, Int, Int, String)) conn "select 1, 2, 3"
     `shouldThrow` irrecoverableErrorWithMsgAndStmt "select 1, 2, 3" "More columns expected by the row parser than found in query results. Expected 4 but got 3"
 
+  -- When fetching more columns than expected
+  queryWith (rowDecoder @(Only Int)) conn "select 1, 2"
+    `shouldThrow` irrecoverableErrorWithMsg
+      "Query result contains 2 columns but row parser expected 1"
+  queryMWith
+    (toMonadicRowDecoder $ rowDecoder @(Only Int))
+    conn
+    "select 1, 2"
+    `shouldThrow` irrecoverableErrorWithMsg "Query result contains 2 columns but the row parser only consumed 1"
+
 queryMWithismatchInTypesOfColumns :: HPgConnection -> IO ()
 queryMWithismatchInTypesOfColumns conn = do
   queryWith (rowDecoder @(Bool, Bool)) conn "select 1, 2"
