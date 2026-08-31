@@ -43,7 +43,8 @@ instance Monad RowDecoderMonadic where
   RowDecoderMonadic {fullRowDecoder} >>= f = RowDecoderMonadic $ \cs0 -> do
     (row, numColsParsed) <- fullRowDecoder cs0
     let RowDecoderMonadic {fullRowDecoder = parserOfRemainder} = f row
-    parserOfRemainder cs0 {colsLeftToParse = List.drop numColsParsed cs0.colsLeftToParse}
+    (finalRow, numColsParsedByRemainder) <- parserOfRemainder cs0 {colsLeftToParse = List.drop numColsParsed cs0.colsLeftToParse}
+    pure (finalRow, numColsParsed + numColsParsedByRemainder)
 
 -- | Takes an Applicative row parser (which type-checks result rows only once per query)
 -- and transforms it into a Monadic row parser, which is more flexible, but pays the
