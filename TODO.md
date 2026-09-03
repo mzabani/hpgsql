@@ -1,0 +1,15 @@
+- Check that users can define their own types and create FromPgField instances that derive performant instances. Do they override the specialized methods? How do they do that?
+  - newtype-derived and simple `fmap`'d instances can, but instances that want to fail on some values cannot (no Monad instance for RowDecoder) and have to override the FieldDecoder.
+- Expose a `PinnedByteArray` with `toByteString` to users, move current module to PinnedByteArray.Internal
+- Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
+- Do _not_ expose new FromPgField methods. Add new EncodingInternal module, instead.
+  - Check that the non-exposed methods are safe wrt bytearray bounds access by construction, and users can't break that. If that's true, we can omit bounds checks in our row decoding, making row decoders smaller and maybe faster.
+- Some types might still not derive specialized row decoders
+- "Oh no! No colInfo here.. what do we do!?" in hpgsql-simple-compat. This might require a big rethinking of things..
+- Double-check which row encoders we want to use the inlined versions for and which we don't. Tuples?
+- Text internals usage.. is it safe? Double-check.
+- Expose in the FromPgField class two new methods.. inlined and non inlined row decoders with/without bounds checks. Use with-bounds-checks for MonadicRowDecoder, and without-bounds-checks for regular row decoder, because the latter checks type oids
+  - The specialized row decoders are already a problem here! They don't check type OIDs and can read bytes partially. We should ensure this mismatch is not possible.
+- Is `notInlinedSingleFieldRowDecoder` worth keeping? The Generically derived decoder is almost as fast. Maybe for types that aren't records it's a different story, though?
+- Check that we're not holding on to internal buffers when Record fields being materialized into aren't strict
+- Write property-based tests for PinnedByteArray functions

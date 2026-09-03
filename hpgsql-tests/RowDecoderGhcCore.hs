@@ -10,7 +10,7 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (Day, UTCTime)
 import GHC.Generics (Generic)
-import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), genericFromPgRow, singleField)
+import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), genericFromPgRow, inlinedSingleFieldRowDecoder, singleField)
 
 -- | BestCaseScenarioRecord's purpose is to have a very small row decoder in GHC Core
 -- for my own understanding/comprehension of what a RowDecoder gets compiled to
@@ -31,7 +31,7 @@ data BestCaseScenarioRecord = BestCaseScenarioRecord
   }
 
 instance FromPgRow BestCaseScenarioRecord where
-  rowDecoder = BestCaseScenarioRecord <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder
+  rowDecoder = BestCaseScenarioRecord <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
 
 -- data BenchRow = BenchRow
 --   { brId :: !Int,
