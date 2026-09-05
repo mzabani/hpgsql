@@ -14,6 +14,19 @@ This is unfair towards libpq-based libraries in the comparison because hpgsql ha
 
 The Rust (tokio-postgres) benchmark's `peak_memory_upper_bound` is measured only by heaptrack, making it a precise peak, not an upper bound.
 
+# Methodology for measuring peak memory usage
+
+Wall clock time shown in these benchmarks should be reliable as we force garbage collection inside each benchmark.
+
+Peak memory usage, however, is far trickier to measure. We use heaptrack to intercept and account for libc's allocation primitives, but the GHC runtime does not use `malloc` for its regular allocations, but does use it for ~72MB of allocations at application startup. Some of the libraries we compare to also use libpq, which uses `malloc` under the hood.
+So we use `peak_live_rts_memory + heaptrack_peak_memory - heaptrack_peak_memory_after_app_init` as the measure of peak memory for a given benchmark. This discards the initial memory allocated by the RTS regardless of what the app does, ignores extra memory used by the GC during copying (which I consider just a byproduct of memory allocation) but still accounts for memory allocated by the RTS and by libpq.
+
+The downside of this approach is that peak memories as measured by both the GHC runtime and heaptrack may be collected at different points in time, so we're effectively measuring an upper bound on peak memory allocated.
+
+This is unfair towards libpq-based libraries in the comparison because hpgsql has no libc allocations at all, so it's precise for hpgsql, but an upper bound for the others. To somewhat counter that, we also measure peak live Haskell allocated memory independently, and total Haskell allocated memory as an even more distant proxy. Together, these can help us debug whether the upper bounds might be too far off.
+
+The Rust (tokio-postgres) benchmark's `peak_memory_upper_bound` is measured only by heaptrack, making it a precise peak, not an upper bound.
+
 > [!WARNING]
 > I'm no expert using some of these libraries, so be careful interpreting results. I also welcome scrutiny and contributions.
 > Noteworthy:
