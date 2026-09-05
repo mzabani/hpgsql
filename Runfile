@@ -5,9 +5,7 @@
 benchmarks:
     set -eo pipefail
 
-    cabal build hpgsql-benchmarks
-    cargo build --release --manifest-path rust-bench/Cargo.toml
-    nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
+    nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
 
 ##
 # Runs the benchmarks executable without all the CSV-producing and memory usage collecting tooling around it.
@@ -18,11 +16,9 @@ bench-single:
     [ -n "$1" ] && BARGS=$(printf "'%s' " "${@}")
 
     if [ -n "$RUST" ]; then
-        cargo build --release --manifest-path rust-bench/Cargo.toml
-        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-rust-benchmarks-single.sh $BARGS"
+        nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-rust-benchmarks-single.sh $BARGS"
     else
-        cabal build hpgsql-benchmarks
-        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-single.sh $BARGS"
+        nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-benchmarks-single.sh $BARGS"
     fi
 
 ##

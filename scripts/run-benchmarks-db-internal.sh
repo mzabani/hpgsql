@@ -112,6 +112,10 @@ record_stream_bench=("streaming-postgresql-simple Record Stream (100000 rows, Ge
 tuple_stream_bench=("streaming-postgresql-simple Tuple Stream (100000 rows)" "postgresql-simple Tuple fold (100000 rows)" "hpgsql Tuple Stream (100000 rows)")
 copy_bench=("postgresql-simple text COPY (100000 rows)" "hpgsql copyFromS binary COPY (100000 rows)")
 
+# Compile executables
+cabal build hpgsql-benchmarks
+cargo build --release --manifest-path rust-bench/Cargo.toml
+
 # Wipe the folder, recreate it and run the benchmarks
 rm benchmark-results -rf
 mkdir benchmark-results

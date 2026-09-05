@@ -1,6 +1,6 @@
-{ pkgs, postgres, PGHOST }:
+{ pkgs, postgres, PGHOST, other-pkgs ? [] }:
 pkgs.mkShell {
-  buildInputs = [ postgres pkgs.coreutils pkgs.bash pkgs.glibcLocales pkgs.run ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.strace ];
+  buildInputs = [ postgres pkgs.coreutils pkgs.bash pkgs.glibcLocales pkgs.run ] ++ other-pkgs;
   description = "Test shell with postgres available and initializing";
   shellHook = ''
     set -eo pipefail
