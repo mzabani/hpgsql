@@ -6,6 +6,7 @@ benchmarks:
     set -eo pipefail
 
     cabal build hpgsql-benchmarks
+    cargo build --release --manifest-path rust-bench/Cargo.toml
     nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
 
 ##

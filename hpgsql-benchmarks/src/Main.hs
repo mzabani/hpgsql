@@ -34,7 +34,7 @@ import qualified Database.PostgreSQL.Simple as PGSimple
 import qualified Database.PostgreSQL.Simple.Copy as PGSimple
 import qualified Database.PostgreSQL.Simple.Streaming as StreamingPostgresSimple
 import GHC.Generics (Generic)
-import GHC.Stats (getRTSStats, max_live_bytes, max_mem_in_use_bytes)
+import GHC.Stats (getRTSStats, max_live_bytes)
 import qualified Hasql.Connection as HasqlConn
 import qualified Hasql.Connection.Setting as HasqlSetting
 import qualified Hasql.Connection.Setting.Connection as HasqlConnSetting
@@ -130,6 +130,7 @@ superForce vio = vio >>= evaluate . force
 
 bench :: (NFData a) => String -> IO a -> IO Measured
 bench name f = do
+  let numRuns = 10
   msr@Measured {..} <-
     fst
       <$> measure
@@ -139,15 +140,22 @@ bench name f = do
             runRepeatedly = \_ n -> do
               forM_ [1 .. n] $ const $ do
                 !_ <- superForce f
+                -- Let the GC work in between queries instead of
+                -- accumulating all results. This is more realistic
+                -- as applications intertwine GC and application work
                 pure ()
+              -- Benchmark results are out of scope, so any uncollected
+              -- memory should be collected below
               performBlockingMajorGC,
-            perRun = True -- If True, `runRepeatedly` is called with `n=1`. Not sure why this exists, though.
+            perRun = False -- If True, `runRepeatedly` is called with `n=1`
           }
-        10
+        numRuns
   putStrLn $
     "--- Benchmark "
       ++ name
-      ++ ": Wall time="
+      ++ " ("
+      ++ show numRuns
+      ++ " runs): Wall time="
       ++ secs measTime
       ++ ", total Haskell (does not include C heap) memory allocated="
       ++ maybe "N/A" (\v -> showFFloat (Just 1) v "") ((/ (1024 * 1024)) . fromIntegral @Int64 @Double <$> fromInt measAllocated)
@@ -248,14 +256,14 @@ main = do
             bench ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
                 PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day) pgSimpleConn sql13Simple (PGSimple.Only n)
-        it ("hpgsql Record List (" ++ show n ++ " rows)") $
+        it ("hpgsql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
           void $
             bench ("hpgsql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
               withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
                 Hpgsql.queryWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
-        it ("hasql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
+        it ("hasql Record List (" ++ show n ++ " rows)") $
           void $
-            bench ("hasql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
+            bench ("hasql Record List (" ++ show n ++ " rows)") $
               withMultipleConnections numConcurrentConnections hasqlConnect HasqlConn.release $ \hasqlConn -> do
                 result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlRecordListStmt) hasqlConn
                 either (\e -> error $ "hasql query failed: " ++ show e) pure result
@@ -303,7 +311,7 @@ main = do
           void $
             bench ("postgresql-simple Record fold (" ++ show n ++ " rows, Generically derived row decoder)") $
               withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.fold pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n) () (\() (!_ :: BenchRow) -> pure ())
+                PGSimple.fold pgSimpleConn sql17Simple (PGSimple.Only n) () (\() (!_ :: BenchRow) -> pure ())
     describe "COPY FROM STDIN" $ do
       (conn, pgSimpleConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
@@ -338,12 +346,12 @@ main = do
               void $ PGSimple.execute_ pgSimpleConn "ROLLBACK"
   performBlockingMajorGC
   statsAfter <- getRTSStats
-  let peakBefore = max_mem_in_use_bytes statsBefore
-      peakAfter = max_mem_in_use_bytes statsAfter
-      liveBefore = max_live_bytes statsBefore
+  let liveBefore = max_live_bytes statsBefore
       liveAfter = max_live_bytes statsAfter
       toMB n = showFFloat (Just 1) (fromIntegral n / (1024 * 1024) :: Double) ""
-  putStrLn $ "--- Peak memory (max_mem_in_use_bytes): " ++ toMB (peakAfter - peakBefore) ++ " M"
+  -- max_mem_in_use_bytes includes all app-init RTS allocations, live, and even during-GC-copying,
+  -- so we're not interested in them. Read about peak memory measurement methodology in BENCHMARKS.md
+  -- putStrLn $ "--- Peak memory (max_mem_in_use_bytes): " ++ toMB (peakAfter - peakBefore) ++ " M"
   putStrLn $ "--- Peak live data (max_live_bytes): " ++ toMB (liveAfter - liveBefore) ++ " M"
 
 withMultipleConnections :: Int -> IO conn -> (conn -> IO ()) -> (conn -> IO a) -> IO [a]
