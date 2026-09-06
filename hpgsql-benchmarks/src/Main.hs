@@ -182,6 +182,7 @@ main = do
 
   statsBefore <- getRTSStats
   hspecWith defaultConfig {configFormat = Just (formatterToFormat silent)} $ do
+    let n :: Int = 100_000
     let sql17 = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date, g::numeric, g::float4, g%2=0, g%2=1 FROM generate_series(1,$1) g"
         sql17Simple = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date, g::numeric, g::float4, g%2=0, g%2=1 FROM generate_series(1,?) g"
         sql13 = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,$1) g"
@@ -235,79 +236,76 @@ main = do
                   )
               )
               True
-      forM_ [100_000 :: Int] $ \n -> do
-        it ("hpgsql Tuple List (" ++ show n ++ " rows)") $
-          void $
-            bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                Hpgsql.queryWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql13 (Hpgsql.Only n))
-        it ("hasql Tuple List (" ++ show n ++ " rows)") $
-          void $
-            bench ("hasql Tuple List (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections hasqlConnect HasqlConn.release $ \hasqlConn -> do
-                result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
-                either (\e -> error $ "hasql query failed: " ++ show e) pure result
-        it ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
-          void $
-            bench ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day) pgSimpleConn sql13Simple (PGSimple.Only n)
-        it ("hpgsql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
-          void $
-            bench ("hpgsql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                Hpgsql.queryWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
-        it ("hasql Record List (" ++ show n ++ " rows)") $
-          void $
-            bench ("hasql Record List (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections hasqlConnect HasqlConn.release $ \hasqlConn -> do
-                result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlRecordListStmt) hasqlConn
-                either (\e -> error $ "hasql query failed: " ++ show e) pure result
-        it ("postgresql-simple Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
-          void $
-            bench ("postgresql-simple Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
-              withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.query @_ @BenchRow pgSimpleConn sql17Simple (PGSimple.Only n)
+      it ("hpgsql Tuple List (" ++ show n ++ " rows)") $
+        void $
+          bench ("hpgsql Tuple List (" ++ show n ++ " rows)") $
+            withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
+              Hpgsql.queryWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql13 (Hpgsql.Only n))
+      it ("hasql Tuple List (" ++ show n ++ " rows)") $
+        void $
+          bench ("hasql Tuple List (" ++ show n ++ " rows)") $
+            withMultipleConnections numConcurrentConnections hasqlConnect HasqlConn.release $ \hasqlConn -> do
+              result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlListStmt) hasqlConn
+              either (\e -> error $ "hasql query failed: " ++ show e) pure result
+      it ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
+        void $
+          bench ("postgresql-simple Tuple List (" ++ show n ++ " rows)") $
+            withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
+              PGSimple.query @_ @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day) pgSimpleConn sql13Simple (PGSimple.Only n)
+      it ("hpgsql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
+        void $
+          bench ("hpgsql Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
+            withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
+              Hpgsql.queryWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
+      it ("hasql Record List (" ++ show n ++ " rows)") $
+        void $
+          bench ("hasql Record List (" ++ show n ++ " rows)") $
+            withMultipleConnections numConcurrentConnections hasqlConnect HasqlConn.release $ \hasqlConn -> do
+              result <- HasqlSess.run (HasqlSess.statement (fromIntegral n :: Int32) hasqlRecordListStmt) hasqlConn
+              either (\e -> error $ "hasql query failed: " ++ show e) pure result
+      it ("postgresql-simple Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
+        void $
+          bench ("postgresql-simple Record List (" ++ show n ++ " rows, Generically derived row decoder)") $
+            withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
+              PGSimple.query @_ @BenchRow pgSimpleConn sql17Simple (PGSimple.Only n)
     describe "Parsing 13-column rows in streaming fashion" $ do
-      forM_ [100_000 :: Int] $ \n -> do
-        it ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
-          void $
-            bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql13 (Hpgsql.Only n))
+      it ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
+        void $
+          bench ("hpgsql Tuple Stream (" ++ show n ++ " rows)") $
+            withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
+              res <- Hpgsql.querySWith (Hpgsql.rowDecoder @(Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) conn (Hpgsql.mkQuery sql13 (Hpgsql.Only n))
+              S.effects res
+      it ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
+        void $
+          bench ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
+            withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
+              runResourceT @IO $ do
+                let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn sql13Simple (PGSimple.Only n)
                 S.effects res
-        it ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
-          void $
-            bench ("streaming-postgresql-simple Tuple Stream (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                runResourceT @IO $ do
-                  let res :: Stream (Of (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn sql13Simple (PGSimple.Only n)
-                  S.effects res
-        it ("postgresql-simple Tuple fold (" ++ show n ++ " rows)") $
-          void $
-            bench ("postgresql-simple Tuple fold (" ++ show n ++ " rows)") $
-              withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.fold pgSimpleConn sql13Simple (PGSimple.Only n) () (\() (!_ :: (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) -> pure ())
+      it ("postgresql-simple Tuple fold (" ++ show n ++ " rows)") $
+        void $
+          bench ("postgresql-simple Tuple fold (" ++ show n ++ " rows)") $
+            withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
+              PGSimple.fold pgSimpleConn sql13Simple (PGSimple.Only n) () (\() (!_ :: (Int, Day, Day, UTCTime, UTCTime, Text, Text, Double, Double, Maybe Int, Maybe Text, Maybe Double, Maybe Day)) -> pure ())
     describe "Parsing 17-column rows in streaming fashion" $ do
-      forM_ [100_000 :: Int] $ \n -> do
-        it ("hpgsql Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $
-          void $
-            bench ("hpgsql Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $ do
-              withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
-                res <- Hpgsql.querySWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
+      it ("hpgsql Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $
+        void $
+          bench ("hpgsql Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $ do
+            withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
+              res <- Hpgsql.querySWith (Hpgsql.rowDecoder @BenchRow) conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
+              S.effects res
+      it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $
+        void $
+          bench ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $
+            withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
+              runResourceT @IO $ do
+                let res :: Stream (Of BenchRow) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn sql17Simple (PGSimple.Only n)
                 S.effects res
-        it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $
-          void $
-            bench ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows, Generically derived row decoder)") $
-              withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                runResourceT @IO $ do
-                  let res :: Stream (Of BenchRow) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn sql17Simple (PGSimple.Only n)
-                  S.effects res
-        it ("postgresql-simple Record fold (" ++ show n ++ " rows, Generically derived row decoder)") $
-          void $
-            bench ("postgresql-simple Record fold (" ++ show n ++ " rows, Generically derived row decoder)") $
-              withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-                PGSimple.fold pgSimpleConn sql17Simple (PGSimple.Only n) () (\() (!_ :: BenchRow) -> pure ())
+      it ("postgresql-simple Record fold (" ++ show n ++ " rows, Generically derived row decoder)") $
+        void $
+          bench ("postgresql-simple Record fold (" ++ show n ++ " rows, Generically derived row decoder)") $
+            withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
+              PGSimple.fold pgSimpleConn sql17Simple (PGSimple.Only n) () (\() (!_ :: BenchRow) -> pure ())
     describe "COPY FROM STDIN" $ do
       (conn, pgSimpleConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo
@@ -317,29 +315,28 @@ main = do
       let createCopyBenchTable :: (IsString s) => s
           createCopyBenchTable = "CREATE UNLOGGED TABLE copy_bench (id INT4 NOT NULL, name TEXT NOT NULL, item TEXT NOT NULL, value FLOAT8 NOT NULL)"
           mkRow g = (g :: Int32, "some-text" :: Text, "some-other-text" :: Text, fromIntegral g * 1.5 :: Double)
-      forM_ [100_000 :: Int] $ \n -> do
-        it ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $
-          void $
-            bench ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $ do
-              Hpgsql.execute_ conn "BEGIN"
-              Hpgsql.execute_ conn createCopyBenchTable
-              void $
-                Hpgsql.Copy.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
-                  S.map
-                    mkRow
-                    (S.each [1 .. fromIntegral n])
-              Hpgsql.execute_ conn "ROLLBACK"
-        it ("postgresql-simple text COPY (" ++ show n ++ " rows)") $
-          void $
-            bench ("postgresql-simple text COPY (" ++ show n ++ " rows)") $ do
-              void $ PGSimple.execute_ pgSimpleConn "BEGIN"
-              void $ PGSimple.execute_ pgSimpleConn createCopyBenchTable
-              PGSimple.copy_ pgSimpleConn "COPY copy_bench FROM STDIN WITH (FORMAT CSV)"
-              forM_ (map mkRow [1 .. fromIntegral n]) $ \(g, t1, t2, g2) ->
-                PGSimple.putCopyData pgSimpleConn $
-                  BS8.pack (show g) <> "," <> encodeUtf8 t1 <> "," <> encodeUtf8 t2 <> "," <> BS8.pack (show g2) <> "\n"
-              void $ PGSimple.putCopyEnd pgSimpleConn
-              void $ PGSimple.execute_ pgSimpleConn "ROLLBACK"
+      it ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $
+        void $
+          bench ("hpgsql copyFromS binary COPY (" ++ show n ++ " rows)") $ do
+            Hpgsql.execute_ conn "BEGIN"
+            Hpgsql.execute_ conn createCopyBenchTable
+            void $
+              Hpgsql.Copy.copyFromS conn "COPY copy_bench FROM STDIN WITH (FORMAT BINARY)" $
+                S.map
+                  mkRow
+                  (S.each [1 .. fromIntegral n])
+            Hpgsql.execute_ conn "ROLLBACK"
+      it ("postgresql-simple text COPY (" ++ show n ++ " rows)") $
+        void $
+          bench ("postgresql-simple text COPY (" ++ show n ++ " rows)") $ do
+            void $ PGSimple.execute_ pgSimpleConn "BEGIN"
+            void $ PGSimple.execute_ pgSimpleConn createCopyBenchTable
+            PGSimple.copy_ pgSimpleConn "COPY copy_bench FROM STDIN WITH (FORMAT CSV)"
+            forM_ (map mkRow [1 .. fromIntegral n]) $ \(g, t1, t2, g2) ->
+              PGSimple.putCopyData pgSimpleConn $
+                BS8.pack (show g) <> "," <> encodeUtf8 t1 <> "," <> encodeUtf8 t2 <> "," <> BS8.pack (show g2) <> "\n"
+            void $ PGSimple.putCopyEnd pgSimpleConn
+            void $ PGSimple.execute_ pgSimpleConn "ROLLBACK"
   performBlockingMajorGC
   statsAfter <- getRTSStats
   let liveBefore = max_live_bytes statsBefore
