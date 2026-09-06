@@ -22,6 +22,7 @@ The Rust (tokio-postgres) benchmark's `peak_memory_upper_bound` is measured only
 > - Haskell libraries and the executable are built with -O1, not -O2.
 > - Haskell records only have strict fields in these benchmarks.
 > - The Rust and C# programs use indexed-field access, e.g. `row.get(1)`, `row.get(2)`, `row.get(3)`, ..., because that seems to be default API in the libraries we're comparing. IIUC, that API forces libraries to do strictly more work because each `row.get(N)` needs to traverse the row from the beginning up to the `Nth` field. That's not exactly apples-to-apples, but it is the only API they expose.
+> - It's possible the other Haskell libraries (hasql and postgresql-simple) use similar access patterns to the above internally. Since some benchmarks here involve queries returning up to 17 fields, these benchmarks are _arguably_ unfair towards them as well, assuming 17-field queries are not the most common in the real world.
 
 ## Running benchmarks yourself
 You can clone hpgsql and if you have Nix and direnv allowed, you should be able to run this with `run benchmarks` in the repository's root.
