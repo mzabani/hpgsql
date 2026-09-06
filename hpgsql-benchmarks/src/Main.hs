@@ -107,8 +107,8 @@ data HasqlBenchRow = HasqlBenchRow
     hbrMaybeDay :: !(Maybe Day),
     hbrNumeric :: !Scientific,
     hbrFloat :: !Float,
-    hbrBool1 :: Bool,
-    hbrBool2 :: Bool
+    hbrBool1 :: !Bool,
+    hbrBool2 :: !Bool
   }
   deriving stock (Generic, Show, Eq)
   deriving anyclass (NFData)
