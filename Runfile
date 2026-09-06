@@ -5,7 +5,7 @@
 benchmarks:
     set -eo pipefail
 
-    nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
+    nix-shell -A shellBenchmarks ./default.nix --run "nu ./scripts/run-full-benchmark-suite.nu"
 
 ##
 # Runs the benchmarks executable without all the metrics-producing and memory usage collecting tooling around it.

@@ -36,6 +36,6 @@ rec {
   shellPg16 = import ./nix/test-shell-pg.nix { inherit pkgs PGHOST; postgres = addPgExtensions pkgs.postgresql_16; };
   shellPg15 = import ./nix/test-shell-pg.nix { inherit pkgs PGHOST; postgres = addPgExtensions pkgs.postgresql_15; };
   shellPg14 = import ./nix/test-shell-pg.nix { inherit pkgs PGHOST; postgres = addPgExtensions pkgs.postgresql_14; };
-  shellBenchmarks = import ./nix/test-shell-pg.nix { inherit pkgs; PGHOST="127.0.0.1"; postgres = addPgExtensions pkgs.postgresql_18; other-pkgs = [ pkgs.cargo pkgs.rustc pkgs.dotnetCorePackages.sdk_8_0 ]; };
+  shellBenchmarks = import ./nix/test-shell-pg.nix { inherit pkgs; PGHOST="127.0.0.1"; postgres = addPgExtensions pkgs.postgresql_18; other-pkgs = [ pkgs.cargo pkgs.rustc pkgs.dotnetCorePackages.sdk_8_0 pkgs.nushell ]; };
 }
   
