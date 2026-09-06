@@ -46,6 +46,19 @@ const N: i32 = 100_000;
 const NUM_CONCURRENT_CONNECTIONS: usize = 2;
 const NUM_ROUNDS: usize = 10;
 
+// Matches Main.hs's/Program.cs's "Wall time=<value> <unit>," convention (a
+// space before the unit, unlike Duration's Debug format) so the benchmark
+// runner script can grep all three languages' output with the same pattern.
+fn format_secs(s: f64) -> String {
+    if s < 0.001 {
+        format!("{:.1} μs", s * 1_000_000.0)
+    } else if s < 1.0 {
+        format!("{:.1} ms", s * 1000.0)
+    } else {
+        format!("{:.3} s", s)
+    }
+}
+
 fn conn_string() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let host = env::var("PGHOST")?;
     let port: u16 = env::var("PGPORT")?.parse()?;
@@ -130,8 +143,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let elapsed = start.elapsed();
 
-    println!("Decoded {total_rows} rows total across {NUM_ROUNDS} rounds");
-    println!("Wall clock time (total across {NUM_ROUNDS} rounds): {elapsed:?}");
+    println!(
+        "--- Benchmark rust-tokio-postgres Record Stream: Wall time={}, decoded {total_rows} rows total across {NUM_ROUNDS} rounds.",
+        format_secs(elapsed.as_secs_f64())
+    );
 
     Ok(())
 }

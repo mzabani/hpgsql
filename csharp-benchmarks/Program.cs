@@ -96,9 +96,6 @@ GC.Collect();
 if (Environment.GetEnvironmentVariable("CSHARP_BENCH_FLOOR_ONLY") == "1")
     return;
 
-var peakMemBefore = Process.GetCurrentProcess().PeakWorkingSet64;
-var liveBytesBefore = GC.GetTotalMemory(forceFullCollection: true);
-
 // The same 17-column query as the Haskell/Rust "Record Stream" benchmarks
 // (sql17 in Main.hs / SQL17 in rust-bench/src/main.rs), so all three
 // participants in that comparison decode the same columns. Columns are read
@@ -168,17 +165,6 @@ const string sql = """
         });
     });
 }
-
-GC.Collect();
-GC.WaitForPendingFinalizers();
-GC.Collect();
-
-var peakMemAfter = Process.GetCurrentProcess().PeakWorkingSet64;
-var liveBytesAfter = GC.GetTotalMemory(forceFullCollection: true);
-
-double ToMB(long bytes) => bytes / (1024.0 * 1024.0);
-Console.WriteLine($"--- Peak memory (PeakWorkingSet64): {ToMB(peakMemAfter - peakMemBefore):F1} M");
-Console.WriteLine($"--- Peak live data (GC.GetTotalMemory): {ToMB(liveBytesAfter - liveBytesBefore):F1} M");
 
 // Row type matching the 17-column query, decoded field-by-field via
 // NpgsqlDataReader above (no ORM/reflection involved).
