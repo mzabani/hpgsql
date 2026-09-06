@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-TABLE_HEADER="| name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_haskell_memory_allocated |"
+TABLE_HEADER="| name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |"
 TABLE_SEPARATOR="|---|---|---|---|---|"
 
 # Creates the markdown table file with a header if it doesn't already exist,
@@ -74,10 +74,30 @@ run_bench() {
   done
 }
 
+# Like run_bench, but for the C# (Npgsql) benchmark executable, which has no
+# --match flag (it only runs the one benchmark it was built with). Its two
+# peak-memory columns are left as "-": .NET's GC.GetTotalMemory is a snapshot,
+# not a tracked running maximum like GHC's max_live_bytes, so it can't be
+# relied on the same way, and there's no floor-subtracted heaptrack estimate
+# to fall back on either. Only wall-clock time and total allocated bytes are
+# reported.
+run_csharp_bench() {
+  local table_file="$1"
+  local bench_name="$2"
+  init_table "$table_file"
+  echo "$bench_name"
+
+  BENCH_OUTPUT=$("${csharp_benchexe[@]}" 2>&1)
+  WALLCLOCK_TIME=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=Wall time=)[0-9.]+ \S+(?=,)' | tr -d ' ')
+  TOTAL_ALLOCATED_MB=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=memory allocated=)\S+(?= MB\.)')
+
+  echo "| $bench_name | $WALLCLOCK_TIME | - | - | ${TOTAL_ALLOCATED_MB}MB |" >> "benchmark-results/$table_file"
+}
+
 # Like run_bench, but for the Rust (tokio-postgres) benchmark executable, which
 # has no --match flag (it only runs the one benchmark it was built with) and,
 # having no GHC runtime, cannot report peak_live_rts_memory or
-# total_haskell_memory_allocated_mb -- those are left as "-" for its row.
+# total_managed_memory_allocated -- those are left as "-" for its row.
 run_rust_bench() {
   local table_file="$1"
   local bench_name="$2"
@@ -115,12 +135,19 @@ copy_bench=("postgresql-simple text COPY (100000 rows)" "hpgsql copyFromS binary
 # Compile executables
 cabal build hpgsql-benchmarks
 cargo build --release --manifest-path rust-bench/Cargo.toml
+dotnet build -c Release csharp-benchmarks/CsharpBenchmarks.csproj
 
 # Wipe the folder, recreate it and run the benchmarks
 rm benchmark-results -rf
 mkdir benchmark-results
 benchexe=$(cabal list-bin hpgsql-benchmarks)
 rust_benchexe="./rust-bench/target/release/rust-bench"
+# Invoked via `dotnet <dll>` rather than the native apphost binary directly:
+# the apphost can't locate libhostfxr.so outside of a `dotnet run`/`dotnet
+# exec` context (e.g. under nix-shell), and fails silently as far as this
+# script is concerned (its stdout carries only an error message, so
+# BENCH_OUTPUT's greps below all come up empty instead of erroring loudly).
+csharp_benchexe=(dotnet "./csharp-benchmarks/bin/Release/net8.0/CsharpBenchmarks.dll")
 
 # Measure the app-init memory floor once for the whole run: this matches no
 # benchmark name, so hspec starts up the GHC RTS and immediately exits without
@@ -133,6 +160,13 @@ APP_INIT_PEAK_MB=$(to_mb "$(heaptrack_print -f "benchmark-results/heaptrack.outd
 mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/app-init-baseline.outdat.zst"
 echo "App-init heap memory floor (subtracted from every benchmark's heaptrack peak below): ${APP_INIT_PEAK_MB} M"
 
+# Same idea as above, but for the C# binary's own CLR + Npgsql startup
+# floor, which is unrelated to (and measured separately from) GHC's floor.
+CSHARP_BENCH_FLOOR_ONLY=1 heaptrack --record-only -o "benchmark-results/heaptrack.outdat" "${csharp_benchexe[@]}" 2>/dev/null
+CSHARP_APP_INIT_PEAK_MB=$(to_mb "$(heaptrack_print -f "benchmark-results/heaptrack.outdat.zst" | grep "peak heap memory consumption:" | awk -F': ' '{print $2}')")
+mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/csharp-app-init-baseline.outdat.zst"
+echo "C# app-init heap memory floor (subtracted from the C# benchmark's heaptrack peak below): ${CSHARP_APP_INIT_PEAK_MB} M"
+
 run_bench record_list_bench.md "${record_list_bench[@]}"
 run_bench tuple_list_bench.md "${tuple_list_bench[@]}"
 run_bench record_stream_bench.md "${record_stream_bench[@]}"
@@ -142,3 +176,7 @@ run_bench copy_bench.md "${copy_bench[@]}"
 # rust-bench mirrors hpgsql's Record Stream benchmark (streamed, generically
 # decoded rows, discarded as they arrive), so its result is recorded alongside it.
 run_rust_bench record_stream_bench.md "rust-tokio-postgres Record Stream (100000 rows)"
+
+# The Npgsql benchmark also mirrors hpgsql's Record Stream benchmark (same 17
+# columns, streamed and discarded as they arrive), so it joins the same table.
+run_csharp_bench record_stream_bench.md "Npgsql Record Stream (100000 rows)"
