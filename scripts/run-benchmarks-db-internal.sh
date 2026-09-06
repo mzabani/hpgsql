@@ -3,16 +3,19 @@
 TABLE_HEADER="| name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |"
 TABLE_SEPARATOR="|---|---|---|---|---|"
 
-# Creates the markdown table file with a header if it doesn't already exist,
-# so that calling this for a file shared by multiple run_bench/run_rust_bench
-# calls (e.g. record_stream_bench.md) doesn't duplicate the header.
-init_table() {
-  local table_file="$1"
-  local path="benchmark-results/$table_file"
-  if [ ! -f "$path" ]; then
-    echo "$TABLE_HEADER" > "$path"
-    echo "$TABLE_SEPARATOR" >> "$path"
-  fi
+# Converts a fused "<number><unit>" wall-clock string (e.g. "14.69s",
+# "895.5ms", "0.2μs") into milliseconds, so rows can be sorted slowest-to-
+# fastest regardless of which unit each language picked for that row.
+time_to_ms() {
+  local val="$1"
+  awk -v v="$val" 'BEGIN {
+    n = v + 0
+    if (v ~ /ms$/) printf "%.6f", n
+    else if (v ~ /(μs|us)$/) printf "%.6f", n / 1000
+    else if (v ~ /ns$/) printf "%.6f", n / 1000000
+    else if (v ~ /s$/) printf "%.6f", n * 1000
+    else printf "%.6f", 0
+  }'
 }
 
 # Converts a heaptrack-formatted size string (e.g. "72.07M", "1.2G", "512K",
@@ -36,94 +39,98 @@ to_mb() {
   }'
 }
 
+# Renders an MB value for a table cell, or "-" when the value is absent (the
+# benchmark's own stdout didn't report that metric at all, or its heaptrack
+# peak was skipped -- see run_bench below).
+fmt_mb() {
+  if [ -n "$1" ]; then echo "${1}MB"; else echo "-"; fi
+}
+
+# Runs one benchmark and appends a row to a markdown table. All three
+# languages' benchmark executables print output in a shared shape --
+# "Wall time=<value> <unit>," and (Haskell only) "memory allocated=<value>
+# MB." -- so the same greps work across all of them, and a metric a given
+# language doesn't report simply comes up empty (rendered as "-").
+#
+# `floor` controls whether/how a heaptrack-based peak_memory_upper_bound is
+# computed (see "Methodology for measuring peak memory usage" in
+# BENCHMARKS.md):
+#   - a number: subtract this app-init floor from heaptrack's peak, then add
+#     back peak_live_rts_memory (Haskell's upper-bound estimate, since its GC
+#     heap is invisible to heaptrack).
+#   - "0": no floor to subtract, just report heaptrack's raw peak (Rust,
+#     whose default allocator is malloc-backed so heaptrack sees ~all of it).
+#   - "" (empty): skip heaptrack entirely, leave peak_memory_upper_bound as
+#     "-" (C#, whose GC.GetTotalMemory can't be trusted as a true peak the
+#     way GHC's max_live_bytes can -- see BENCHMARKS.md).
 run_bench() {
   local table_file="$1"
-  init_table "$table_file"
-  shift
-  local bench_names=("$@")
-  for b in "${bench_names[@]}"; do
-    echo "$b"
-    # Measure wall-clock time without heaptrack to avoid interference
-    # Capture stdout to extract RTS peak live data
-    BENCH_OUTPUT=$("$benchexe" --match "$b" 2>&1)
-    # criterion's `secs` picks whichever unit fits (s/ms/μs/...), with a space
-    # between the number and the unit -- keep the unit, drop the space.
-    WALLCLOCK_TIME=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=Wall time=)[0-9.]+ \S+(?=,)' | tr -d ' ')
-    PEAK_LIVE_MB=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=--- Peak live data \(max_live_bytes\): )\S+')
-    # Sanity-check signal alongside peak_memory_upper_bound_mb (see
-    # BENCHMARKS.md): cumulative bytes allocated over the whole run, as
-    # opposed to a peak. Only available on the Haskell side (GHC.Stats), since
-    # heaptrack has no comparable "total ever allocated" figure to report.
-    TOTAL_ALLOCATED_MB=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=memory allocated=)\S+(?= MB\.)')
+  local bench_name="$2"
+  local floor="$3"
+  shift 3
+  local cmd=("$@")
+  echo "$bench_name"
 
-    # Now run with heaptrack to track peak heap memory usage
-    heaptrack --record-only -o "benchmark-results/heaptrack.outdat" "$benchexe" --match "$b" 2>/dev/null
-    PEAKHEAP=$(heaptrack_print -f "benchmark-results/heaptrack.outdat.zst" | grep "peak heap memory consumption:" | awk -F': ' '{print $2}')
-    mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/$b.outdat.zst"
+  BENCH_OUTPUT=$("${cmd[@]}" 2>&1)
+  # Each language picks whichever time unit fits (s/ms/μs/...), with a space
+  # between the number and the unit -- keep the unit, drop the space.
+  WALLCLOCK_TIME=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=Wall time=)[0-9.]+ \S+(?=,)' | tr -d ' ')
+  PEAK_LIVE_MB=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=--- Peak live data \(max_live_bytes\): )\S+')
+  TOTAL_ALLOCATED_MB=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=memory allocated=)\S+(?= MB\.)')
 
-    # See "Methodology for measuring peak memory usage" in BENCHMARKS.md: this
-    # discards the app-init floor (mostly GHC's per-capability eventlog
-    # buffers, which heaptrack does see since they're malloc'd) from
-    # heaptrack's peak, then adds back the RTS's own peak live Haskell heap
-    # (which heaptrack can't see, since it's mmap'd megablocks, not malloc).
-    # It's an upper bound, not an exact simultaneous peak, since the two peaks
-    # may occur at different times.
-    ESTIMATED_PEAK_MB=$(awk -v live="$PEAK_LIVE_MB" -v heap="$(to_mb "$PEAKHEAP")" -v floor="$APP_INIT_PEAK_MB" 'BEGIN{printf "%.1f", live + heap - floor}')
+  local peak_upper_mb=""
+  if [ -n "$floor" ]; then
+    heaptrack --record-only -o "benchmark-results/heaptrack.outdat" "${cmd[@]}" 2>/dev/null
+    local peakheap
+    peakheap=$(heaptrack_print -f "benchmark-results/heaptrack.outdat.zst" | grep "peak heap memory consumption:" | awk -F': ' '{print $2}')
+    mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/$bench_name.outdat.zst"
+    peak_upper_mb=$(awk -v live="${PEAK_LIVE_MB:-0}" -v heap="$(to_mb "$peakheap")" -v floor="$floor" 'BEGIN{printf "%.1f", live + heap - floor}')
+  fi
 
-    echo "| $b | $WALLCLOCK_TIME | ${PEAK_LIVE_MB}MB | ${ESTIMATED_PEAK_MB}MB | ${TOTAL_ALLOCATED_MB}MB |" >> "benchmark-results/$table_file"
+  # Italicize hpgsql's own row so it stands out against the libraries it's
+  # compared to.
+  local display_name="$bench_name"
+  if [[ "$bench_name" == hpgsql* ]]; then
+    display_name="*$bench_name*"
+  fi
+
+  # Rows are staged with a sortable millisecond key (stripped off below by
+  # finalize_tables) rather than written straight to the table file, so the
+  # whole table can be sorted slowest-to-fastest once every contributing
+  # run_bench call (possibly across several, e.g. Haskell + Rust + C# all
+  # writing to record_stream_bench.md) has finished.
+  local row="| $display_name | ${WALLCLOCK_TIME:--} | $(fmt_mb "$PEAK_LIVE_MB") | $(fmt_mb "$peak_upper_mb") | $(fmt_mb "$TOTAL_ALLOCATED_MB") |"
+  echo -e "$(time_to_ms "$WALLCLOCK_TIME")\t$row" >> "benchmark-results/.rows-$table_file"
+}
+
+# Writes every staged table (see run_bench above) as a final markdown file,
+# sorted slowest-to-fastest by wall-clock time.
+finalize_tables() {
+  local rows_file
+  for rows_file in benchmark-results/.rows-*; do
+    [ -e "$rows_file" ] || continue
+    local table_file="${rows_file#benchmark-results/.rows-}"
+    {
+      echo "$TABLE_HEADER"
+      echo "$TABLE_SEPARATOR"
+      sort -t $'\t' -k1,1 -rn "$rows_file" | cut -f2-
+    } > "benchmark-results/$table_file"
+    rm "$rows_file"
   done
 }
 
-# Like run_bench, but for the C# (Npgsql) benchmark executable, which has no
-# --match flag (it only runs the one benchmark it was built with). Its two
-# peak-memory columns are left as "-": .NET's GC.GetTotalMemory is a snapshot,
-# not a tracked running maximum like GHC's max_live_bytes, so it can't be
-# relied on the same way, and there's no floor-subtracted heaptrack estimate
-# to fall back on either. Only wall-clock time and total allocated bytes are
-# reported.
-run_csharp_bench() {
+# Runs run_bench once per name in a group, all against the same executable
+# with the same heaptrack floor -- for the Haskell benchmark executable's
+# --match flag, which selects one benchmark per invocation.
+run_bench_group() {
   local table_file="$1"
-  local bench_name="$2"
-  init_table "$table_file"
-  echo "$bench_name"
-
-  BENCH_OUTPUT=$("${csharp_benchexe[@]}" 2>&1)
-  WALLCLOCK_TIME=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=Wall time=)[0-9.]+ \S+(?=,)' | tr -d ' ')
-  TOTAL_ALLOCATED_MB=$(echo "$BENCH_OUTPUT" | grep -oP '(?<=memory allocated=)\S+(?= MB\.)')
-
-  echo "| $bench_name | $WALLCLOCK_TIME | - | - | ${TOTAL_ALLOCATED_MB}MB |" >> "benchmark-results/$table_file"
-}
-
-# Like run_bench, but for the Rust (tokio-postgres) benchmark executable, which
-# has no --match flag (it only runs the one benchmark it was built with) and,
-# having no GHC runtime, cannot report peak_live_rts_memory or
-# total_managed_memory_allocated -- those are left as "-" for its row.
-run_rust_bench() {
-  local table_file="$1"
-  local bench_name="$2"
-  init_table "$table_file"
-  echo "$bench_name"
-
-  BENCH_OUTPUT=$("$rust_benchexe" 2>&1)
-  # Rust's Duration Debug format has no space between the number and whichever
-  # unit fits (ns/µs/ms/s), so a plain non-whitespace token captures both.
-  WALLCLOCK_TIME=$(echo "$BENCH_OUTPUT" | sed -n 's/^Wall clock time[^:]*: \(\S\+\).*/\1/p')
-
-  # Still record with heaptrack so the profile is available for manual
-  # analysis, in addition to the peak reported below.
-  heaptrack --record-only -o "benchmark-results/heaptrack.outdat" "$rust_benchexe" 2>/dev/null
-  PEAKHEAP=$(heaptrack_print -f "benchmark-results/heaptrack.outdat.zst" | grep "peak heap memory consumption:" | awk -F': ' '{print $2}')
-  mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/$bench_name.outdat.zst"
-
-  # Unlike GHC, Rust's default allocator routes through malloc, so heaptrack
-  # sees essentially all of its heap -- there's no GC-managed chunk hidden
-  # from it the way there is for the Haskell benchmarks. So this is a precise
-  # peak, not one term of an upper-bound estimate, and no floor subtraction
-  # applies (that floor is specific to the Haskell binary's own GHC RTS and
-  # linked C libraries, and has no meaning for this unrelated executable).
-  ESTIMATED_PEAK_MB=$(awk -v v="$(to_mb "$PEAKHEAP")" 'BEGIN{printf "%.1f", v}')
-
-  echo "| $bench_name | $WALLCLOCK_TIME | - | ${ESTIMATED_PEAK_MB}MB | - |" >> "benchmark-results/$table_file"
+  local floor="$2"
+  local exe="$3"
+  shift 3
+  local names=("$@")
+  for b in "${names[@]}"; do
+    run_bench "$table_file" "$b" "$floor" "$exe" --match "$b"
+  done
 }
 
 record_list_bench=("postgresql-simple Record List (100000 rows, Generically derived row decoder)" "hasql Record List (100000 rows)" "hpgsql Record List (100000 rows, Generically derived row decoder)")
@@ -158,25 +165,25 @@ csharp_benchexe=(dotnet "./csharp-benchmarks/bin/Release/net8.0/CsharpBenchmarks
 heaptrack --record-only -o "benchmark-results/heaptrack.outdat" "$benchexe" --match "no benchmark name matches this" 2>/dev/null
 APP_INIT_PEAK_MB=$(to_mb "$(heaptrack_print -f "benchmark-results/heaptrack.outdat.zst" | grep "peak heap memory consumption:" | awk -F': ' '{print $2}')")
 mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/app-init-baseline.outdat.zst"
-echo "App-init heap memory floor (subtracted from every benchmark's heaptrack peak below): ${APP_INIT_PEAK_MB} M"
+echo "App-init heap memory floor (subtracted from every Haskell benchmark's heaptrack peak below): ${APP_INIT_PEAK_MB} M"
 
-# Same idea as above, but for the C# binary's own CLR + Npgsql startup
-# floor, which is unrelated to (and measured separately from) GHC's floor.
-CSHARP_BENCH_FLOOR_ONLY=1 heaptrack --record-only -o "benchmark-results/heaptrack.outdat" "${csharp_benchexe[@]}" 2>/dev/null
-CSHARP_APP_INIT_PEAK_MB=$(to_mb "$(heaptrack_print -f "benchmark-results/heaptrack.outdat.zst" | grep "peak heap memory consumption:" | awk -F': ' '{print $2}')")
-mv "benchmark-results/heaptrack.outdat.zst" "benchmark-results/csharp-app-init-baseline.outdat.zst"
-echo "C# app-init heap memory floor (subtracted from the C# benchmark's heaptrack peak below): ${CSHARP_APP_INIT_PEAK_MB} M"
-
-run_bench record_list_bench.md "${record_list_bench[@]}"
-run_bench tuple_list_bench.md "${tuple_list_bench[@]}"
-run_bench record_stream_bench.md "${record_stream_bench[@]}"
-run_bench tuple_stream_bench.md "${tuple_stream_bench[@]}"
-run_bench copy_bench.md "${copy_bench[@]}"
+run_bench_group record_list_bench.md "$APP_INIT_PEAK_MB" "$benchexe" "${record_list_bench[@]}"
+run_bench_group tuple_list_bench.md "$APP_INIT_PEAK_MB" "$benchexe" "${tuple_list_bench[@]}"
+run_bench_group record_stream_bench.md "$APP_INIT_PEAK_MB" "$benchexe" "${record_stream_bench[@]}"
+run_bench_group tuple_stream_bench.md "$APP_INIT_PEAK_MB" "$benchexe" "${tuple_stream_bench[@]}"
+run_bench_group copy_bench.md "$APP_INIT_PEAK_MB" "$benchexe" "${copy_bench[@]}"
 
 # rust-bench mirrors hpgsql's Record Stream benchmark (streamed, generically
-# decoded rows, discarded as they arrive), so its result is recorded alongside it.
-run_rust_bench record_stream_bench.md "rust-tokio-postgres Record Stream (100000 rows)"
+# decoded rows, discarded as they arrive), so its result is recorded alongside
+# it. floor="0": no app-init floor to subtract, just heaptrack's raw peak,
+# since Rust's default allocator is malloc-backed and heaptrack sees ~all of
+# its heap (see BENCHMARKS.md).
+run_bench record_stream_bench.md "rust-tokio-postgres Record Stream (100000 rows)" "0" "$rust_benchexe"
 
 # The Npgsql benchmark also mirrors hpgsql's Record Stream benchmark (same 17
-# columns, streamed and discarded as they arrive), so it joins the same table.
-run_csharp_bench record_stream_bench.md "Npgsql Record Stream (100000 rows)"
+# columns, streamed and discarded as they arrive), so it joins the same
+# table. floor="": heaptrack is skipped entirely, leaving both memory columns
+# as "-" (see BENCHMARKS.md).
+run_bench record_stream_bench.md "Npgsql Record Stream (100000 rows)" "" "${csharp_benchexe[@]}"
+
+finalize_tables
