@@ -230,6 +230,7 @@ def main [] {
     {name: "postgresql-simple Record List (100000 rows, Generically derived row decoder)", lang: "Haskell"}
     {name: "hasql Record List (100000 rows)", lang: "Haskell"}
     {name: "hpgsql Record List (100000 rows, Generically derived row decoder)", lang: "Haskell"}
+    {name: "hpgsql Record List (100000 rows, fully inlined row decoder)", lang: "Haskell"}
     {name: "rust-tokio-postgres Record List (100000 rows)", lang: "Rust"}
     {name: "Npgsql Record List (100000 rows)", lang: "Csharp"}
   ]
@@ -245,6 +246,7 @@ def main [] {
     {name: "streaming-postgresql-simple Record Stream (100000 rows, Generically derived row decoder)", lang: "Haskell"}
     {name: "postgresql-simple Record fold (100000 rows, Generically derived row decoder)", lang: "Haskell"}
     {name: "hpgsql Record Stream (100000 rows, Generically derived row decoder)", lang: "Haskell"}
+    {name: "hpgsql Record Stream (100000 rows, fully inlined row decoder)", lang: "Haskell"}
     {name: "rust-tokio-postgres Record Stream (100000 rows)", lang: "Rust"}
     {name: "Npgsql Record Stream (100000 rows)", lang: "Csharp"}
   ]
