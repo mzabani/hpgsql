@@ -89,13 +89,6 @@ GC.Collect();
 GC.WaitForPendingFinalizers();
 GC.Collect();
 
-// Used to measure this binary's own app-init memory floor (CLR + Npgsql JIT +
-// warmup connection), mirroring how the Haskell benchmark executable's floor
-// is measured via `--match "no benchmark name matches this"`: exit here,
-// after warmup but before the timed benchmark runs.
-if (Environment.GetEnvironmentVariable("CSHARP_BENCH_FLOOR_ONLY") == "1")
-    return;
-
 // The same 17-column query as the Haskell/Rust "Record Stream" benchmarks
 // (sql17 in Main.hs / SQL17 in rust-bench/src/main.rs), so all three
 // participants in that comparison decode the same columns. Columns are read
@@ -121,8 +114,57 @@ const string sql = """
     FROM generate_series(1, @n) g
     """;
 
+BenchRow ReadBenchRow(NpgsqlDataReader reader) => new()
 {
-    const int n = 100_000;
+    g = reader.GetInt32(0),
+    date1 = reader.GetFieldValue<DateOnly>(1),
+    date2 = reader.GetFieldValue<DateOnly>(2),
+    timestamp1 = reader.GetFieldValue<DateTime>(3),
+    timestamp2 = reader.GetFieldValue<DateTime>(4),
+    text1 = reader.GetString(5),
+    text2 = reader.GetString(6),
+    double1 = reader.GetDouble(7),
+    double2 = reader.GetDouble(8),
+    maybe_int = reader.IsDBNull(9) ? null : reader.GetInt32(9),
+    maybe_text = reader.IsDBNull(10) ? null : reader.GetString(10),
+    maybe_double = reader.IsDBNull(11) ? null : reader.GetDouble(11),
+    maybe_date = reader.IsDBNull(12) ? null : reader.GetFieldValue<DateOnly>(12),
+    numeric1 = reader.GetFieldValue<decimal>(13),
+    float1 = reader.GetFloat(14),
+    bool1 = reader.GetBoolean(15),
+    bool2 = reader.GetBoolean(16),
+};
+
+// Selects which benchmark to run, mirroring the Haskell executable's
+// --match flag: the runner script passes the target row's own name (e.g.
+// "Npgsql Record List (100000 rows)") as args[0].
+var which = args.Length > 0 ? args[0] : "Npgsql Record Stream (100000 rows)";
+
+const int n = 100_000;
+
+if (which.Contains("Record List"))
+{
+    await Bench($"Npgsql Record List ({n} rows)", async () =>
+    {
+        await WithMultipleConnections(NumConcurrentConnections, async conn =>
+        {
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("n", n);
+            await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
+            var rows = new List<BenchRow>();
+            while (await reader.ReadAsync())
+            {
+                rows.Add(ReadBenchRow(reader));
+            }
+            // Returning only the count -- not `rows` itself -- keeps the
+            // list from escaping this closure, allowing GC to run exactly
+            // like in the Haskell benchmark.
+            return rows.Count;
+        });
+    });
+}
+else
+{
     await Bench($"Npgsql Record Stream ({n} rows)", async () =>
     {
         await WithMultipleConnections(NumConcurrentConnections, async conn =>
@@ -132,34 +174,14 @@ const string sql = """
             // SequentialAccess streams the reader forward-only without
             // buffering whole rows, the closest equivalent to the Haskell
             // streaming test (and to rust-bench's query_raw). Columns must be
-            // read in increasing ordinal order under this mode, which the
-            // BenchRow construction below does.
+            // read in increasing ordinal order under this mode, which
+            // ReadBenchRow does.
             await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SequentialAccess);
             while (await reader.ReadAsync())
             {
-                var row = new BenchRow
-                {
-                    g = reader.GetInt32(0),
-                    date1 = reader.GetFieldValue<DateOnly>(1),
-                    date2 = reader.GetFieldValue<DateOnly>(2),
-                    timestamp1 = reader.GetFieldValue<DateTime>(3),
-                    timestamp2 = reader.GetFieldValue<DateTime>(4),
-                    text1 = reader.GetString(5),
-                    text2 = reader.GetString(6),
-                    double1 = reader.GetDouble(7),
-                    double2 = reader.GetDouble(8),
-                    maybe_int = await reader.IsDBNullAsync(9) ? null : reader.GetInt32(9),
-                    maybe_text = await reader.IsDBNullAsync(10) ? null : reader.GetString(10),
-                    maybe_double = await reader.IsDBNullAsync(11) ? null : reader.GetDouble(11),
-                    maybe_date = await reader.IsDBNullAsync(12) ? null : reader.GetFieldValue<DateOnly>(12),
-                    numeric1 = reader.GetFieldValue<decimal>(13),
-                    float1 = reader.GetFloat(14),
-                    bool1 = reader.GetBoolean(15),
-                    bool2 = reader.GetBoolean(16),
-                };
                 // Discard the row as it arrives instead of collecting it,
                 // same as hpgsql's/rust-bench's streaming benchmarks.
-                _ = row;
+                _ = ReadBenchRow(reader);
             }
             return 0;
         });

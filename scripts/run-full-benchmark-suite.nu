@@ -1,5 +1,11 @@
 #!/usr/bin/env nu
 
+# This file has been fully written by Claude. I reviewed it only quickly,
+# but the outcomes of running this have been compared to the outcomes of the
+# previous script and they all matched very closely after the rewrite.
+# Still, should you find anything weird here, assume it wasn't closely checked.
+# I left Claude's awkwardly written and too long comments as is, too.
+
 const TABLE_HEADER = "| name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |"
 const TABLE_SEPARATOR = "|---|---|---|---|---|"
 
@@ -162,14 +168,23 @@ def run-bench [
 # dispatching on its language -- this is the one place that knows how each
 # language's executable is invoked and how its peak_memory_upper_bound
 # should be computed (see run-bench's doc comment for what `floor` means).
+# Rust has a separate compiled binary per benchmark (no --match flag exists),
+# while C# has one binary that picks its benchmark from args[0] (mirroring
+# Haskell's --match) -- both are selected here by checking the entry's name,
+# same convention in both places.
 def bench-invocation [
   entry: record<name: string, lang: string>
-  exes: record<haskell: string, rust: string, csharp: string, haskell_floor: float>
+  exes: record<haskell: string, rust_record_list: string, rust_record_stream: string, csharp: string, haskell_floor: float>
 ]: nothing -> record<program: string, args: list<string>, floor: any> {
+  let is_record_list = ($entry.name | str contains "Record List")
   match $entry.lang {
     "Haskell" => {program: $exes.haskell, args: ["--match", $entry.name], floor: $exes.haskell_floor}
-    "Rust" => {program: $exes.rust, args: [], floor: 0.0}
-    "Csharp" => {program: "dotnet", args: [$exes.csharp], floor: null}
+    "Rust" => {
+      program: (if $is_record_list { $exes.rust_record_list } else { $exes.rust_record_stream })
+      args: []
+      floor: 0.0
+    }
+    "Csharp" => {program: "dotnet", args: [$exes.csharp, $entry.name], floor: null}
     _ => (error make {msg: $"unknown benchmark language: ($entry.lang)"})
   }
 }
@@ -180,7 +195,7 @@ def bench-invocation [
 # record_stream_bench) share one run-bench-group call instead of needing a
 # separate run-bench call per language.
 def run-bench-group [
-  exes: record<haskell: string, rust: string, csharp: string, haskell_floor: float>
+  exes: record<haskell: string, rust_record_list: string, rust_record_stream: string, csharp: string, haskell_floor: float>
   entries: list<record<name: string, lang: string>>
 ]: nothing -> list {
   $entries | each {|e|
@@ -207,10 +222,16 @@ def write-table [path: string, results: list]: nothing -> nothing {
 }
 
 def main [] {
+  # rust-bench and the Npgsql benchmark both mirror hpgsql's Record List
+  # benchmark (same 17 columns, materialized into each language's idiomatic
+  # growable list -- Vec<BenchRow> / List<BenchRow> -- instead of streamed
+  # and discarded), so their results join this same table.
   let record_list_bench = [
     {name: "postgresql-simple Record List (100000 rows, Generically derived row decoder)", lang: "Haskell"}
     {name: "hasql Record List (100000 rows)", lang: "Haskell"}
     {name: "hpgsql Record List (100000 rows, Generically derived row decoder)", lang: "Haskell"}
+    {name: "rust-tokio-postgres Record List (100000 rows)", lang: "Rust"}
+    {name: "Npgsql Record List (100000 rows)", lang: "Csharp"}
   ]
   let tuple_list_bench = [
     {name: "postgresql-simple Tuple List (100000 rows)", lang: "Haskell"}
@@ -246,7 +267,8 @@ def main [] {
   rm -rf benchmark-results
   mkdir benchmark-results
   let benchexe = (cabal list-bin hpgsql-benchmarks | str trim)
-  let rust_benchexe = "./rust-bench/target/release/rust-bench"
+  let rust_record_list_benchexe = "./rust-bench/target/release/record_list"
+  let rust_record_stream_benchexe = "./rust-bench/target/release/record_stream"
   # Invoked via `dotnet <dll>` rather than the native apphost binary
   # directly: the apphost can't locate libhostfxr.so outside of a `dotnet
   # run`/`dotnet exec` context (e.g. under nix-shell), and fails silently as
@@ -268,7 +290,8 @@ def main [] {
 
   let exes = {
     haskell: $benchexe
-    rust: $rust_benchexe
+    rust_record_list: $rust_record_list_benchexe
+    rust_record_stream: $rust_record_stream_benchexe
     csharp: $csharp_dll
     haskell_floor: $app_init_peak_mb
   }

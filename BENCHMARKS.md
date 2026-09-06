@@ -1,5 +1,5 @@
 # Benchmarks preface
-hpgsql's repository contains a small benchmark suite that compares hpgsql to postgresql-simple, hasql, and streaming-postgresql-simple. It also compares hpgsql's streaming benchmark against equivalent standalone benchmarks written in Rust (tokio-postgres) and C# (Npgsql).
+hpgsql's repository contains a small benchmark suite that compares hpgsql to postgresql-simple, hasql, and streaming-postgresql-simple, and for some benchmarks compares against equivalent programs written in Rust (tokio-postgres) and C# (Npgsql).
 
 # Methodology for measuring peak memory usage
 
@@ -20,7 +20,8 @@ The Rust (tokio-postgres) benchmark's `peak_memory_upper_bound` is measured only
 > - hpgsql's advantage wanes if the same benchmarks run with a higher number of concurrent connections/queries. This might indicate the bottleneck moves to networking and/or postgres, but it might indicate hpgsql gets worse comparatively with more connections. I don't know which it is.
 > - These benchmarks were taken on non-encrypted TCP socket postgres connections, with Linux amd64, 32GB RAM.
 > - Haskell libraries and the executable are built with -O1, not -O2.
-> - Haskell records only have strict fields.
+> - Haskell records only have strict fields in these benchmarks.
+> - The Rust and C# programs use indexed-field access, e.g. `row.get(1)`, `row.get(2)`, `row.get(3)`, ..., because that seems to be default API in the libraries we're comparing. IIUC, that API forces libraries to do strictly more work because each `row.get(N)` needs to traverse the row from the beginning up to the `Nth` field. That's not exactly apples-to-apples, but it is the only API they expose.
 
 ## Running benchmarks yourself
 You can clone hpgsql and if you have Nix and direnv allowed, you should be able to run this with `run benchmarks` in the repository's root.
@@ -43,13 +44,15 @@ Results are written as markdown tables (one per `benchmark-results/*.md` file). 
 
 This runs with 2 concurrent queries, 10 times over:
 
-This benchmark is unfair towards both hpgsql and postgresql-simple because the row decoder is Generically derived for them while it is hand-written for hasql.
+This benchmark is unfair towards both hpgsql and postgresql-simple (compared to hasql) because the row decoder is Generically derived for them while it is hand-written for hasql.
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple Record List (100000 rows, Generically derived row decoder) | 14.77s | 138.4MB | 306.5MB | 49596.1MB |
-| hasql Record List (100000 rows) | 8.668s | 190.0MB | 376.3MB | 14422.7MB |
-| *hpgsql Record List (100000 rows, Generically derived row decoder)* | 4.137s | 140.5MB | 140.5MB | 14967.6MB |
+| postgresql-simple Record List (100000 rows, Generically derived row decoder) | 14.23s | 138.4MB | 307.1MB | 49596.2MB |
+| hasql Record List (100000 rows) | 8.689s | 196.0MB | 382.3MB | 14422.7MB |
+| *hpgsql Record List (100000 rows, Generically derived row decoder)* | 4.023s | 130.6MB | 130.6MB | 14966.6MB |
+| Npgsql Record List (100000 rows) | 1.019s | - | - | 481.6MB |
+| rust-tokio-postgres Record List (100000 rows) | 941.2ms | - | 50.2MB | - |
 
 ### Materializing 100_000 rows with 13 columns each into a List of Tuples
 
@@ -57,40 +60,39 @@ This runs with 2 concurrent queries, 10 times over:
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple Tuple List (100000 rows) | 14.09s | 139.6MB | 210.6MB | 43243.6MB |
-| hasql Tuple List (100000 rows) | 7.933s | 197.5MB | 338.3MB | 9841.6MB |
-| *hpgsql Tuple List (100000 rows)* | 4.071s | 150.9MB | 150.9MB | 9981.4MB |
+| postgresql-simple Tuple List (100000 rows) | 14.33s | 148.2MB | 219.3MB | 43243.4MB |
+| hasql Tuple List (100000 rows) | 8.056s | 201.0MB | 341.8MB | 9841.6MB |
+| *hpgsql Tuple List (100000 rows)* | 4.001s | 147.3MB | 147.3MB | 9983.9MB |
 
 ### Streaming 100_000 rows with 17 columns as Records
 
 This runs with 2 concurrent queries, 10 times over.
 
-This benchmark is unfair towards both hpgsql and postgresql-simple because the row decoder is Generically derived for them while it is hand-written for hasql. The C# row is decoded field-by-field from a raw `NpgsqlDataReader` (no ORM/reflection involved), comparable in spirit to hasql's and rust-bench's hand-written decoders.
-
-However, Hpgsql's implementation streams directly from the socket while the others use cursors, so
-it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
-cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
-
-| name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
-|---|---|---|---|---|
-| streaming-postgresql-simple Record Stream (100000 rows, Generically derived row decoder) | 16.43s | 0.0MB | 1.2MB | 62278.5MB |
-| postgresql-simple Record fold (100000 rows, Generically derived row decoder) | 16.13s | 0.0MB | 34.0MB | 48920.6MB |
-| *hpgsql Record Stream (100000 rows, Generically derived row decoder)* | 1.612s | 0.3MB | 0.3MB | 14316.7MB |
-| Npgsql Record Stream (100000 rows) | 1.049s | - | - | 441.3MB |
-| rust-tokio-postgres Record Stream (100000 rows) | 890.0ms | - | 0.4MB | - |
-
-### Streaming 100_000 rows with 13 columns as Tuples
-
-This runs with 2 concurrent queries, 10 times over.
 Hpgsql's implementation streams directly from the socket while the others use cursors, so
 it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
 cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| streaming-postgresql-simple Tuple Stream (100000 rows) | 13.33s | 0.0MB | 1.2MB | 55905.7MB |
-| postgresql-simple Tuple fold (100000 rows) | 13.06s | 0.0MB | 10.9MB | 42538.0MB |
-| *hpgsql Tuple Stream (100000 rows)* | 788.5ms | 0.3MB | 0.3MB | 8267.4MB |
+| postgresql-simple Record fold (100000 rows, Generically derived row decoder) | 16.20s | 0.0MB | 34.3MB | 48921.4MB |
+| streaming-postgresql-simple Record Stream (100000 rows, Generically derived row decoder) | 16.13s | 0.0MB | 1.2MB | 62278.5MB |
+| *hpgsql Record Stream (100000 rows, Generically derived row decoder)* | 1.592s | 0.3MB | 0.3MB | 14318.5MB |
+| Npgsql Record Stream (100000 rows) | 1.034s | - | - | 441.9MB |
+| rust-tokio-postgres Record Stream (100000 rows) | 876.1ms | - | 0.4MB | - |
+
+### Streaming 100_000 rows with 13 columns as Tuples
+
+This runs with 2 concurrent queries, 10 times over.
+
+Hpgsql's implementation streams directly from the socket while the others use cursors, so
+it might not be a fair comparison in terms of implementation (e.g. you can advance multiple
+cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
+
+| name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
+|---|---|---|---|---|
+| streaming-postgresql-simple Tuple Stream (100000 rows) | 13.23s | 0.0MB | 1.3MB | 55905.7MB |
+| postgresql-simple Tuple fold (100000 rows) | 12.95s | 0.0MB | 12.3MB | 42538.1MB |
+| *hpgsql Tuple Stream (100000 rows)* | 774.3ms | 0.3MB | 0.3MB | 8270.3MB |
 
 ### COPY FROM STDIN
 
@@ -98,5 +100,5 @@ This compares hpgsql's binary copy to a `forM` loop writing text rows.
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple text COPY (100000 rows) | 1.368s | 3.8MB | 3.8MB | 4779.0MB |
-| *hpgsql copyFromS binary COPY (100000 rows)* | 986.7ms | 10.0MB | 10.0MB | 2358.2MB |
+| postgresql-simple text COPY (100000 rows) | 1.377s | 2.2MB | 2.2MB | 4779.1MB |
+| *hpgsql copyFromS binary COPY (100000 rows)* | 944.4ms | 9.3MB | 9.3MB | 2358.2MB |
