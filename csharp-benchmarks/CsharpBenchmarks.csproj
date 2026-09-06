@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Console apps default to Workstation GC, which is tuned for low
+         latency on a single heap rather than throughput; Server GC (one
+         heap per core, more parallel collection) is the standard choice for
+         a throughput benchmark like this one, and is what a real deployed
+         .NET server would run with. Tiered compilation's default Tier0
+         "quick JIT" pass is also disabled so the benchmarked code runs
+         fully-optimized from the first call, comparable to Rust/GHC's
+         ahead-of-time compiled code, rather than only reaching full
+         optimization after roughly 30 calls per method. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="8.0.*" />
+  </ItemGroup>
+
+</Project>

@@ -75,7 +75,7 @@ Commands:
   help            (builtin) Show help for a command
   version         (builtin) Show run version
   benchmarks      Runs benchmarks with a postgresql DB listening.
-  bench-single    Runs the benchmarks executable without all the CSV-producing and memory usage collecting tooling around it.
+  bench-single    Runs the benchmarks executable without all the metrics-producing and memory usage collecting tooling around it.
   ci-tests        Runs all tests that CI runs, exactly like CI runs them.
   format          Formats all Haskell files with fourmolu and lints with hlint.
   tests           Runs all tests.

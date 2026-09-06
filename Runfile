@@ -8,8 +8,9 @@ benchmarks:
     nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
 
 ##
-# Runs the benchmarks executable without all the CSV-producing and memory usage collecting tooling around it.
+# Runs the benchmarks executable without all the metrics-producing and memory usage collecting tooling around it.
 # OPTION RUST --rust Run the Rust written tokio-postgres benchmarks instead of the Haskell benchmarks
+# OPTION CSHARP --csharp Run the C# written Npgsql benchmarks instead of the Haskell benchmarks
 bench-single:
     set -eo pipefail
 
@@ -17,6 +18,8 @@ bench-single:
 
     if [ -n "$RUST" ]; then
         nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-rust-benchmarks-single.sh $BARGS"
+    elif [ -n "$CSHARP" ]; then
+        nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-csharp-benchmarks-single.sh $BARGS"
     else
         nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-benchmarks-single.sh $BARGS"
     fi
