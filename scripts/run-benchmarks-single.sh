@@ -1,2 +1,3 @@
 #!/usr/bin/env bash
-$(cabal list-bin -O1 hpgsql-benchmarks) "$@"
+cabal build hpgsql-benchmarks
+$(cabal list-bin hpgsql-benchmarks) "$@"

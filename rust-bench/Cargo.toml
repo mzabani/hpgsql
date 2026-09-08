@@ -1,0 +1,11 @@
+[package]
+name = "rust-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+chrono = "0.4"
+rust_decimal = { version = "1.42", features = ["db-postgres"] }
+futures-util = "0.3"

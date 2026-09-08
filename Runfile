@@ -5,23 +5,23 @@
 benchmarks:
     set -eo pipefail
 
-    cabal build hpgsql-benchmarks
-    nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-db-internal.sh"
+    nix-shell -A shellBenchmarks ./default.nix --run "nu ./scripts/run-full-benchmark-suite.nu"
 
 ##
-# Runs the benchmarks executable without all the CSV-producing and memory usage collecting tooling around it.
-# OPTION NIX --nix Use a Nix-built test executable instead of compiling with cabal in the user's shell.
+# Runs the benchmarks executable without all the metrics-producing and memory usage collecting tooling around it.
+# OPTION RUST --rust Run the Rust written tokio-postgres benchmarks instead of the Haskell benchmarks
+# OPTION CSHARP --csharp Run the C# written Npgsql benchmarks instead of the Haskell benchmarks
 bench-single:
     set -eo pipefail
 
     [ -n "$1" ] && BARGS=$(printf "'%s' " "${@}")
 
-    if [ -n "$NIX" ]; then
-        nix-build -A hpgsql-benchmarks -o local/hpgsql-benchmarks
-        nix-shell -A shellPg18 ./default.nix --run "./local/hpgsql-benchmarks/bin/hpgsql-benchmarks $BARGS"
+    if [ -n "$RUST" ]; then
+        nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-rust-benchmarks-single.sh $BARGS"
+    elif [ -n "$CSHARP" ]; then
+        nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-csharp-benchmarks-single.sh $BARGS"
     else
-        cabal build hpgsql-benchmarks
-        nix-shell -A shellPg18 ./default.nix --run "./scripts/run-benchmarks-single.sh $BARGS"
+        nix-shell -A shellBenchmarks ./default.nix --run "./scripts/run-benchmarks-single.sh $BARGS"
     fi
 
 ##

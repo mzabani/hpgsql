@@ -51,11 +51,11 @@ You should start by swapping all of "postgresql-simple", "postgresql-libpq", and
 
 ## Performance
 
-Some benchmarks show materializing large query results with hpgsql takes 28-32% the time postgresql-simple takes, and 55-62% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
+Some benchmarks show materializing large query results with hpgsql takes 28% the time postgresql-simple takes, and 51% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
 
 When comparing hpgsql's Stream querying, hpgsql takes 7-11% the time of both [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
 
-hpgsql's binary COPY runs in ~50% the time of postgresql-simple's textual COPY.
+hpgsql's binary COPY runs in ~68% the time of postgresql-simple's textual COPY.
 
 Peak allocated memory is harder to analyze.
 
@@ -75,7 +75,7 @@ Commands:
   help            (builtin) Show help for a command
   version         (builtin) Show run version
   benchmarks      Runs benchmarks with a postgresql DB listening.
-  bench-single    Runs the benchmarks executable without all the CSV-producing and memory usage collecting tooling around it.
+  bench-single    Runs the benchmarks executable without all the metrics-producing and memory usage collecting tooling around it.
   ci-tests        Runs all tests that CI runs, exactly like CI runs them.
   format          Formats all Haskell files with fourmolu and lints with hlint.
   tests           Runs all tests.
