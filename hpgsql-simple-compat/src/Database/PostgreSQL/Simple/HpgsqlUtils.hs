@@ -95,15 +95,9 @@ type FieldParser a = Field -> Maybe ByteString -> Conversion a
 toHpgsqlFieldDecoder :: FieldParser a -> FieldDecoder a
 toHpgsqlFieldDecoder fp =
   FieldDecoder
-    { fieldValueDecoder = \colInfo bs ->
-        let valConv = fp colInfo (Just bs)
+    { fieldValueDecoder = \colInfo mbs ->
+        let valConv = fp colInfo mbs
          in case runConversion valConv colInfo.encodingContext of
-              Ok v -> Right v
-              Errors errs -> Left (show errs),
-      decodesSqlNullTo =
-        let valConv = fp (error "Oh no! No colInfo here.. what do we do!?") Nothing
-            encCtx = error "We could fake an EncodingContext, at least. TODO."
-         in case runConversion valConv encCtx of
               Ok v -> Right v
               Errors errs -> Left (show errs),
       allowedPgTypes = const True -- No way to check if types are valid ahead of time
@@ -111,13 +105,9 @@ toHpgsqlFieldDecoder fp =
 
 fromHpgsqlFieldDecoder :: FieldDecoder a -> FieldParser a
 fromHpgsqlFieldDecoder dec = \f mbs -> Conversion $ \_encCtx ->
-  case mbs of
-    Nothing -> case dec.decodesSqlNullTo of
-      Left err -> Errors [toException $ userError $ show err]
-      Right v -> Ok v
-    Just bs -> case dec.fieldValueDecoder f bs of
-      Right v -> Ok v
-      Left err -> Errors [toException $ userError $ show err]
+  case dec.fieldValueDecoder f mbs of
+    Right v -> Ok v
+    Left err -> Errors [toException $ userError $ show err]
 
 -- | Given a Hpgsql query, returns the text format with question marks
 -- for query arguments and a row object. With both, you can call

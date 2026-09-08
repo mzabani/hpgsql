@@ -95,8 +95,9 @@ instance FromPgField PgJson where
               -- jsonb has a byte prepended to the contents and json does not
               !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
              in
-              \bs -> Right $ PgJson $ fixJsonb (PBA.toByteString bs),
-        decodesSqlNullTo = Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
+              \case
+                Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls"
+                Just bs -> Right $ PgJson $ fixJsonb bs,
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
   {-# INLINE notConstFieldDecoder #-}
@@ -127,10 +128,11 @@ instance (FromJSON a) => FromPgField (Aeson a) where
               -- jsonb has a byte prepended to the contents and json does not
               !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
              in
-              \bs -> case Aeson.decodeStrict $ fixJsonb (PBA.toByteString bs) of
-                Just v -> Right $ Aeson v
-                Nothing -> Left "Failed to decode the postgres JSON value into your `Aeson a` type with aeson",
-        decodesSqlNullTo = Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
+              \case
+                Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls"
+                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                  Just v -> Right $ Aeson v
+                  Nothing -> Left "Failed to decode the postgres JSON value into your `Aeson a` type with aeson",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
   {-# INLINE notConstFieldDecoder #-}

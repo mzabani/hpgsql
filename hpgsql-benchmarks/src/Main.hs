@@ -92,6 +92,10 @@ data BenchRow = BenchRow
   deriving stock (Generic, Show, Eq)
   deriving anyclass (NFData, Hpgsql.FromPgRow, PGSimple.FromRow)
 
+singleFieldBenchRowDecoder :: Hpgsql.RowDecoder BenchRow
+singleFieldBenchRowDecoder =
+  BenchRow <$> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder <*> Hpgsql.singleField Hpgsql.fieldDecoder
+
 fullyInlinedBenchRowDecoder :: Hpgsql.RowDecoder BenchRow
 fullyInlinedBenchRowDecoder =
   BenchRow <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
@@ -267,6 +271,11 @@ main = do
           bench ("hpgsql Record List (" ++ show n ++ " rows, fully inlined row decoder)") $
             withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
               Hpgsql.queryWith fullyInlinedBenchRowDecoder conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
+      it ("hpgsql Record List (" ++ show n ++ " rows, `singleField fieldDecoder` row decoder)") $
+        void $
+          bench ("hpgsql Record List (" ++ show n ++ " rows, `singleField fieldDecoder` row decoder)") $
+            withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
+              Hpgsql.queryWith singleFieldBenchRowDecoder conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
       it ("hasql Record List (" ++ show n ++ " rows)") $
         void $
           bench ("hasql Record List (" ++ show n ++ " rows)") $

@@ -72,18 +72,16 @@ import Data.ByteString.Internal (ByteString (..))
 import qualified Data.ByteString.Internal as BS
 import qualified Data.ByteString.Internal as InternalBS
 import Data.Int (Int16, Int32, Int64)
-import Foreign (withForeignPtr)
 import Foreign.C (CInt (..))
 import Foreign.Marshal.Utils (copyBytes)
 import Foreign.Ptr (plusPtr)
 import GHC.Base (Addr#, ByteArray#, Char (..), IO (..), Int (..), MutableByteArray#, RealWorld, byteArrayContents#, compareByteArrays#, indexWord8ArrayAsChar#, indexWord8ArrayAsWord32#, mutableByteArrayContents#, newPinnedByteArray#, unIO, unsafeFreezeByteArray#, (+#))
 import GHC.Exts (indexWord8Array#, indexWord8ArrayAsWord16#, indexWord8ArrayAsWord64#)
 import GHC.Ptr (Ptr (..))
-import GHC.Word (Word32 (..))
 import System.IO.Unsafe (unsafeDupablePerformIO)
 import Prelude hiding (drop, encodeFloat, length, null, splitAt, take)
 #if WORDS_BIGENDIAN
-import Data.Word (Word16, Word32, Word64)
+import Data.Word (Word16, Word64)
 #else
 import Data.Word (Word16, Word64, byteSwap16, byteSwap64, Word8, byteSwap32)
 #endif
@@ -91,9 +89,9 @@ import Data.Array.Byte (ByteArray (..))
 import Data.Bits (Bits (unsafeShiftR))
 import Data.Coerce (coerce)
 import Data.Text.Internal (Text (..))
-import Foreign (Storable (..), (.&.))
+import Foreign (Storable (..), withForeignPtr, (.&.))
 import GHC.Float (castDoubleToWord64, castFloatToWord32)
-import GHC.Word (Word16 (..), Word64 (..), Word8 (..))
+import GHC.Word (Word16 (..), Word32 (..), Word64 (..), Word8 (..))
 
 data PinnedByteArray = PinnedByteArray
   { start :: !Int,
@@ -124,7 +122,7 @@ emptyPBA = unsafeDupablePerformIO $ createPinnedByteArray 0 (\_ -> pure 0)
 
 createPinnedByteArray :: Int -> (Addr# -> IO CInt) -> IO PinnedByteArray
 createPinnedByteArray (I# size#) f = IO $ \s0 ->
-  let !(# newRW, (mutArr# :: MutableByteArray# RealWorld) #) = newPinnedByteArray# size# s0
+  let !(# newRW, mutArr# :: MutableByteArray# RealWorld #) = newPinnedByteArray# size# s0
       !(# newRW', lenCopied #) = unIO (f (mutableByteArrayContents# mutArr#)) newRW
       !(# finalRW, frozenArr# #) = unsafeFreezeByteArray# mutArr# newRW'
    in (# finalRW, PinnedByteArray 0 (fromIntegral lenCopied) frozenArr# #)
@@ -143,7 +141,7 @@ toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ BS.creat
 -- | Assuming the pinned byte array contains valid UTF8 text, creates
 -- returns an instance of `Text` with the same contents (but does make a copy).
 unsafeToUtf8Text :: ByteStringIdx -> Int -> PinnedByteArray -> Either String Text
-unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray _ _ _) = let !(PinnedByteArray start arrLen arr#) = toStrictN idx.idx desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
+unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray {}) = let !(PinnedByteArray start arrLen arr#) = toStrictN idx.idx desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
 
 takePgMessageIdentAndLen :: LazyPinnedByteArray -> Maybe (Char, Int32)
 takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =
