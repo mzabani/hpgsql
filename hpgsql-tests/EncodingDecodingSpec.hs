@@ -210,7 +210,7 @@ smallerThan4BytesValuesAndNullsRoundtrip conn = hedgehog $ do
   -- TODO: float4, char
   -- TODO: Varying recvChunkSize sizes for this test
   -- TODO: More variations of rows
-  -- TODO: Test `singleField fieldDecoder` as well: we now have two implementations to test for each
+  -- TODO: Test `singleField notRewrittenFieldDecoder` as well: we now have two implementations to test for each
   --       of these types.
   -- TODO: test errors when trying to decode NULL::type into a non-Maybe in Haskell
   let r1 = (date, i16, i32, b)
@@ -381,7 +381,7 @@ byteaTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   let expectedResult = (someBs, lazyBs)
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
@@ -437,7 +437,7 @@ dateAndTimestampTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,,,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   let expectedResult = (date, timetz, someCalendarDiffTime, Finite timetz, Finite date, CalendarDiffTime 0 someNominalDiffTime)
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
@@ -474,7 +474,7 @@ numericTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,,,,,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   let expectedResult = (1.521 :: Scientific, 1.5 :: Scientific, 1.521 :: Scientific, floatVal, floatVal2, doubleVal, doubleVal2, integerVal)
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
@@ -524,7 +524,7 @@ numericTextDecodingLargerTypes conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,,,,,,,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   let expectedResult = (float2Double floatVal, fromIntegral int2Val :: Int32, fromIntegral int2Val :: Int64, fromIntegral int2Val :: Integer, fromIntegral int2Val :: Scientific, fromIntegral int4Val :: Int64, fromIntegral int4Val :: Integer, fromIntegral int4Val :: Scientific, fromIntegral int8Val :: Integer, fromIntegral int8Val :: Scientific)
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
@@ -543,17 +543,17 @@ numericExtremeTextDecoding conn = do
     runPipeline conn $
       (,,,,,,,,,,,)
         <$> pipeline1With rowDecoder int16Qry
-        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) int16Qry
+        <*> pipeline1With ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) int16Qry
         <*> pipeline1With rowDecoder int32Qry
-        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) int32Qry
+        <*> pipeline1With ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) int32Qry
         <*> pipeline1With rowDecoder int64Qry
-        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) int64Qry
+        <*> pipeline1With ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) int64Qry
         <*> pipeline1With rowDecoder nanQry
-        <*> pipeline1With ((,) <$> singleField fieldDecoder <*> singleField fieldDecoder) nanQry
+        <*> pipeline1With ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) nanQry
         <*> pipeline1With rowDecoder infQry
-        <*> pipeline1With ((,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) infQry
+        <*> pipeline1With ((,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) infQry
         <*> pipeline1With rowDecoder mixQry
-        <*> pipeline1With ((,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) mixQry
+        <*> pipeline1With ((,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) mixQry
   -- Integer boundary values
   int16Res1 `shouldReturn` (minBound :: Int16, maxBound :: Int16)
   int16Res2 `shouldReturn` (minBound :: Int16, maxBound :: Int16)
@@ -614,7 +614,7 @@ jsonTextDecoding conn = hedgehog $ do
       runPipeline conn $
         (,)
           <$> pipeline1With rowDecoder qry
-          <*> pipeline1With ((,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   (v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson) <- liftIO res1
   v1 === jsonVal1
   v2 === jsonVal1
@@ -652,7 +652,7 @@ uuidTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With (Only <$> singleField fieldDecoder) qry
+          <*> pipeline1With (Only <$> singleField notRewrittenFieldDecoder) qry
   let expectedResult = Only uuid
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
@@ -691,7 +691,7 @@ ciTextTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   let expectedResult = (CI.mk someText, CI.mk (LT.fromStrict someText), CI.mk (Text.unpack someText))
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
@@ -730,7 +730,7 @@ textTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   let expectedResult = (someText, LT.fromStrict someText, Text.unpack someText)
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
@@ -804,7 +804,7 @@ timeOfDayTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+          <*> pipeline1With ((,,,,,,,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
   liftIO res1 >>= (=== row)
   liftIO res2 >>= (=== row)
 
@@ -867,7 +867,7 @@ localTimeTextDecoding conn = hedgehog $ do
             <$> pipeline1With rowDecoder qry
             -- Specialized row parsers of each type are a different implementation from
             -- the simpler fieldDecoders, so we need to test both
-            <*> pipeline1With ((,,,,,,,,,) <$> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder <*> singleField fieldDecoder) qry
+            <*> pipeline1With ((,,,,,,,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
       (,) <$> res1 <*> res2
   res1Val === row
   res2Val === row
@@ -1065,3 +1065,12 @@ valuesTypeRoundTrip conn = hedgehog $ do
 data Person = Person {name :: Text, born :: Day, heightMeters :: Double}
   deriving stock (Generic)
   deriving anyclass (FromPgRow)
+
+-- | Due to our rewrite rules (see Note [singleField notRewrittenFieldDecoder rewrite rules]),
+-- it's a bit hard to test our FieldDecoders directly - without the specialized row
+-- decoders taking their place.
+-- This helps with that by having a NOINLINE annotation ensure the rules don't
+-- apply.
+{-# NOINLINE notRewrittenFieldDecoder #-}
+notRewrittenFieldDecoder :: (FromPgField a) => FieldDecoder a
+notRewrittenFieldDecoder = fieldDecoder
