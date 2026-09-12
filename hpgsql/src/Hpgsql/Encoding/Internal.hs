@@ -1,4 +1,4 @@
--- See Note [singleField fieldDecoder rewrite rules]
+-- For the disabled warning, see Note [singleField fieldDecoder rewrite rules]
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-inline-rule-shadowing #-}
 
@@ -153,6 +153,11 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 -- So we introduce rewrite rules to rewrite those to `notInlinedSingleFieldRowDecoder` instead.
 -- These rewrite rules require the implementations of each Field Decoder to be separated and not
 -- inlinable, or else GHC inlines `fieldDecoder` too early and these rules don't fire.
+--
+-- So there will be some phase annotations in some places and this requires a delicate choice
+-- of both INLINE and NOINLINE pragmas to work properly. To know if something's broken, the
+-- benchmarks with "Generically derived" and "singleField fieldDecoder" row decoders both
+-- should allocate the same amount of memory.
 
 {-# RULES
 "singleField intFieldDecoder" singleField intFieldDecoder = notInlinedSingleFieldRowDecoder
@@ -1382,15 +1387,13 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \case
+                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
+                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                    Just d -> Right d
+                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 

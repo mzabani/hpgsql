@@ -47,7 +47,7 @@ module Hpgsql.Encoding
     FieldDecoder (..),
     FieldInfo (..),
     FromPgRow (..),
-    RowDecoder, -- Do not export ctor because we may want to change it
+    RowDecoder (..), -- TODO: We should consider not exporting everything to give us freedom
     singleField,
     nullableField,
     genericFromPgRow,
