@@ -20,8 +20,8 @@
 --
 -- = Performant row decoders
 --
--- Hpgsql provides roughly two* ways to derive row decoders from your types.
--- You can use `notInlinedSingleFieldRowDecoder` or `inlinedSingleFieldRowDecoder` for each field.
+-- Hpgsql provides two ways to derive row decoders from your types.
+-- You can use `singleField fieldDecoder` or `inlinedSingleFieldRowDecoder` for each field.
 -- For example you can define:
 --
 -- > data Car = Car { model :: Text, year :: Maybe Int, inGoodCondition :: Bool }
@@ -40,15 +40,14 @@
 --
 -- Some notes:
 --
--- * Generically derived row decoders are not fully inlined, and perform as well as hand-written row decoders built with `notInlinedSingleFieldRowDecoder`.
--- * Another derivation method is to use `singleField fieldDecoder`. That is the least performant way of deriving row decoders, and is only useful if you need the ability to compose `FieldDecoder`s in ways that you can't otherwise. If you can, use `notInlinedSingleFieldRowDecoder` instead.
+-- * Generically derived row decoders are not fully inlined, and perform as well as hand-written row decoders built with `singleField fieldDecoder`.
 module Hpgsql.Encoding
   ( -- * Decoding
-    FromPgField (fieldDecoder, notInlinedSingleFieldRowDecoder, inlinedSingleFieldRowDecoder), --  Do not export other methods so we can change them
+    FromPgField (fieldDecoder, inlinedSingleFieldRowDecoder), --  Do not export other methods so we can change them
     FieldDecoder (..),
     FieldInfo (..),
     FromPgRow (..),
-    RowDecoder (..), -- TODO: Can we export ctor?
+    RowDecoder, -- Do not export ctor because we may want to change it
     singleField,
     nullableField,
     genericFromPgRow,

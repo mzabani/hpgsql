@@ -8,7 +8,7 @@ where
 import Control.Monad (unless)
 import Data.Bifunctor (first)
 import qualified Data.List as List
-import Hpgsql.Encoding (FieldInfo, RowDecoder (..))
+import Hpgsql.Encoding.Internal (FieldInfo, RowDecoder (..))
 import qualified Hpgsql.SimpleParser as Parser
 
 -- | Unlike @Hpgsql.Encoding.RowDecoder@, this has a @Monad@ instance.

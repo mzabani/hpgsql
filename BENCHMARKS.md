@@ -49,12 +49,11 @@ This benchmark is unfair towards both hpgsql and postgresql-simple (compared to 
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple Record List (100000 rows, Generically derived row decoder) | 14.65s | 142.6MB | 311.3MB | 49596.0MB |
-| hasql Record List (100000 rows) | 8.574s | 99.3MB | 285.6MB | 14422.7MB |
-| *hpgsql Record List (100000 rows, Generically derived row decoder)* | 3.504s | 112.2MB | 112.2MB | 9612.7MB |
-| *hpgsql Record List (100000 rows, fully inlined row decoder)* | 3.034s | 112.9MB | 112.9MB | 6420.4MB |
-| Npgsql Record List (100000 rows) | 1.015s | - | - | 481.6MB |
-| rust-tokio-postgres Record List (100000 rows) | 981.7ms | - | 50.2MB | - |
+| postgresql-simple Record List (100000 rows, Generically derived row decoder) | 14.72s | 146.3MB | 315.1MB | 49595.9MB |
+| hasql Record List (100000 rows) | 8.450s | 99.2MB | 285.5MB | 14422.7MB |
+| *hpgsql Record List (100000 rows, Generically derived row decoder)* | 4.033s | 140.4MB | 140.4MB | 14966.0MB |
+| Npgsql Record List (100000 rows) | 1.050s | - | - | 481.7MB |
+| rust-tokio-postgres Record List (100000 rows) | 950.2ms | - | 50.2MB | - |
 
 ### Materializing 100_000 rows with 13 columns each into a List of Tuples
 
@@ -62,9 +61,9 @@ This runs with 2 concurrent queries, 10 times over:
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple Tuple List (100000 rows) | 14.18s | 148.3MB | 218.7MB | 43243.4MB |
-| hasql Tuple List (100000 rows) | 7.824s | 202.6MB | 343.4MB | 9841.6MB |
-| *hpgsql Tuple List (100000 rows)* | 3.365s | 147.9MB | 147.9MB | 7312.0MB |
+| postgresql-simple Tuple List (100000 rows) | 14.07s | 148.5MB | 218.9MB | 43243.5MB |
+| hasql Tuple List (100000 rows) | 7.802s | 201.7MB | 342.5MB | 9841.6MB |
+| *hpgsql Tuple List (100000 rows)* | 3.969s | 151.8MB | 151.8MB | 9985.4MB |
 
 ### Streaming 100_000 rows with 17 columns as Records
 
@@ -76,12 +75,11 @@ cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| streaming-postgresql-simple Record Stream (100000 rows, Generically derived row decoder) | 16.17s | 0.0MB | 1.0MB | 62278.5MB |
-| *hpgsql Record Stream (100000 rows, Generically derived row decoder)* | 1.108s | 0.3MB | 0.3MB | 9088.9MB |
-| Npgsql Record Stream (100000 rows) | 992.5ms | - | - | 441.4MB |
-| *hpgsql Record Stream (100000 rows, fully inlined row decoder)* | 967.0ms | 0.2MB | 0.2MB | 6112.3MB |
-| rust-tokio-postgres Record Stream (100000 rows) | 894.1ms | - | 0.4MB | - |
-| postgresql-simple Record fold (100000 rows, Generically derived row decoder) |  | 0.0MB | 0.0MB | - |
+| postgresql-simple Record fold (100000 rows, Generically derived row decoder) | 16.20s | 0.0MB | 34.3MB | 48921.4MB |
+| streaming-postgresql-simple Record Stream (100000 rows, Generically derived row decoder) | 16.13s | 0.0MB | 1.2MB | 62278.5MB |
+| *hpgsql Record Stream (100000 rows, Generically derived row decoder)* | 1.592s | 0.3MB | 0.3MB | 14318.5MB |
+| Npgsql Record Stream (100000 rows) | 1.034s | - | - | 441.9MB |
+| rust-tokio-postgres Record Stream (100000 rows) | 876.1ms | - | 0.4MB | - |
 
 ### Streaming 100_000 rows with 13 columns as Tuples
 
@@ -93,9 +91,9 @@ cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| streaming-postgresql-simple Tuple Stream (100000 rows) | 13.26s | 0.0MB | 1.3MB | 55905.7MB |
-| postgresql-simple Tuple fold (100000 rows) | 12.94s | 0.0MB | 10.6MB | 42538.1MB |
-| *hpgsql Tuple Stream (100000 rows)* | 768.3ms | 0.2MB | 0.2MB | 6479.9MB |
+| streaming-postgresql-simple Tuple Stream (100000 rows) | 13.23s | 0.0MB | 1.3MB | 55905.7MB |
+| postgresql-simple Tuple fold (100000 rows) | 12.95s | 0.0MB | 12.3MB | 42538.1MB |
+| *hpgsql Tuple Stream (100000 rows)* | 774.3ms | 0.3MB | 0.3MB | 8270.3MB |
 
 ### COPY FROM STDIN
 
