@@ -156,15 +156,24 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 
 {-# RULES
 "singleField intFieldDecoder" singleField intFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField intFieldDecoder)" singleField (nullableField intFieldDecoder) = notInlinedSingleFieldRowDecoder
 "singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField utcTimeFieldDecoder)" singleField (nullableField utcTimeFieldDecoder) = notInlinedSingleFieldRowDecoder
 "singleField floatFieldDecoder" singleField floatFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField floatFieldDecoder)" singleField (nullableField floatFieldDecoder) = notInlinedSingleFieldRowDecoder
 "singleField doubleFieldDecoder" singleField doubleFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField doubleFieldDecoder)" singleField (nullableField doubleFieldDecoder) = notInlinedSingleFieldRowDecoder
 "singleField boolFieldDecoder" singleField boolFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = notInlinedSingleFieldRowDecoder
 "singleField textFieldDecoder" singleField textFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = notInlinedSingleFieldRowDecoder
 "singleField dayFieldDecoder" singleField dayFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = notInlinedSingleFieldRowDecoder
 "singleField scientificFieldDecoder" singleField scientificFieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = notInlinedSingleFieldRowDecoder
 -- This last rule is still useful and triggers at call sites where the type is not known at compile time
 "singleField fieldDecoder" singleField fieldDecoder = notInlinedSingleFieldRowDecoder
+"singleField (nullableField fieldDecoder)" singleField (nullableField fieldDecoder) = notInlinedSingleFieldRowDecoder
   #-}
 
 {-# INLINE [1] singleField #-}
@@ -247,9 +256,6 @@ class FromPgField a where
   {-# INLINE inlinedSingleFieldRowDecoder #-}
   inlinedSingleFieldRowDecoder :: RowDecoder a
   inlinedSingleFieldRowDecoder = case inlinedConstFieldDecoder @a of
-    -- This is a class method instead of a top-level function
-    -- because the GHC inliner behaves differently when it's a top-level
-    -- function, and benchmarks show this is faster.
     Nothing ->
       let !typeCheck = (fieldDecoder @a).allowedPgTypes
        in RowDecoder
@@ -270,10 +276,6 @@ class FromPgField a where
               numExpectedColumns = 1
             }
     Just p ->
-      -- The strictness and floating out of fieldDecoder-derived
-      -- values allows GHC to inline a lot more. For example, `valueForNull`
-      -- gets inlined to a `fail "Cannot decode SQL NULL ..."` for basic types
-      -- like `Int`.
       let !typeCheck = (fieldDecoder @a).allowedPgTypes
        in RowDecoder
             { fullRowDecoder = \case
@@ -1389,6 +1391,8 @@ instance FromPgField Aeson.Value where
                     Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
+
+{-# INLINE [1] nullableField #-}
 
 -- | A FieldDecoder that accepts and decodes SQL NULLs into `Nothing` values
 -- for a given decoder.
