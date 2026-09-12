@@ -138,8 +138,8 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 --
 -- There are strictly speaking three ways to derive a single-field/column
--- row decoder in hpgsql: `singleField fieldDecoder`, `notInlinedSingleFieldRowDecoder`, and
--- `inlinedSingleFieldRowDecoder`.
+-- row decoder in hpgsql: `singleField fieldDecoder`, `fieldRowDecoder`, and
+-- `inlinedFieldRowDecoder`.
 --
 -- The last two are sensible: one is more aggressive with inlining and produces faster row decoders
 -- at the cost of compilation times and binary sizes, the other produces row decoders that call out
@@ -147,10 +147,10 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 --
 -- But what about the first? It forces the allocation of `ByteString` values from our Pinned Byte Arrays,
 -- and is hence the slower of all three, except that it doesn't produce row decoders any smaller
--- than `notInlinedSingleFieldRowDecoder`. It is strictly worse than that.
+-- than `fieldRowDecoder`. It is strictly worse than that.
 --
 -- Since `singleField fieldDecoder` might be used by users of hpgsql, however, we can't just remove it.
--- So we introduce rewrite rules to rewrite those to `notInlinedSingleFieldRowDecoder` instead.
+-- So we introduce rewrite rules to rewrite those to `fieldRowDecoder` instead.
 -- These rewrite rules require the implementations of each Field Decoder to be separated and not
 -- inlinable, or else GHC inlines `fieldDecoder` too early and these rules don't fire.
 --
@@ -160,34 +160,37 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 -- should allocate the same amount of memory.
 
 {-# RULES
-"singleField intFieldDecoder" singleField intFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField intFieldDecoder)" singleField (nullableField intFieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField int16FieldDecoder" singleField int16FieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField int16FieldDecoder)" singleField (nullableField int16FieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField int32FieldDecoder" singleField int32FieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField int32FieldDecoder)" singleField (nullableField int32FieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField int64FieldDecoder" singleField int64FieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField int64FieldDecoder)" singleField (nullableField int64FieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField utcTimeFieldDecoder)" singleField (nullableField utcTimeFieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField floatFieldDecoder" singleField floatFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField floatFieldDecoder)" singleField (nullableField floatFieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField doubleFieldDecoder" singleField doubleFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField doubleFieldDecoder)" singleField (nullableField doubleFieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField boolFieldDecoder" singleField boolFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField textFieldDecoder" singleField textFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField dayFieldDecoder" singleField dayFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = notInlinedSingleFieldRowDecoder
-"singleField scientificFieldDecoder" singleField scientificFieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = notInlinedSingleFieldRowDecoder
+"singleField intFieldDecoder" singleField intFieldDecoder = fieldRowDecoder
+"singleField (nullableField intFieldDecoder)" singleField (nullableField intFieldDecoder) = fieldRowDecoder
+"singleField int16FieldDecoder" singleField int16FieldDecoder = fieldRowDecoder
+"singleField (nullableField int16FieldDecoder)" singleField (nullableField int16FieldDecoder) = fieldRowDecoder
+"singleField int32FieldDecoder" singleField int32FieldDecoder = fieldRowDecoder
+"singleField (nullableField int32FieldDecoder)" singleField (nullableField int32FieldDecoder) = fieldRowDecoder
+"singleField int64FieldDecoder" singleField int64FieldDecoder = fieldRowDecoder
+"singleField (nullableField int64FieldDecoder)" singleField (nullableField int64FieldDecoder) = fieldRowDecoder
+"singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField utcTimeFieldDecoder)" singleField (nullableField utcTimeFieldDecoder) = fieldRowDecoder
+"singleField floatFieldDecoder" singleField floatFieldDecoder = fieldRowDecoder
+"singleField (nullableField floatFieldDecoder)" singleField (nullableField floatFieldDecoder) = fieldRowDecoder
+"singleField doubleFieldDecoder" singleField doubleFieldDecoder = fieldRowDecoder
+"singleField (nullableField doubleFieldDecoder)" singleField (nullableField doubleFieldDecoder) = fieldRowDecoder
+"singleField boolFieldDecoder" singleField boolFieldDecoder = fieldRowDecoder
+"singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = fieldRowDecoder
+"singleField textFieldDecoder" singleField textFieldDecoder = fieldRowDecoder
+"singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = fieldRowDecoder
+"singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
+"singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
+"singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
+"singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = fieldRowDecoder
 -- This last rule is still useful and triggers at call sites where the type is not known at compile time
-"singleField fieldDecoder" singleField fieldDecoder = notInlinedSingleFieldRowDecoder
-"singleField (nullableField fieldDecoder)" singleField (nullableField fieldDecoder) = notInlinedSingleFieldRowDecoder
+"singleField fieldDecoder" singleField fieldDecoder = fieldRowDecoder
+"singleField (nullableField fieldDecoder)" singleField (nullableField fieldDecoder) = fieldRowDecoder
   #-}
 
 {-# INLINE [1] singleField #-}
+
+-- | Builds a single-field row decoder. Prefer to use `fieldRowDecoder`
+-- if you can because that's much faster.
 singleField :: FieldDecoder a -> RowDecoder a
 singleField fdec =
   let !typeCheck = fdec.allowedPgTypes
@@ -254,19 +257,19 @@ class FromPgField a where
 
   -- | Semantically equivalent to `singleField fieldDecoder`, but for
   -- most types it can provide a much faster `RowDecoder`. This doesn't
-  -- cause the same amount of size blowup that `inlinedSingleFieldRowDecoder`
+  -- cause the same amount of size blowup that `inlinedFieldRowDecoder`
   -- does, but is also not as fast as that.
-  {-# NOINLINE notInlinedSingleFieldRowDecoder #-}
-  notInlinedSingleFieldRowDecoder :: RowDecoder a
-  notInlinedSingleFieldRowDecoder = inlinedSingleFieldRowDecoder
+  {-# NOINLINE fieldRowDecoder #-}
+  fieldRowDecoder :: RowDecoder a
+  fieldRowDecoder = inlinedFieldRowDecoder
 
   -- | Semantically equivalent to `singleField fieldDecoder`, but for
   -- most types it can provide a much faster `RowDecoder`. Beware that
   -- using will produce more code in your row decoders, which can affect
   -- compilation times and binary size.
-  {-# INLINE inlinedSingleFieldRowDecoder #-}
-  inlinedSingleFieldRowDecoder :: RowDecoder a
-  inlinedSingleFieldRowDecoder = case inlinedConstFieldDecoder @a of
+  {-# INLINE inlinedFieldRowDecoder #-}
+  inlinedFieldRowDecoder :: RowDecoder a
+  inlinedFieldRowDecoder = case inlinedConstFieldDecoder @a of
     Nothing ->
       let !typeCheck = (fieldDecoder @a).allowedPgTypes
        in RowDecoder
@@ -380,43 +383,43 @@ compositeTypeEncoder rowEnc =
     }
 
 instance (FromPgField a) => FromPgRow (Only a) where
-  rowDecoder = Only <$> notInlinedSingleFieldRowDecoder
+  rowDecoder = Only <$> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b) => FromPgRow (a, b) where
-  rowDecoder = (,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,) <$> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c) => FromPgRow (a, b, c) where
-  rowDecoder = (,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d) => FromPgRow (a, b, c, d) where
-  rowDecoder = (,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e) => FromPgRow (a, b, c, d, e) where
-  rowDecoder = (,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f) => FromPgRow (a, b, c, d, e, f) where
-  rowDecoder = (,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g) => FromPgRow (a, b, c, d, e, f, g) where
-  rowDecoder = (,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h) => FromPgRow (a, b, c, d, e, f, g, h) where
-  rowDecoder = (,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i) => FromPgRow (a, b, c, d, e, f, g, h, i) where
-  rowDecoder = (,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j) => FromPgRow (a, b, c, d, e, f, g, h, i, j) where
-  rowDecoder = (,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
-  rowDecoder = (,,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l) where
-  rowDecoder = (,,,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
-  rowDecoder = (,,,,,,,,,,,,) <$> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder <*> notInlinedSingleFieldRowDecoder
+  rowDecoder = (,,,,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
 
 data FieldEncoder a = FieldEncoder
   { toTypeOid :: !(EncodingContext -> Maybe Oid),
@@ -1533,7 +1536,7 @@ instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
   -- coercing instead of fmap reduces memory usage, apparently
   -- by reducing (unnecessary) closures in the final row decoder,
   -- as per looking at GHC Core
-  genRowDecoder = coerce $ notInlinedSingleFieldRowDecoder @a
+  genRowDecoder = coerce $ fieldRowDecoder @a
 
 genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
 genericToPgRow = contramap from genRowEncoder

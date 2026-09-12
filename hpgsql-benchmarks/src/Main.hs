@@ -47,7 +47,7 @@ import Hpgsql.Connection (renderLibpqConnectionString)
 import qualified Hpgsql.Connection
 import qualified Hpgsql.Connection as Hpgsql
 import qualified Hpgsql.Copy
-import Hpgsql.Encoding (inlinedSingleFieldRowDecoder)
+import Hpgsql.Encoding (inlinedFieldRowDecoder)
 import qualified Hpgsql.Encoding as Hpgsql
 import qualified Hpgsql.Query as Hpgsql
 import qualified Hpgsql.Types as Hpgsql
@@ -98,7 +98,7 @@ singleFieldBenchRowDecoder =
 
 fullyInlinedBenchRowDecoder :: Hpgsql.RowDecoder BenchRow
 fullyInlinedBenchRowDecoder =
-  BenchRow <$> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder <*> inlinedSingleFieldRowDecoder
+  BenchRow <$> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder <*> inlinedFieldRowDecoder
 
 data HasqlBenchRow = HasqlBenchRow
   { hbrId :: !Int32,
