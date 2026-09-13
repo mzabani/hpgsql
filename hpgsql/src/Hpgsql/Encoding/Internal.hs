@@ -1422,6 +1422,16 @@ uuidFieldDecoder = parsePgType "UUID" [uuidOid] $ \case
 instance FromPgField UUID where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = uuidFieldDecoder
+  {-# INLINE inlinedConstFieldDecoder #-}
+  inlinedConstFieldDecoder = Just $ do
+    len <- Parser.takeInt32BE
+    case len of
+      (-1) -> pure Nothing
+      _ ->
+        fmap Just $
+          UUID.fromWords64
+            <$> Parser.takeWord64BE
+            <*> Parser.takeWord64BE
 
 instance FromPgField Aeson.Value where
   {-# INLINE fieldDecoder #-}

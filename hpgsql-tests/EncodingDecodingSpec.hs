@@ -632,7 +632,7 @@ jsonTextDecoding conn = hedgehog $ do
 
 uuidRoundTrip :: HPgConnection -> PropertyT IO ()
 uuidRoundTrip conn = hedgehog $ do
-  let genUuid = do
+  let genUuid = Gen.maybe $ do
         uuidBytes <- Gen.bytes (Gen.singleton 16)
         let Just uuid = UUID.fromByteString (LBS.fromStrict uuidBytes)
         pure uuid
