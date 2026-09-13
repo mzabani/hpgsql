@@ -182,6 +182,12 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 "singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
 "singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
 "singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = fieldRowDecoder
+"singleField unboundedDayFieldDecoder" singleField unboundedDayFieldDecoder = fieldRowDecoder
+"singleField (nullableField unboundedDayFieldDecoder)" singleField (nullableField unboundedDayFieldDecoder) = fieldRowDecoder
+"singleField calendarDiffTimeFieldDecoder" singleField calendarDiffTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField calendarDiffTimeFieldDecoder)" singleField (nullableField calendarDiffTimeFieldDecoder) = fieldRowDecoder
+"singleField uuidFieldDecoder" singleField uuidFieldDecoder = fieldRowDecoder
+"singleField (nullableField uuidFieldDecoder)" singleField (nullableField uuidFieldDecoder) = fieldRowDecoder
 -- This last rule is still useful and triggers at call sites where the type is not known at compile time
 "singleField fieldDecoder" singleField fieldDecoder = fieldRowDecoder
 "singleField (nullableField fieldDecoder)" singleField (nullableField fieldDecoder) = fieldRowDecoder
@@ -1367,42 +1373,54 @@ instance FromPgField Day where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just dayRowDecoder
 
+{-# NOINLINE unboundedDayFieldDecoder #-}
+unboundedDayFieldDecoder :: FieldDecoder (Unbounded Day)
+unboundedDayFieldDecoder = parsePgType "Unbounded Day" [dateOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded Day type. Use a `Maybe (Unbounded Day)`"
+  Just bs -> do
+    -- There is a very specific conversion function for these, which I poorly translated to Haskell
+    -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
+    -- But I found a simpler way to do this. Let's see if it works in our property based tests
+    jd <- PBA.decodeInt32BE 0 (PBA.fromByteString bs)
+    Right $
+      if jd == minBound
+        then NegInfinity
+        else
+          if jd == maxBound
+            then PosInfinity
+            else
+              Finite $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
+
 instance FromPgField (Unbounded Day) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "Unbounded Day" [dateOid] $ \case
-    Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded Day type. Use a `Maybe (Unbounded Day)`"
-    Just bs -> do
-      -- There is a very specific conversion function for these, which I poorly translated to Haskell
-      -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
-      -- But I found a simpler way to do this. Let's see if it works in our property based tests
-      jd <- PBA.decodeInt32BE 0 (PBA.fromByteString bs)
-      Right $
-        if jd == minBound
-          then NegInfinity
-          else
-            if jd == maxBound
-              then PosInfinity
-              else
-                Finite $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
+  fieldDecoder = unboundedDayFieldDecoder
+
+{-# NOINLINE calendarDiffTimeFieldDecoder #-}
+calendarDiffTimeFieldDecoder :: FieldDecoder CalendarDiffTime
+calendarDiffTimeFieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime  type. Use a `Maybe CalendarDiffTime `"
+  Just bs -> do
+    let !pbaBs = PBA.fromByteString bs
+    nMicrosecs <- PBA.decodeInt64BE 0 pbaBs
+    nDays <- PBA.decodeInt32BE 8 pbaBs
+    nMonths <- PBA.decodeInt32BE 12 pbaBs
+    Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
 
 instance FromPgField CalendarDiffTime where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ \case
-    Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime  type. Use a `Maybe CalendarDiffTime `"
-    Just bs -> do
-      let !pbaBs = PBA.fromByteString bs
-      nMicrosecs <- PBA.decodeInt64BE 0 pbaBs
-      nDays <- PBA.decodeInt32BE 8 pbaBs
-      nMonths <- PBA.decodeInt32BE 12 pbaBs
-      Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
+  fieldDecoder = calendarDiffTimeFieldDecoder
+
+{-# NOINLINE uuidFieldDecoder #-}
+uuidFieldDecoder :: FieldDecoder UUID
+uuidFieldDecoder = parsePgType "UUID" [uuidOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell UUID type. Use a `Maybe UUID`"
+  Just bs -> case UUID.fromByteString (LBS.fromStrict bs) of
+    Just uuid -> Right uuid
+    Nothing -> Left "Bug in Hpgsql: UUID field could not be decoded"
 
 instance FromPgField UUID where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "UUID" [uuidOid] $ \case
-    Nothing -> Left "Cannot decode SQL null as the Haskell UUID type. Use a `Maybe UUID`"
-    Just bs -> case UUID.fromByteString (LBS.fromStrict bs) of
-      Just uuid -> Right uuid
-      Nothing -> Left "Bug in Hpgsql: UUID field could not be decoded"
+  fieldDecoder = uuidFieldDecoder
 
 instance FromPgField Aeson.Value where
   {-# INLINE fieldDecoder #-}
