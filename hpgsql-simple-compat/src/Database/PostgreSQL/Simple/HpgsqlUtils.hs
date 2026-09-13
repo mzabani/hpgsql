@@ -104,9 +104,10 @@ toHpgsqlFieldDecoder fp =
     }
 
 fromHpgsqlFieldDecoder :: FieldDecoder a -> FieldParser a
-fromHpgsqlFieldDecoder dec = \f mbs -> Conversion $ \_encCtx -> case dec.fieldValueDecoder f mbs of
-  Right v -> Ok v
-  Left err -> Errors [toException $ userError $ show err]
+fromHpgsqlFieldDecoder dec = \f mbs -> Conversion $ \_encCtx ->
+  case dec.fieldValueDecoder f mbs of
+    Right v -> Ok v
+    Left err -> Errors [toException $ userError $ show err]
 
 -- | Given a Hpgsql query, returns the text format with question marks
 -- for query arguments and a row object. With both, you can call

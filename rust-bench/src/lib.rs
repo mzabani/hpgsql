@@ -58,7 +58,7 @@ pub const SQL17: &str = "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'
     ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), \
     ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), \
     'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, \
-    NULL::int4, NULL::text, NULL::float8, NULL::date, \
+    (CASE WHEN g%2=1 THEN NULL ELSE g::int4 END), (CASE WHEN g%2=1 THEN NULL ELSE '' END)::text, (CASE WHEN g%2=1 THEN NULL ELSE 0.0 END)::float8, NULL::date, \
     g::numeric, g::float4, g%2=0, g%2=1 \
     FROM generate_series(1,$1) g";
 
