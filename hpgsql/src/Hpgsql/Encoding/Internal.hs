@@ -41,6 +41,7 @@ module Hpgsql.Encoding.Internal
     untypedFieldEncoder,
     toPgVectorField,
     arrayField,
+    arrayFieldRowDec,
   )
 where
 
@@ -1484,7 +1485,8 @@ allowOnlyArrayTypes fieldInfo =
     Just _ -> False -- Definitely not an array
 
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
-  fieldDecoder = arrayField Vector.replicateM fieldDecoder
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = arrayFieldRowDec Vector.replicateM
 
 instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
@@ -1725,3 +1727,45 @@ arrayField !replicateFunction !elementParser =
                 case elementParser.fieldValueDecoder elementColInfo (Just (PBA.toByteString elementBs)) of
                   Left err -> fail $ "Error parsing array element: " ++ show err
                   Right el -> pure el
+
+-- | A FieldDecoder that accepts and decodes Postgres arrays.
+arrayFieldRowDec :: forall a f. (FromPgField a, Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> FieldDecoder (f a)
+arrayFieldRowDec !replicateFunction =
+  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
+  FieldDecoder
+    { fieldValueDecoder = \colInfo ->
+        let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
+              Just bs -> case Parser.parseOnly arrayFieldDecoder (PBA.fromByteString bs) of
+                Parser.ParseOk v -> Right v
+                Parser.ParseFail err -> Left err,
+      allowedPgTypes = allowOnlyArrayTypes
+    }
+  where
+    fdec = fieldDecoder @a
+    handleNulls p = \finfo -> do
+      mv <- p
+      case mv of
+        Nothing -> case fdec.fieldValueDecoder finfo Nothing of
+          Left err -> fail $ "Array element is NULL: " ++ err
+          Right v -> pure v
+        Just v -> pure v
+    fieldDec = case inlinedConstFieldDecoder of
+      Just d -> handleNulls d
+      Nothing -> \finfo -> handleNulls (notConstFieldDecoder finfo) finfo
+    arrayParser :: EncodingContext -> Parser.Parser (f a)
+    arrayParser encodingContext = do
+      !ndim <- Parser.takeInt32BE
+      !_hasNull <- Parser.takeInt32BE
+      !elementTypeOid :: Oid <- Oid . fromIntegral <$> Parser.takeInt32BE
+      let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
+      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
+      if ndim == 0
+        then pure mempty
+        else do
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
+          unless (fdec.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+          let p = fieldDec elementColInfo
+          replicateFunction dim_i p
