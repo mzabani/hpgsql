@@ -1705,31 +1705,50 @@ allowOnlyArrayTypes fieldInfo =
     Nothing -> True -- Assume user knows what they're doing
     Just _ -> False -- Definitely not an array
 
+{-# RULES
+"singleField arrayFieldDecoder" singleField arrayFieldDecoder = fieldRowDecoder
+"singleField (nullableField arrayFieldDecoder)" singleField (nullableField arrayFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE arrayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+arrayFieldDecoder :: (FromPgField a) => FieldDecoder (Vector a)
+arrayFieldDecoder = fst $ arrayFieldRowDec Vector.replicateM
+
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = fst $ arrayFieldRowDec Vector.replicateM
+  fieldDecoder = arrayFieldDecoder
   {-# INLINE notConstFieldDecoder #-}
   notConstFieldDecoder = \finfo -> do
     len <- Parser.takeInt32BE
     case len of
       (-1) -> pure Nothing
-      _ -> fmap Just $ snd (arrayFieldRowDec Vector.replicateM) finfo
+      _ -> Just <$> snd (arrayFieldRowDec Vector.replicateM) finfo
 
-instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
+instance {-# INCOHERENT #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   fieldDecoder =
     FieldDecoder
       { fieldValueDecoder = \colInfo ->
-          let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
+          let !arrfdec = arrayParser colInfo.encodingContext <* Parser.endOfInput
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell (Vector (Vector a)) type. Use a `Maybe (Vector (Vector a))`"
-                Just bs -> case Parser.parseOnly arrayFieldDecoder (PBA.fromByteString bs) of
+                Just bs -> case Parser.parseOnly arrfdec (PBA.fromByteString bs) of
                   Parser.ParseOk v -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = allowOnlyArrayTypes
       }
     where
-      !elementParser = fieldDecoder @a
+      fdec = fieldDecoder @a
+      handleNulls p = \finfo -> do
+        mv <- p
+        case mv of
+          Nothing -> case fdec.fieldValueDecoder finfo Nothing of
+            Left err -> fail $ "Array element is NULL: " ++ err
+            Right v -> pure v
+          Just v -> pure v
+      fieldDec = case inlinedConstFieldDecoder of
+        Just d -> handleNulls d
+        Nothing -> \finfo -> handleNulls (notConstFieldDecoder finfo) finfo
       arrayParser :: EncodingContext -> Parser.Parser (Vector (Vector a))
       arrayParser encodingContext = do
         !ndim <- Parser.takeInt32BE
@@ -1737,7 +1756,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
         !elementTypeOid :: Oid <- Oid . fromIntegral <$> Parser.takeInt32BE
         let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
         when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
-        unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+        unless (fdec.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
         numRows <- do
           !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
           !_lb_i <- Parser.takeInt32BE
@@ -1748,18 +1767,7 @@ instance {-# OVERLAPPING #-} forall a. (FromPgField a) => FromPgField (Vector (V
           pure dim_i
 
         Vector.replicateM numRows $ do
-          Vector.replicateM lengthEachRow $
-            do
-              size :: Int <- fromIntegral <$> Parser.takeInt32BE
-              if size == (-1)
-                then case elementParser.fieldValueDecoder elementColInfo Nothing of
-                  Left err -> fail err
-                  Right v -> pure v
-                else do
-                  elementBs <- Parser.take size
-                  case elementParser.fieldValueDecoder elementColInfo (Just (PBA.toByteString elementBs)) of
-                    Left err -> fail $ "Error parsing array element: " ++ show err
-                    Right el -> pure el
+          Vector.replicateM lengthEachRow (fieldDec elementColInfo)
 
 {-# INLINE genericFromPgRow #-}
 
@@ -1946,10 +1954,10 @@ arrayField !replicateFunction !elementParser =
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   FieldDecoder
     { fieldValueDecoder = \colInfo ->
-        let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
+        let !fdec = arrayParser colInfo.encodingContext <* Parser.endOfInput
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
-              Just bs -> case Parser.parseOnly arrayFieldDecoder (PBA.fromByteString bs) of
+              Just bs -> case Parser.parseOnly fdec (PBA.fromByteString bs) of
                 Parser.ParseOk v -> Right v
                 Parser.ParseFail err -> Left err,
       allowedPgTypes = allowOnlyArrayTypes
@@ -1976,6 +1984,7 @@ arrayField !replicateFunction !elementParser =
                 Right v -> pure v
               else do
                 elementBs <- Parser.take size
+                -- We need to convert to ByteString here or we need to change the API in breaking fashion..
                 case elementParser.fieldValueDecoder elementColInfo (Just (PBA.toByteString elementBs)) of
                   Left err -> fail $ "Error parsing array element: " ++ show err
                   Right el -> pure el
@@ -1987,10 +1996,10 @@ arrayFieldRowDec !replicateFunction =
   -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
   ( FieldDecoder
       { fieldValueDecoder = \colInfo ->
-          let !arrayFieldDecoder = arrayParser colInfo.encodingContext <* Parser.endOfInput
+          let !dec = arrayParser colInfo.encodingContext <* Parser.endOfInput
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
-                Just bs -> case Parser.parseOnly arrayFieldDecoder (PBA.fromByteString bs) of
+                Just bs -> case Parser.parseOnly dec (PBA.fromByteString bs) of
                   Parser.ParseOk v -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = allowOnlyArrayTypes

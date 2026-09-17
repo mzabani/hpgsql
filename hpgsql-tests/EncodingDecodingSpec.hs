@@ -1009,17 +1009,101 @@ queryArrayTypes conn = hedgehog $ do
   -- TODO: hedgehog gen arrays with varying lengths, NULLs, etc.
   intArrDim1 <- fmap Vector.fromList $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
   nullIntArrDim1 <- fmap PGArray $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.maybe $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
-  liftIO $ do
-    queryWith rowDecoder conn (mkQuery "SELECT $1, $1, $2" (intArrDim1, nullIntArrDim1)) `shouldReturn` [(intArrDim1, intArrDim1, nullIntArrDim1)]
-    queryWith (rowDecoder @(Only (Vector Int))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)) `shouldReturn` [Only $ Vector.fromList [13 :: Int, 31, 45]]
-    queryWith (rowDecoder @(Only (Vector Int16))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)) `shouldReturn` [Only $ Vector.fromList [13, 49, 91]]
-    queryWith (rowDecoder @(Only (Vector (Maybe Int16)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))) `shouldReturn` [Only $ Vector.fromList [Just 13, Nothing, Just 91]]
-    queryWith (rowDecoder @(Only (Vector (Maybe Text)))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))) `shouldReturn` [Only $ Vector.fromList [Just "Hello", Nothing, Just "again"]]
-    queryWith (rowDecoder @(Only (Vector Aeson.Value))) conn (mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)) `shouldReturn` [Only $ Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]]
-    let multiDimArray1 = Vector.fromList [Vector.fromList [1, 2, 3, 4], Vector.fromList [4, 5, 6, 7 :: Int]]
-    query conn [sql|SELECT ARRAY[ARRAY[1,2,3,4],ARRAY[4,5,6, 7]]|] `shouldReturn` [Only multiDimArray1]
-    let multiDimArray2 = Vector.fromList [Vector.fromList [1, 2, 3], Vector.fromList [4, 5, 6 :: Int], Vector.fromList [7, 8, 9 :: Int]]
-    query conn [sql|SELECT ARRAY[ARRAY[1,2,3],ARRAY[4,5,6], ARRAY[7,8,9]]|] `shouldReturn` [Only multiDimArray2]
+  let qryIntArrays = mkQuery "SELECT $1, $1, $2" (intArrDim1, nullIntArrDim1)
+      qryIntVec = mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int, 31 :: Int, 45 :: Int)
+      qryInt16Vec = mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, 49 :: Int16, 91 :: Int16)
+      qryMaybeInt16Vec = mkQuery "SELECT ARRAY[$1,$2,$3]" (13 :: Int16, Nothing :: Maybe Int16, Just (91 :: Int16))
+      qryMaybeTextVec = mkQuery "SELECT ARRAY[$1,$2,$3] -- Maybe Text" (Just ("Hello" :: Text), Nothing :: Maybe String, Just ("again" :: Text))
+      qryJsonVec = mkQuery "SELECT ARRAY[$1,$2,$3] -- json" (Aeson.String "Hello", Aeson.Null, Aeson.Number 4)
+      qryMultiDim1 = [sql|SELECT ARRAY[ARRAY[1,2,3,4],ARRAY[4,5,6, 7]]|]
+      qryMultiDim2 = [sql|SELECT ARRAY[ARRAY[1,2,3],ARRAY[4,5,6], ARRAY[7,8,9]]|]
+      multiDimArray1 = Vector.fromList [Vector.fromList [1, 2, 3, 4], Vector.fromList [4, 5, 6, 7 :: Int]]
+      multiDimArray2 = Vector.fromList [Vector.fromList [1, 2, 3], Vector.fromList [4, 5, 6 :: Int], Vector.fromList [7, 8, 9 :: Int]]
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both. We also decode each
+  -- single-dimension array query into both `Vector` and `PGArray`.
+  ( resIntArrays1,
+    resIntArrays2,
+    resIntVecV1,
+    resIntVecV2,
+    resIntArrP1,
+    resIntArrP2,
+    resInt16VecV1,
+    resInt16VecV2,
+    resInt16ArrP1,
+    resInt16ArrP2,
+    resMaybeInt16VecV1,
+    resMaybeInt16VecV2,
+    resMaybeInt16ArrP1,
+    resMaybeInt16ArrP2,
+    resMaybeTextVecV1,
+    resMaybeTextVecV2,
+    resMaybeTextArrP1,
+    resMaybeTextArrP2,
+    resJsonVecV1,
+    resJsonVecV2,
+    resJsonArrP1,
+    resJsonArrP2,
+    resMultiDim1a,
+    resMultiDim1b,
+    resMultiDim2a,
+    resMultiDim2b
+    ) <-
+    liftIO $
+      runPipeline conn $
+        (,,,,,,,,,,,,,,,,,,,,,,,,,)
+          <$> pipeline1With rowDecoder qryIntArrays
+          <*> pipeline1With ((,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qryIntArrays
+          <*> pipeline1With (rowDecoder @(Only (Vector Int))) qryIntVec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector Int))) qryIntVec
+          <*> pipeline1With (rowDecoder @(Only (PGArray Int))) qryIntVec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(PGArray Int))) qryIntVec
+          <*> pipeline1With (rowDecoder @(Only (Vector Int16))) qryInt16Vec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector Int16))) qryInt16Vec
+          <*> pipeline1With (rowDecoder @(Only (PGArray Int16))) qryInt16Vec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(PGArray Int16))) qryInt16Vec
+          <*> pipeline1With (rowDecoder @(Only (Vector (Maybe Int16)))) qryMaybeInt16Vec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector (Maybe Int16)))) qryMaybeInt16Vec
+          <*> pipeline1With (rowDecoder @(Only (PGArray (Maybe Int16)))) qryMaybeInt16Vec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(PGArray (Maybe Int16)))) qryMaybeInt16Vec
+          <*> pipeline1With (rowDecoder @(Only (Vector (Maybe Text)))) qryMaybeTextVec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector (Maybe Text)))) qryMaybeTextVec
+          <*> pipeline1With (rowDecoder @(Only (PGArray (Maybe Text)))) qryMaybeTextVec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(PGArray (Maybe Text)))) qryMaybeTextVec
+          <*> pipeline1With (rowDecoder @(Only (Vector Aeson.Value))) qryJsonVec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector Aeson.Value))) qryJsonVec
+          <*> pipeline1With (rowDecoder @(Only (PGArray Aeson.Value))) qryJsonVec
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(PGArray Aeson.Value))) qryJsonVec
+          <*> pipeline1With (rowDecoder @(Only (Vector (Vector Int)))) qryMultiDim1
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector (Vector Int)))) qryMultiDim1
+          <*> pipeline1With (rowDecoder @(Only (Vector (Vector Int)))) qryMultiDim2
+          <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector (Vector Int)))) qryMultiDim2
+  liftIO resIntArrays1 >>= (=== (intArrDim1, intArrDim1, nullIntArrDim1))
+  liftIO resIntArrays2 >>= (=== (intArrDim1, intArrDim1, nullIntArrDim1))
+  liftIO resIntVecV1 >>= (=== Only (Vector.fromList [13 :: Int, 31, 45]))
+  liftIO resIntVecV2 >>= (=== Only (Vector.fromList [13 :: Int, 31, 45]))
+  liftIO resIntArrP1 >>= (=== Only (PGArray [13 :: Int, 31, 45]))
+  liftIO resIntArrP2 >>= (=== Only (PGArray [13 :: Int, 31, 45]))
+  liftIO resInt16VecV1 >>= (=== Only (Vector.fromList [13, 49, 91 :: Int16]))
+  liftIO resInt16VecV2 >>= (=== Only (Vector.fromList [13, 49, 91 :: Int16]))
+  liftIO resInt16ArrP1 >>= (=== Only (PGArray [13, 49, 91 :: Int16]))
+  liftIO resInt16ArrP2 >>= (=== Only (PGArray [13, 49, 91 :: Int16]))
+  liftIO resMaybeInt16VecV1 >>= (=== Only (Vector.fromList [Just 13, Nothing, Just 91 :: Maybe Int16]))
+  liftIO resMaybeInt16VecV2 >>= (=== Only (Vector.fromList [Just 13, Nothing, Just 91 :: Maybe Int16]))
+  liftIO resMaybeInt16ArrP1 >>= (=== Only (PGArray [Just 13, Nothing, Just 91 :: Maybe Int16]))
+  liftIO resMaybeInt16ArrP2 >>= (=== Only (PGArray [Just 13, Nothing, Just 91 :: Maybe Int16]))
+  liftIO resMaybeTextVecV1 >>= (=== Only (Vector.fromList [Just "Hello", Nothing, Just "again"]))
+  liftIO resMaybeTextVecV2 >>= (=== Only (Vector.fromList [Just "Hello", Nothing, Just "again"]))
+  liftIO resMaybeTextArrP1 >>= (=== Only (PGArray [Just "Hello", Nothing, Just "again"]))
+  liftIO resMaybeTextArrP2 >>= (=== Only (PGArray [Just "Hello", Nothing, Just "again"]))
+  liftIO resJsonVecV1 >>= (=== Only (Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]))
+  liftIO resJsonVecV2 >>= (=== Only (Vector.fromList [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]))
+  liftIO resJsonArrP1 >>= (=== Only (PGArray [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]))
+  liftIO resJsonArrP2 >>= (=== Only (PGArray [Aeson.String "Hello", Aeson.Null, Aeson.Number 4]))
+  liftIO resMultiDim1a >>= (=== Only multiDimArray1)
+  liftIO resMultiDim1b >>= (=== Only multiDimArray1)
+  liftIO resMultiDim2a >>= (=== Only multiDimArray2)
+  liftIO resMultiDim2b >>= (=== Only multiDimArray2)
 
 data MyEnum = Val1 | Val2 | Val3
   deriving stock (Eq, Show)

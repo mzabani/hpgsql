@@ -19,7 +19,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Tuple.Only (Only (..))
 import Data.Typeable (Proxy (..))
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding.Internal (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayFieldRowDec, toPgVectorField)
+import Hpgsql.Encoding.Internal (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayFieldRowDec, nullableField, singleField, toPgVectorField)
 import qualified Hpgsql.PinnedByteArray as PBA
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid, lookupTypeByOid)
@@ -41,15 +41,24 @@ instance forall a. (ToPgField a) => ToPgField (PGArray a) where
             toPgField = \encCtx -> toPgVectorField encCtx . fromPGArray
           }
 
+{-# RULES
+"singleField pgArrayFieldDecoder" singleField pgArrayFieldDecoder = fieldRowDecoder
+"singleField (nullableField pgArrayFieldDecoder)" singleField (nullableField pgArrayFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE pgArrayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+pgArrayFieldDecoder :: (FromPgField a) => FieldDecoder (PGArray a)
+pgArrayFieldDecoder = PGArray <$> fst (arrayFieldRowDec replicateM)
+
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = PGArray <$> fst (arrayFieldRowDec replicateM)
+  fieldDecoder = pgArrayFieldDecoder
   {-# INLINE notConstFieldDecoder #-}
   notConstFieldDecoder = \finfo -> do
     len <- Parser.takeInt32BE
     case len of
       (-1) -> pure Nothing
-      _ -> fmap (Just . PGArray) $ snd (arrayFieldRowDec replicateM) finfo
+      _ -> Just . PGArray <$> snd (arrayFieldRowDec replicateM) finfo
 
 -- | A way to compose two rows.
 data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
