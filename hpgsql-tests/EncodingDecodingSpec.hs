@@ -23,7 +23,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Lazy as LT
 import Data.Time (Day, DiffTime, LocalTime (..), NominalDiffTime, TimeOfDay, UTCTime (..), ZonedTime (..), fromGregorian, picosecondsToDiffTime, secondsToDiffTime, timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Data.Time.LocalTime (CalendarDiffTime (..))
+import Data.Time.LocalTime (CalendarDiffTime (..), zonedTimeToUTC)
 import Data.UUID.Types (UUID)
 import qualified Data.UUID.Types as UUID
 import Data.Vector (Vector)
@@ -142,6 +142,9 @@ spec = parallel $ do
     it
       "LocalTime text decoding"
       localTimeTextDecoding
+    it
+      "ZonedTime text decoding"
+      zonedTimeTextDecoding
     it
       "Json text decoding"
       jsonTextDecoding
@@ -346,7 +349,32 @@ jsonValuesRoundTrip conn = hedgehog $ do
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do
   let rowRes = (fromGregorian 1999 12 31, fromGregorian 2010 01 01, fromGregorian 2011 07 04, fromGregorian 1981 03 17, NegInfinity @UTCTime, PosInfinity @UTCTime, NegInfinity @Day, PosInfinity @Day)
-  queryWith rowDecoder conn (mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date, '-infinity'::timestamptz, 'infinity'::timestamptz, '-infinity'::date, 'infinity'::date" ()) `shouldReturn` [rowRes]
+      qry = mkQuery "SELECT '1999-12-31'::date, '2010-01-01'::date, '2011-07-04'::date, '1981-03-17'::date, '-infinity'::timestamptz, 'infinity'::timestamptz, '-infinity'::date, 'infinity'::date" ()
+  queryWith rowDecoder conn qry `shouldReturn` [rowRes]
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  queryWith
+    ( (,,,,,,,)
+        <$> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+    )
+    conn
+    qry
+    `shouldReturn` [rowRes]
+  -- ZonedTime has no Eq instance, so Unbounded ZonedTime infinities are compared via zonedTimeToUTC
+  let zonedTimeInfinityQry = mkQuery "SELECT '-infinity'::timestamptz, 'infinity'::timestamptz" ()
+      expectedZonedTimeInfinities = (NegInfinity @UTCTime, PosInfinity @UTCTime)
+      toUtcPair (a, b) = (fmap zonedTimeToUTC a, fmap zonedTimeToUTC b)
+  [ztRow1] <- queryWith (rowDecoder @(Unbounded ZonedTime, Unbounded ZonedTime)) conn zonedTimeInfinityQry
+  toUtcPair ztRow1 `shouldBe` expectedZonedTimeInfinities
+  [ztRow2] <- queryWith ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) conn zonedTimeInfinityQry
+  toUtcPair ztRow2 `shouldBe` expectedZonedTimeInfinities
 
 dateEncoding :: HPgConnection -> IO ()
 dateEncoding conn = do
@@ -872,6 +900,64 @@ localTimeTextDecoding conn = hedgehog $ do
       (,) <$> res1 <*> res2
   res1Val === row
   res2Val === row
+
+zonedTimeTextDecoding :: HPgConnection -> PropertyT IO ()
+zonedTimeTextDecoding conn = hedgehog $ do
+  let genUTCTime = do
+        year <- Gen.integral (Gen.linear 1 9999)
+        month <- Gen.int $ Gen.linear 1 12
+        day <- Gen.int $ Gen.linear 1 28
+        timeOfDayMicros <- Gen.integral $ Gen.linear 0 86_399_999_999
+        pure $ UTCTime (fromGregorian year month day) (picosecondsToDiffTime (timeOfDayMicros * 1_000_000))
+  row <- Gen.forAll $ (,,,,,,,,,) <$> genUTCTime <*> genUTCTime <*> genUTCTime <*> genUTCTime <*> genUTCTime <*> genUTCTime <*> genUTCTime <*> genUTCTime <*> genUTCTime <*> genUTCTime
+  let (ut1, ut2, ut3, ut4, ut5, ut6, ut7, ut8, ut9, ut10) = row
+      qry =
+        fromString $
+          "SELECT '"
+            <> iso8601Show ut1
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut2
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut3
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut4
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut5
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut6
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut7
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut8
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut9
+            <> "'::timestamptz"
+            <> ", '"
+            <> iso8601Show ut10
+            <> "'::timestamptz"
+  -- ZonedTime has no Eq instance, so we compare the UTCTime each value represents instead.
+  let toComparable :: (ZonedTime, ZonedTime, ZonedTime, ZonedTime, ZonedTime, Unbounded ZonedTime, Unbounded ZonedTime, Unbounded ZonedTime, Unbounded ZonedTime, Unbounded ZonedTime) -> (UTCTime, UTCTime, UTCTime, UTCTime, UTCTime, Unbounded UTCTime, Unbounded UTCTime, Unbounded UTCTime, Unbounded UTCTime, Unbounded UTCTime)
+      toComparable (zt1, zt2, zt3, zt4, zt5, uzt1, uzt2, uzt3, uzt4, uzt5) =
+        (zonedTimeToUTC zt1, zonedTimeToUTC zt2, zonedTimeToUTC zt3, zonedTimeToUTC zt4, zonedTimeToUTC zt5, fmap zonedTimeToUTC uzt1, fmap zonedTimeToUTC uzt2, fmap zonedTimeToUTC uzt3, fmap zonedTimeToUTC uzt4, fmap zonedTimeToUTC uzt5)
+      expectedResult = (ut1, ut2, ut3, ut4, ut5, Finite ut6, Finite ut7, Finite ut8, Finite ut9, Finite ut10)
+  (res1, res2) <-
+    liftIO $
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          -- Specialized row parsers of each type are a different implementation from
+          -- the simpler fieldDecoders, so we need to test both
+          <*> pipeline1With ((,,,,,,,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
+  (toComparable <$> liftIO res1) >>= (=== expectedResult)
+  (toComparable <$> liftIO res2) >>= (=== expectedResult)
 
 fieldDecoderSemigroup :: HPgConnection -> IO ()
 fieldDecoderSemigroup conn = do
