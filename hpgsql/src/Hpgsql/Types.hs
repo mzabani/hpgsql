@@ -43,7 +43,13 @@ instance forall a. (ToPgField a) => ToPgField (PGArray a) where
 
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = PGArray <$> arrayFieldRowDec replicateM
+  fieldDecoder = PGArray <$> fst (arrayFieldRowDec replicateM)
+  {-# INLINE notConstFieldDecoder #-}
+  notConstFieldDecoder = \finfo -> do
+    len <- Parser.takeInt32BE
+    case len of
+      (-1) -> pure Nothing
+      _ -> fmap (Just . PGArray) $ snd (arrayFieldRowDec replicateM) finfo
 
 -- | A way to compose two rows.
 data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
