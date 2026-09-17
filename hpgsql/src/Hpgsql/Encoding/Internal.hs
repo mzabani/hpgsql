@@ -160,50 +160,11 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 -- benchmarks with "Generically derived" and "singleField fieldDecoder" row decoders both
 -- should allocate the same amount of memory.
 
+-- Per-type rewrite rules for this Note live immediately above each type's
+-- FieldDecoder/RowDecoder definitions further down this file. This rule right below
+-- is still useful and triggers at call sites where the type is not known at
+-- compile time.
 {-# RULES
-"singleField intFieldDecoder" singleField intFieldDecoder = fieldRowDecoder
-"singleField (nullableField intFieldDecoder)" singleField (nullableField intFieldDecoder) = fieldRowDecoder
-"singleField int16FieldDecoder" singleField int16FieldDecoder = fieldRowDecoder
-"singleField (nullableField int16FieldDecoder)" singleField (nullableField int16FieldDecoder) = fieldRowDecoder
-"singleField int32FieldDecoder" singleField int32FieldDecoder = fieldRowDecoder
-"singleField (nullableField int32FieldDecoder)" singleField (nullableField int32FieldDecoder) = fieldRowDecoder
-"singleField int64FieldDecoder" singleField int64FieldDecoder = fieldRowDecoder
-"singleField (nullableField int64FieldDecoder)" singleField (nullableField int64FieldDecoder) = fieldRowDecoder
-"singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = fieldRowDecoder
-"singleField (nullableField utcTimeFieldDecoder)" singleField (nullableField utcTimeFieldDecoder) = fieldRowDecoder
-"singleField unboundedUtcTimeFieldDecoder" singleField unboundedUtcTimeFieldDecoder = fieldRowDecoder
-"singleField (nullableField unboundedUtcTimeFieldDecoder)" singleField (nullableField unboundedUtcTimeFieldDecoder) = fieldRowDecoder
-"singleField zonedTimeFieldDecoder" singleField zonedTimeFieldDecoder = fieldRowDecoder
-"singleField (nullableField zonedTimeFieldDecoder)" singleField (nullableField zonedTimeFieldDecoder) = fieldRowDecoder
-"singleField unboundedZonedTimeFieldDecoder" singleField unboundedZonedTimeFieldDecoder = fieldRowDecoder
-"singleField (nullableField unboundedZonedTimeFieldDecoder)" singleField (nullableField unboundedZonedTimeFieldDecoder) = fieldRowDecoder
-"singleField localTimeFieldDecoder" singleField localTimeFieldDecoder = fieldRowDecoder
-"singleField (nullableField localTimeFieldDecoder)" singleField (nullableField localTimeFieldDecoder) = fieldRowDecoder
-"singleField timeOfDayFieldDecoder" singleField timeOfDayFieldDecoder = fieldRowDecoder
-"singleField (nullableField timeOfDayFieldDecoder)" singleField (nullableField timeOfDayFieldDecoder) = fieldRowDecoder
-"singleField floatFieldDecoder" singleField floatFieldDecoder = fieldRowDecoder
-"singleField (nullableField floatFieldDecoder)" singleField (nullableField floatFieldDecoder) = fieldRowDecoder
-"singleField doubleFieldDecoder" singleField doubleFieldDecoder = fieldRowDecoder
-"singleField (nullableField doubleFieldDecoder)" singleField (nullableField doubleFieldDecoder) = fieldRowDecoder
-"singleField boolFieldDecoder" singleField boolFieldDecoder = fieldRowDecoder
-"singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = fieldRowDecoder
-"singleField textFieldDecoder" singleField textFieldDecoder = fieldRowDecoder
-"singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = fieldRowDecoder
-"singleField lazyTextFieldDecoder" singleField lazyTextFieldDecoder = fieldRowDecoder
-"singleField (nullableField lazyTextFieldDecoder)" singleField (nullableField lazyTextFieldDecoder) = fieldRowDecoder
-"singleField stringFieldDecoder" singleField stringFieldDecoder = fieldRowDecoder
-"singleField (nullableField stringFieldDecoder)" singleField (nullableField stringFieldDecoder) = fieldRowDecoder
-"singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
-"singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
-"singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
-"singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = fieldRowDecoder
-"singleField unboundedDayFieldDecoder" singleField unboundedDayFieldDecoder = fieldRowDecoder
-"singleField (nullableField unboundedDayFieldDecoder)" singleField (nullableField unboundedDayFieldDecoder) = fieldRowDecoder
-"singleField calendarDiffTimeFieldDecoder" singleField calendarDiffTimeFieldDecoder = fieldRowDecoder
-"singleField (nullableField calendarDiffTimeFieldDecoder)" singleField (nullableField calendarDiffTimeFieldDecoder) = fieldRowDecoder
-"singleField uuidFieldDecoder" singleField uuidFieldDecoder = fieldRowDecoder
-"singleField (nullableField uuidFieldDecoder)" singleField (nullableField uuidFieldDecoder) = fieldRowDecoder
--- This last rule is still useful and triggers at call sites where the type is not known at compile time
 "singleField fieldDecoder" singleField fieldDecoder = fieldRowDecoder
 "singleField (nullableField fieldDecoder)" singleField (nullableField fieldDecoder) = fieldRowDecoder
   #-}
@@ -915,6 +876,10 @@ instance FromPgField () where
         allowedPgTypes = (== voidOid) . fieldTypeOid
       }
 
+{-# RULES
+"singleField intFieldDecoder" singleField intFieldDecoder = fieldRowDecoder
+"singleField (nullableField intFieldDecoder)" singleField (nullableField intFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE intFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 intFieldDecoder :: FieldDecoder Int
 intFieldDecoder =
@@ -946,6 +911,10 @@ instance FromPgField Int where
               _ -> Just . fromIntegral <$> Parser.takeInt64BE
           else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
 
+{-# RULES
+"singleField int16FieldDecoder" singleField int16FieldDecoder = fieldRowDecoder
+"singleField (nullableField int16FieldDecoder)" singleField (nullableField int16FieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE int16FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int16FieldDecoder :: FieldDecoder Int16
 int16FieldDecoder =
@@ -964,6 +933,10 @@ instance FromPgField Int16 where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just Parser.takeInt16BEWithFieldLength
 
+{-# RULES
+"singleField int32FieldDecoder" singleField int32FieldDecoder = fieldRowDecoder
+"singleField (nullableField int32FieldDecoder)" singleField (nullableField int32FieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE int32FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int32FieldDecoder :: FieldDecoder Int32
 int32FieldDecoder =
@@ -988,6 +961,10 @@ instance FromPgField Int32 where
       2 -> Just . fromIntegral <$> Parser.takeInt16BE
       _ -> fail "Trying to decode PG int4 but it's not 2 or 4 bytes long"
 
+{-# RULES
+"singleField int64FieldDecoder" singleField int64FieldDecoder = fieldRowDecoder
+"singleField (nullableField int64FieldDecoder)" singleField (nullableField int64FieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE int64FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int64FieldDecoder :: FieldDecoder Int64
 int64FieldDecoder =
@@ -1044,6 +1021,10 @@ instance FromPgField Oid where
         allowedPgTypes = (== oidOid) . fieldTypeOid
       }
 
+{-# RULES
+"singleField floatFieldDecoder" singleField floatFieldDecoder = fieldRowDecoder
+"singleField (nullableField floatFieldDecoder)" singleField (nullableField floatFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE floatFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 floatFieldDecoder :: FieldDecoder Float
 floatFieldDecoder = parsePgType "Float" [float4Oid] $ \case
@@ -1057,15 +1038,10 @@ instance FromPgField Float where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just Parser.takeFloatBEWithFieldLength
 
-{-# INLINE doubleRowDecoder #-}
-doubleRowDecoder :: Parser.Parser (Maybe Double)
-doubleRowDecoder = do
-  len <- Parser.takeInt32BE
-  case len of
-    8 -> Just <$> Parser.takeDoubleBE
-    4 -> Just . float2Double <$> Parser.takeFloatBE
-    _ -> pure Nothing
-
+{-# RULES
+"singleField doubleFieldDecoder" singleField doubleFieldDecoder = fieldRowDecoder
+"singleField (nullableField doubleFieldDecoder)" singleField (nullableField doubleFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE doubleFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 doubleFieldDecoder :: FieldDecoder Double
 doubleFieldDecoder =
@@ -1079,6 +1055,15 @@ doubleFieldDecoder =
               Just bs -> Right $ decoder (PBA.fromByteString bs),
       allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
     }
+
+{-# INLINE doubleRowDecoder #-}
+doubleRowDecoder :: Parser.Parser (Maybe Double)
+doubleRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> Just <$> Parser.takeDoubleBE
+    4 -> Just . float2Double <$> Parser.takeFloatBE
+    _ -> pure Nothing
 
 instance FromPgField Double where
   {-# INLINE fieldDecoder #-}
@@ -1136,6 +1121,10 @@ numericRowParser = do
     (-1) -> pure Nothing
     _ -> Just <$> scientificDecoder False
 
+{-# RULES
+"singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
+"singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE scientificFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 scientificFieldDecoder :: FieldDecoder Scientific
 scientificFieldDecoder =
@@ -1176,15 +1165,19 @@ instance FromPgField (Ratio Integer) where
 binaryTrue :: PinnedByteArray
 binaryTrue = PBA.fromByteString $ PBA.encodePgBoolean True
 
-{-# INLINE boolRowDecoder #-}
-boolRowDecoder :: Parser.Parser (Maybe Bool)
-boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
-
+{-# RULES
+"singleField boolFieldDecoder" singleField boolFieldDecoder = fieldRowDecoder
+"singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE boolFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 boolFieldDecoder :: FieldDecoder Bool
 boolFieldDecoder = parsePgType "Bool" [boolOid] $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
   Just bs -> Right $ PBA.fromByteString bs == binaryTrue
+
+{-# INLINE boolRowDecoder #-}
+boolRowDecoder :: Parser.Parser (Maybe Bool)
+boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
 
 instance FromPgField Bool where
   {-# INLINE fieldDecoder #-}
@@ -1224,6 +1217,16 @@ instance FromPgField LBS.ByteString where
     Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
     Just bs -> Right $ LBS.fromStrict bs
 
+{-# RULES
+"singleField textFieldDecoder" singleField textFieldDecoder = fieldRowDecoder
+"singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = fieldRowDecoder
+  #-}
+{-# NOINLINE textFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+textFieldDecoder :: FieldDecoder Text
+textFieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
+  Just bs -> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+
 {-# INLINE textDecoder #-}
 textDecoder :: Parser.Parser (Maybe Text)
 textDecoder = do
@@ -1232,12 +1235,6 @@ textDecoder = do
     then Just <$> Parser.takeUtf8Text (fromIntegral len)
     else pure Nothing
 
-{-# NOINLINE textFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
-textFieldDecoder :: FieldDecoder Text
-textFieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \case
-  Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
-  Just bs -> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
-
 instance FromPgField Text where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = textFieldDecoder
@@ -1245,13 +1242,17 @@ instance FromPgField Text where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just textDecoder
 
-{-# INLINE lazyTextDecoder #-}
-lazyTextDecoder :: Parser.Parser (Maybe LT.Text)
-lazyTextDecoder = fmap LT.fromStrict <$> textDecoder
-
+{-# RULES
+"singleField lazyTextFieldDecoder" singleField lazyTextFieldDecoder = fieldRowDecoder
+"singleField (nullableField lazyTextFieldDecoder)" singleField (nullableField lazyTextFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE lazyTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 lazyTextFieldDecoder :: FieldDecoder LT.Text
 lazyTextFieldDecoder = LT.fromStrict <$> textFieldDecoder
+
+{-# INLINE lazyTextDecoder #-}
+lazyTextDecoder :: Parser.Parser (Maybe LT.Text)
+lazyTextDecoder = fmap LT.fromStrict <$> textDecoder
 
 instance FromPgField LT.Text where
   {-# INLINE fieldDecoder #-}
@@ -1260,15 +1261,19 @@ instance FromPgField LT.Text where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just lazyTextDecoder
 
-{-# INLINE stringDecoder #-}
-stringDecoder :: Parser.Parser (Maybe String)
-stringDecoder = fmap Text.unpack <$> textDecoder
-
+{-# RULES
+"singleField stringFieldDecoder" singleField stringFieldDecoder = fieldRowDecoder
+"singleField (nullableField stringFieldDecoder)" singleField (nullableField stringFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE stringFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 stringFieldDecoder :: FieldDecoder String
 stringFieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
   Just bs -> Text.unpack <$> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+
+{-# INLINE stringDecoder #-}
+stringDecoder :: Parser.Parser (Maybe String)
+stringDecoder = fmap Text.unpack <$> textDecoder
 
 instance FromPgField String where
   {-# INLINE fieldDecoder #-}
@@ -1295,6 +1300,21 @@ instance FromPgField (CI String) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
 
+{-# RULES
+"singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField utcTimeFieldDecoder)" singleField (nullableField utcTimeFieldDecoder) = fieldRowDecoder
+  #-}
+{-# NOINLINE utcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+utcTimeFieldDecoder :: FieldDecoder UTCTime
+utcTimeFieldDecoder = parsePgType "UTCTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+    Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+
 {-# INLINE utcTimeRowDecoder #-}
 utcTimeRowDecoder :: Parser.Parser (Maybe UTCTime)
 utcTimeRowDecoder = do
@@ -1307,23 +1327,34 @@ utcTimeRowDecoder = do
       pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     _ -> pure Nothing
 
-{-# NOINLINE utcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
-utcTimeFieldDecoder :: FieldDecoder UTCTime
-utcTimeFieldDecoder = parsePgType "UTCTime" [timestamptzOid] $ \case
-  Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
-  Just bs -> do
-    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
-    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
-        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-    Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-
 instance FromPgField UTCTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = utcTimeFieldDecoder
 
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just utcTimeRowDecoder
+
+{-# RULES
+"singleField unboundedUtcTimeFieldDecoder" singleField unboundedUtcTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField unboundedUtcTimeFieldDecoder)" singleField (nullableField unboundedUtcTimeFieldDecoder) = fieldRowDecoder
+  #-}
+{-# NOINLINE unboundedUtcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+unboundedUtcTimeFieldDecoder :: FieldDecoder (Unbounded UTCTime)
+unboundedUtcTimeFieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded UTCTime type. Use a `Maybe (Unbounded UTCTime)`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    Right $
+      if totalusecs == minBound
+        then NegInfinity
+        else
+          if totalusecs == maxBound
+            then PosInfinity
+            else
+              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+               in Finite $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 {-# INLINE unboundedUtcTimeRowDecoder #-}
 unboundedUtcTimeRowDecoder :: Parser.Parser (Maybe (Unbounded UTCTime))
@@ -1345,30 +1376,27 @@ unboundedUtcTimeRowDecoder = do
                    in Finite $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     _ -> pure Nothing
 
-{-# NOINLINE unboundedUtcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
-unboundedUtcTimeFieldDecoder :: FieldDecoder (Unbounded UTCTime)
-unboundedUtcTimeFieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] $ \case
-  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded UTCTime type. Use a `Maybe (Unbounded UTCTime)`"
-  Just bs -> do
-    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
-    Right $
-      if totalusecs == minBound
-        then NegInfinity
-        else
-          if totalusecs == maxBound
-            then PosInfinity
-            else
-              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
-                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-               in Finite $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-
 instance FromPgField (Unbounded UTCTime) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = unboundedUtcTimeFieldDecoder
 
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just unboundedUtcTimeRowDecoder
+
+{-# RULES
+"singleField zonedTimeFieldDecoder" singleField zonedTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField zonedTimeFieldDecoder)" singleField (nullableField zonedTimeFieldDecoder) = fieldRowDecoder
+  #-}
+{-# NOINLINE zonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+zonedTimeFieldDecoder :: FieldDecoder ZonedTime
+zonedTimeFieldDecoder = parsePgType "ZonedTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+    Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 {-# INLINE zonedTimeRowDecoder #-}
 zonedTimeRowDecoder :: Parser.Parser (Maybe ZonedTime)
@@ -1382,23 +1410,34 @@ zonedTimeRowDecoder = do
       pure $ Just $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     _ -> pure Nothing
 
-{-# NOINLINE zonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
-zonedTimeFieldDecoder :: FieldDecoder ZonedTime
-zonedTimeFieldDecoder = parsePgType "ZonedTime" [timestamptzOid] $ \case
-  Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
-  Just bs -> do
-    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
-    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
-        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-    Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-
 instance FromPgField ZonedTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = zonedTimeFieldDecoder
 
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just zonedTimeRowDecoder
+
+{-# RULES
+"singleField unboundedZonedTimeFieldDecoder" singleField unboundedZonedTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField unboundedZonedTimeFieldDecoder)" singleField (nullableField unboundedZonedTimeFieldDecoder) = fieldRowDecoder
+  #-}
+{-# NOINLINE unboundedZonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+unboundedZonedTimeFieldDecoder :: FieldDecoder (Unbounded ZonedTime)
+unboundedZonedTimeFieldDecoder = parsePgType "Unbounded ZonedTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded ZonedTime type. Use a `Maybe (Unbounded ZonedTime)`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    Right $
+      if totalusecs == minBound
+        then NegInfinity
+        else
+          if totalusecs == maxBound
+            then PosInfinity
+            else
+              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+               in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 {-# INLINE unboundedZonedTimeRowDecoder #-}
 unboundedZonedTimeRowDecoder :: Parser.Parser (Maybe (Unbounded ZonedTime))
@@ -1420,30 +1459,26 @@ unboundedZonedTimeRowDecoder = do
                    in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     _ -> pure Nothing
 
-{-# NOINLINE unboundedZonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
-unboundedZonedTimeFieldDecoder :: FieldDecoder (Unbounded ZonedTime)
-unboundedZonedTimeFieldDecoder = parsePgType "Unbounded ZonedTime" [timestamptzOid] $ \case
-  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded ZonedTime type. Use a `Maybe (Unbounded ZonedTime)`"
-  Just bs -> do
-    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
-    Right $
-      if totalusecs == minBound
-        then NegInfinity
-        else
-          if totalusecs == maxBound
-            then PosInfinity
-            else
-              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
-                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-               in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-
 instance FromPgField (Unbounded ZonedTime) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = unboundedZonedTimeFieldDecoder
 
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just unboundedZonedTimeRowDecoder
+
+{-# RULES
+"singleField localTimeFieldDecoder" singleField localTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField localTimeFieldDecoder)" singleField (nullableField localTimeFieldDecoder) = fieldRowDecoder
+  #-}
+{-# NOINLINE localTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+localTimeFieldDecoder :: FieldDecoder LocalTime
+localTimeFieldDecoder = parsePgType "LocalTime" [timestampOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell LocalTime type. Use a `Maybe LocalTime`"
+  Just bs -> do
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+    Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
 
 {-# INLINE localTimeRowDecoder #-}
 localTimeRowDecoder :: Parser.Parser (Maybe LocalTime)
@@ -1457,22 +1492,24 @@ localTimeRowDecoder = do
       pure $ Just $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
     _ -> pure Nothing
 
-{-# NOINLINE localTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
-localTimeFieldDecoder :: FieldDecoder LocalTime
-localTimeFieldDecoder = parsePgType "LocalTime" [timestampOid] $ \case
-  Nothing -> Left "Cannot decode SQL null as the Haskell LocalTime type. Use a `Maybe LocalTime`"
-  Just bs -> do
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
-    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
-        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
-    Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
-
 instance FromPgField LocalTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = localTimeFieldDecoder
 
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just localTimeRowDecoder
+
+{-# RULES
+"singleField timeOfDayFieldDecoder" singleField timeOfDayFieldDecoder = fieldRowDecoder
+"singleField (nullableField timeOfDayFieldDecoder)" singleField (nullableField timeOfDayFieldDecoder) = fieldRowDecoder
+  #-}
+{-# NOINLINE timeOfDayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+timeOfDayFieldDecoder :: FieldDecoder TimeOfDay
+timeOfDayFieldDecoder = parsePgType "TimeOfDay" [timeOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell TimeOfDay type. Use a `Maybe TimeOfDay`"
+  Just bs -> do
+    usecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
 
 {-# INLINE timeOfDayRowDecoder #-}
 timeOfDayRowDecoder :: Parser.Parser (Maybe TimeOfDay)
@@ -1484,14 +1521,6 @@ timeOfDayRowDecoder = do
       pure $ Just $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
     _ -> pure Nothing
 
-{-# NOINLINE timeOfDayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
-timeOfDayFieldDecoder :: FieldDecoder TimeOfDay
-timeOfDayFieldDecoder = parsePgType "TimeOfDay" [timeOid] $ \case
-  Nothing -> Left "Cannot decode SQL null as the Haskell TimeOfDay type. Use a `Maybe TimeOfDay`"
-  Just bs -> do
-    usecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
-    Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
-
 instance FromPgField TimeOfDay where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = timeOfDayFieldDecoder
@@ -1499,12 +1528,10 @@ instance FromPgField TimeOfDay where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just timeOfDayRowDecoder
 
-{-# INLINE dayRowDecoder #-}
-dayRowDecoder :: Parser.Parser (Maybe Day)
-dayRowDecoder =
-  let int32ToDay (i32 :: Int32) = let jd = fromIntegral i32 :: Integer in addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
-   in fmap int32ToDay <$> Parser.takeInt32BEWithFieldLength
-
+{-# RULES
+"singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
+"singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE dayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 dayFieldDecoder :: FieldDecoder Day
 dayFieldDecoder = parsePgType "Day" [dateOid] $ \case
@@ -1516,6 +1543,12 @@ dayFieldDecoder = parsePgType "Day" [dateOid] $ \case
     jd <- PBA.decodeInt32BE 0 (PBA.fromByteString bs)
     Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
 
+{-# INLINE dayRowDecoder #-}
+dayRowDecoder :: Parser.Parser (Maybe Day)
+dayRowDecoder =
+  let int32ToDay (i32 :: Int32) = let jd = fromIntegral i32 :: Integer in addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
+   in fmap int32ToDay <$> Parser.takeInt32BEWithFieldLength
+
 instance FromPgField Day where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = dayFieldDecoder
@@ -1523,6 +1556,10 @@ instance FromPgField Day where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just dayRowDecoder
 
+{-# RULES
+"singleField unboundedDayFieldDecoder" singleField unboundedDayFieldDecoder = fieldRowDecoder
+"singleField (nullableField unboundedDayFieldDecoder)" singleField (nullableField unboundedDayFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE unboundedDayFieldDecoder #-}
 unboundedDayFieldDecoder :: FieldDecoder (Unbounded Day)
 unboundedDayFieldDecoder = parsePgType "Unbounded Day" [dateOid] $ \case
@@ -1545,6 +1582,10 @@ instance FromPgField (Unbounded Day) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = unboundedDayFieldDecoder
 
+{-# RULES
+"singleField calendarDiffTimeFieldDecoder" singleField calendarDiffTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField calendarDiffTimeFieldDecoder)" singleField (nullableField calendarDiffTimeFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE calendarDiffTimeFieldDecoder #-}
 calendarDiffTimeFieldDecoder :: FieldDecoder CalendarDiffTime
 calendarDiffTimeFieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ \case
@@ -1560,6 +1601,10 @@ instance FromPgField CalendarDiffTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = calendarDiffTimeFieldDecoder
 
+{-# RULES
+"singleField uuidFieldDecoder" singleField uuidFieldDecoder = fieldRowDecoder
+"singleField (nullableField uuidFieldDecoder)" singleField (nullableField uuidFieldDecoder) = fieldRowDecoder
+  #-}
 {-# NOINLINE uuidFieldDecoder #-}
 uuidFieldDecoder :: FieldDecoder UUID
 uuidFieldDecoder = parsePgType "UUID" [uuidOid] $ \case
