@@ -914,17 +914,20 @@ instance FromPgField Int where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = intFieldDecoder
 
-  {-# INLINE inlinedConstFieldDecoder #-}
-  inlinedConstFieldDecoder = Just $ do
-    fieldLen <- Parser.takeInt32BE
-    -- TODO: We're assuming `Int` is always 64 bits, so 64bit CPUs? Is that ok?
-    -- TODO: Is there a way to optimistically assume <=4 bytes and use our custom new parser?
-    case fieldLen of
-      4 -> Just . fromIntegral <$> Parser.takeInt32BE
-      (-1) -> pure Nothing
-      8 -> Just . fromIntegral <$> Parser.takeInt64BE
-      2 -> Just . fromIntegral <$> Parser.takeInt16BE
-      _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
+  -- Interestingly, the notConst field decoder is a tiny little bit
+  -- faster than the constFieldDecoder
+  {-# INLINE notConstFieldDecoder #-}
+  notConstFieldDecoder = \finfo ->
+    if finfo.fieldTypeOid == int4Oid
+      then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
+      else
+        if finfo.fieldTypeOid == int8Oid
+          then do
+            fieldLen <- Parser.takeInt32BE
+            case fieldLen of
+              (-1) -> pure Nothing
+              _ -> Just . fromIntegral <$> Parser.takeInt64BE
+          else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
 
 {-# NOINLINE int16FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int16FieldDecoder :: FieldDecoder Int16
