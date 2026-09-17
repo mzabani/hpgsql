@@ -181,6 +181,8 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 "singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = fieldRowDecoder
 "singleField lazyTextFieldDecoder" singleField lazyTextFieldDecoder = fieldRowDecoder
 "singleField (nullableField lazyTextFieldDecoder)" singleField (nullableField lazyTextFieldDecoder) = fieldRowDecoder
+"singleField stringFieldDecoder" singleField stringFieldDecoder = fieldRowDecoder
+"singleField (nullableField stringFieldDecoder)" singleField (nullableField stringFieldDecoder) = fieldRowDecoder
 "singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
 "singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
 "singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
@@ -1248,11 +1250,22 @@ instance FromPgField LT.Text where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just lazyTextDecoder
 
+{-# INLINE stringDecoder #-}
+stringDecoder :: Parser.Parser (Maybe String)
+stringDecoder = fmap Text.unpack <$> textDecoder
+
+{-# NOINLINE stringFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+stringFieldDecoder :: FieldDecoder String
+stringFieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
+  Just bs -> Text.unpack <$> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+
 instance FromPgField String where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \case
-    Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
-    Just bs -> Text.unpack <$> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+  fieldDecoder = stringFieldDecoder
+
+  {-# INLINE inlinedConstFieldDecoder #-}
+  inlinedConstFieldDecoder = Just stringDecoder
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
@@ -1456,13 +1469,15 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let -- jsonb has a byte prepended to the contents and json does not
-                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in \case
-                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
-                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                    Just d -> Right d
-                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+            let
+              -- jsonb has a byte prepended to the contents and json does not
+              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in
+              \case
+                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
+                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                  Just d -> Right d
+                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 
