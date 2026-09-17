@@ -30,6 +30,7 @@ import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import DbUtils
   ( aroundConn,
+    irrecoverableErrorWithMsg,
     irrecoverableErrorWithMsgAndStmt,
     testConnInfo,
     withRollback,
@@ -43,7 +44,7 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
-import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowDecoder, RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipeline1With, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -943,7 +944,7 @@ instance FromPgField MyEnum where
           "val1" -> Val1
           "val2" -> Val2
           "val3" -> Val3
-          _ -> error "Invalid value for MyEnum"
+          x -> error $ "Invalid value for MyEnum:" ++ show x
      in convert <$> rawBytesFieldDecoder
 
 myEnumFieldDecoderWithTypeInfoCheck :: FieldDecoder MyEnum
@@ -952,7 +953,7 @@ myEnumFieldDecoderWithTypeInfoCheck =
         "val1" -> Val1
         "val2" -> Val2
         "val3" -> Val3
-        _ -> error "Invalid value for MyEnum"
+        x -> error $ "Invalid value for MyEnum: " ++ show x
    in typeFieldDecoder
         (typeMustBeNamed "myenum")
         $ convert <$> rawBytesFieldDecoder
@@ -970,8 +971,12 @@ instance ToPgField MyEnum where
 queryEnumTypes :: HPgConnection -> IO ()
 queryEnumTypes conn = withRollback conn $ do
   execute conn "CREATE TYPE myenum AS ENUM ('val1', 'val2', 'val3');"
-  queryWith (rowDecoder @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn "SELECT 'val1'::myenum, 'val2'::myenum, 'val3'::myenum, NULL::myenum" `shouldReturn` [(Val1, Val2, Val3, Nothing)]
-  queryWith (rowDecoder @(MyEnum, MyEnum, MyEnum, Maybe MyEnum)) conn (mkQuery "SELECT $1, $2, $3, $4" (Val1, Val2, Val3, Nothing :: Maybe MyEnum)) `shouldReturn` [(Val1, Val2, Val3, Nothing)]
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  queryWith rowDecoder conn "SELECT 'val1'::myenum, 'val2'::myenum, 'val3'::myenum, NULL::myenum" `shouldReturn` [(Val1, Val2, Val3, Nothing :: Maybe MyEnum)]
+  queryWith ((,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) conn "SELECT 'val1'::myenum, 'val2'::myenum, 'val3'::myenum, NULL::myenum" `shouldReturn` [(Val1, Val2, Val3, Nothing :: Maybe MyEnum)]
+  queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4" (Val1, Val2, Val3, Nothing :: Maybe MyEnum)) `shouldReturn` [(Val1, Val2, Val3, Nothing :: Maybe MyEnum)]
+  queryWith ((,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) conn (mkQuery "SELECT $1, $2, $3, $4" (Val1, Val2, Val3, Nothing :: Maybe MyEnum)) `shouldReturn` [(Val1, Val2, Val3, Nothing :: Maybe MyEnum)]
   -- The statement below will fail because the new myenum type is not in the typeCache
   -- yet. Then we add it and it will pass
   queryWith (singleField myEnumFieldDecoderWithTypeInfoCheck) conn "SELECT 'val2'::myenum"
@@ -986,6 +991,16 @@ queryEnumTypes conn = withRollback conn $ do
   refreshTyiCacheAction
   queryRes `shouldReturn` [Val2]
   query conn "SELECT ARRAY['val2'::myenum]" `shouldReturn` [Only (PGArray [Val2])]
+
+  -- LowerCasedPGEnum for both specialized row decoder and field decoder
+  execute conn "CREATE TYPE lcenum AS ENUM ('eval1', 'eval2', 'eval3', 'unmapped_value');"
+  queryWith rowDecoder conn "SELECT 'eval1'::lcenum, 'eval2'::lcenum, 'eval3'::lcenum, NULL::lcenum" `shouldReturn` [(EVal1, EVal2, EVal3, Nothing :: Maybe SomeGenericEnum)]
+
+  queryWith ((,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) conn "SELECT 'eval1'::lcenum, 'eval2'::lcenum, 'eval3'::lcenum, NULL::lcenum" `shouldReturn` [(EVal1, EVal2, EVal3, Nothing :: Maybe SomeGenericEnum)]
+
+  -- Now with an unmapped value, for which we expect a good error message
+  queryWith (rowDecoder :: RowDecoder (Only SomeGenericEnum)) conn "SELECT 'unmapped_value'::lcenum" `shouldThrow` irrecoverableErrorWithMsg "Invalid enum value. Not one of"
+  queryWith (singleField $ notRewrittenFieldDecoder @SomeGenericEnum) conn "SELECT 'unmapped_value'::lcenum" `shouldThrow` irrecoverableErrorWithMsg "Invalid enum value. Not one of"
 
 data SomeGenericEnum = EVal1 | EVal2 | EVal3
   deriving stock (Eq, Generic, Show)
@@ -1035,9 +1050,15 @@ genSomeGenericProdType =
 queryGenericallyDerivedTypes :: HPgConnection -> IO ()
 queryGenericallyDerivedTypes conn = withRollback conn $ do
   execute conn "CREATE TYPE myenum AS ENUM ('eval1', 'eval2', 'eval3');"
-  queryWith rowDecoder conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericRecord 13 EVal2 "Some text" True False]
-  queryWith rowDecoder conn "SELECT 13, 'eval2'::myenum, 'Some text', true, false" `shouldReturn` [SomeGenericProdType 13 EVal2 "Some text" True False]
-  queryWith rowDecoder conn "SELECT 'eval1'::myenum, 'eval2'::myenum, 'eval3'::myenum" `shouldReturn` [(EVal1, EVal2, EVal3)]
+  (r1, r2, r3) <-
+    runPipeline conn $
+      (,,)
+        <$> pipelineWith rowDecoder "SELECT 13, 'eval2'::myenum, 'Some text', true, false"
+        <*> pipelineWith rowDecoder "SELECT 13, 'eval2'::myenum, 'Some text', true, false"
+        <*> pipelineWith rowDecoder "SELECT 'eval1'::myenum, 'eval2'::myenum, 'eval3'::myenum"
+  r1 `shouldReturn` [SomeGenericRecord 13 EVal2 "Some text" True False]
+  r2 `shouldReturn` [SomeGenericProdType 13 EVal2 "Some text" True False]
+  r3 `shouldReturn` [(EVal1, EVal2, EVal3)]
 
 queryGenericallyDerivedTypesRoundTrip :: HPgConnection -> PropertyT IO ()
 queryGenericallyDerivedTypesRoundTrip conn = hedgehog $ do

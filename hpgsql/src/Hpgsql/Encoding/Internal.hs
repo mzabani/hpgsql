@@ -179,6 +179,8 @@ instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in
 "singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = fieldRowDecoder
 "singleField textFieldDecoder" singleField textFieldDecoder = fieldRowDecoder
 "singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = fieldRowDecoder
+"singleField lazyTextFieldDecoder" singleField lazyTextFieldDecoder = fieldRowDecoder
+"singleField (nullableField lazyTextFieldDecoder)" singleField (nullableField lazyTextFieldDecoder) = fieldRowDecoder
 "singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
 "singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
 "singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
@@ -878,10 +880,13 @@ binaryFloat8Decoder :: PinnedByteArray -> Double
 binaryFloat8Decoder = castWord64ToDouble . either error id . PBA.decodeWord64BE 0
 
 parsePgType :: String -> [Oid] -> (Maybe ByteString -> Either String a) -> FieldDecoder a
-parsePgType !_typeName !requiredTypeOids !fieldValueDecoder =
+parsePgType !_typeName !requiredTypeOids !fieldValueDecoder = parsePgTypeFull ((`elem` requiredTypeOids) . fieldTypeOid) fieldValueDecoder
+
+parsePgTypeFull :: (FieldInfo -> Bool) -> (Maybe ByteString -> Either String a) -> FieldDecoder a
+parsePgTypeFull !allowedPgTypes !fieldValueDecoder =
   FieldDecoder
     { fieldValueDecoder = \_oid -> fieldValueDecoder,
-      allowedPgTypes = (`elem` requiredTypeOids) . fieldTypeOid
+      allowedPgTypes
     }
 
 instance FromPgField () where
@@ -1228,11 +1233,20 @@ instance FromPgField Text where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just textDecoder
 
+{-# INLINE lazyTextDecoder #-}
+lazyTextDecoder :: Parser.Parser (Maybe LT.Text)
+lazyTextDecoder = fmap LT.fromStrict <$> textDecoder
+
+{-# NOINLINE lazyTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+lazyTextFieldDecoder :: FieldDecoder LT.Text
+lazyTextFieldDecoder = LT.fromStrict <$> textFieldDecoder
+
 instance FromPgField LT.Text where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \case
-    Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
-    Just bs -> LT.fromStrict <$> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+  fieldDecoder = lazyTextFieldDecoder
+
+  {-# INLINE inlinedConstFieldDecoder #-}
+  inlinedConstFieldDecoder = Just lazyTextDecoder
 
 instance FromPgField String where
   {-# INLINE fieldDecoder #-}
@@ -1442,15 +1456,13 @@ instance FromPgField Aeson.Value where
     FieldDecoder
       { fieldValueDecoder =
           \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+            let -- jsonb has a byte prepended to the contents and json does not
+                !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+             in \case
+                  Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
+                  Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                    Just d -> Right d
+                    Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
         allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
       }
 
@@ -1605,6 +1617,15 @@ newtype LowerCasedPgEnum a = LowerCasedPgEnum a
 
 instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) where
   fieldDecoder = LowerCasedPgEnum <$> genericEnumFieldDecoder LT.toLower
+  inlinedConstFieldDecoder = Just $ do
+    enumAsText <- lazyTextDecoder
+    case enumAsText of
+      Nothing -> pure Nothing
+      Just e -> case textToEnum e of
+        Left err -> fail err
+        Right v -> pure $ Just (LowerCasedPgEnum v)
+    where
+      textToEnum = enumFieldMapper @a LT.toLower
 
 instance (Generic a, EnumEncoder (Rep a)) => ToPgField (LowerCasedPgEnum a) where
   fieldEncoder = untypedFieldEncoder $ \_encCtx -> \(LowerCasedPgEnum v) -> NotNull $ genericEnumFieldEncoder Text.toLower v
@@ -1618,10 +1639,26 @@ genericEnumFieldDecoder ::
   -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
   (LT.Text -> LT.Text) ->
   FieldDecoder a
-genericEnumFieldDecoder nameTransform = fromMaybe (error $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)) . flip Map.lookup allValuesMap <$> rawBytesFieldDecoder
+genericEnumFieldDecoder nameTransform = parsePgTypeFull (const True) $ \case
+  Nothing -> Left "Cannot decode SQL null with the Enum decoder. Use a `Maybe` if you want SQL nulls"
+  Just bs -> transform (LT.decodeUtf8 $ BS.fromStrict bs)
+  where
+    transform = enumFieldMapper nameTransform
+
+-- | Returns a function that maps an enum value coming from Postgres
+-- into the enum while respecting the Haskell-constructor mapping function.
+enumFieldMapper ::
+  forall a.
+  (Generic a, EnumDecoder (Rep a)) =>
+  -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
+  (LT.Text -> LT.Text) ->
+  (LT.Text -> Either String a)
+enumFieldMapper nameTransform = \enumVal -> case Map.lookup enumVal allValuesMap of
+  Nothing -> Left $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)
+  Just v -> Right v
   where
     -- TODO: Vector of pointers to ByteStrings for a bit more memory locality? Does it make a perf difference?
-    allValuesMap = Map.mapKeys (LBS.toStrict . LT.encodeUtf8 . nameTransform) $ fmap to genEnumDecoder
+    allValuesMap = Map.mapKeys nameTransform $ fmap to genEnumDecoder
 
 class EnumDecoder f where
   -- | Returns the textual representation and constructed object for every possible
