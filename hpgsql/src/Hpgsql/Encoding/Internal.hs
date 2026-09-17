@@ -880,6 +880,7 @@ instance FromPgField () where
 "singleField intFieldDecoder" singleField intFieldDecoder = fieldRowDecoder
 "singleField (nullableField intFieldDecoder)" singleField (nullableField intFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE intFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 intFieldDecoder :: FieldDecoder Int
 intFieldDecoder =
@@ -904,17 +905,14 @@ instance FromPgField Int where
       then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
       else
         if finfo.fieldTypeOid == int8Oid
-          then do
-            fieldLen <- Parser.takeInt32BE
-            case fieldLen of
-              (-1) -> pure Nothing
-              _ -> Just . fromIntegral <$> Parser.takeInt64BE
+          then fmap fromIntegral <$> Parser.takeInt64BEWithFieldLength
           else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
 
 {-# RULES
 "singleField int16FieldDecoder" singleField int16FieldDecoder = fieldRowDecoder
 "singleField (nullableField int16FieldDecoder)" singleField (nullableField int16FieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE int16FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int16FieldDecoder :: FieldDecoder Int16
 int16FieldDecoder =
@@ -937,6 +935,7 @@ instance FromPgField Int16 where
 "singleField int32FieldDecoder" singleField int32FieldDecoder = fieldRowDecoder
 "singleField (nullableField int32FieldDecoder)" singleField (nullableField int32FieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE int32FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int32FieldDecoder :: FieldDecoder Int32
 int32FieldDecoder =
@@ -965,6 +964,7 @@ instance FromPgField Int32 where
 "singleField int64FieldDecoder" singleField int64FieldDecoder = fieldRowDecoder
 "singleField (nullableField int64FieldDecoder)" singleField (nullableField int64FieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE int64FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int64FieldDecoder :: FieldDecoder Int64
 int64FieldDecoder =
@@ -1025,6 +1025,7 @@ instance FromPgField Oid where
 "singleField floatFieldDecoder" singleField floatFieldDecoder = fieldRowDecoder
 "singleField (nullableField floatFieldDecoder)" singleField (nullableField floatFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE floatFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 floatFieldDecoder :: FieldDecoder Float
 floatFieldDecoder = parsePgType "Float" [float4Oid] $ \case
@@ -1042,6 +1043,7 @@ instance FromPgField Float where
 "singleField doubleFieldDecoder" singleField doubleFieldDecoder = fieldRowDecoder
 "singleField (nullableField doubleFieldDecoder)" singleField (nullableField doubleFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE doubleFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 doubleFieldDecoder :: FieldDecoder Double
 doubleFieldDecoder =
@@ -1125,6 +1127,7 @@ numericRowParser = do
 "singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
 "singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE scientificFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 scientificFieldDecoder :: FieldDecoder Scientific
 scientificFieldDecoder =
@@ -1169,6 +1172,7 @@ binaryTrue = PBA.fromByteString $ PBA.encodePgBoolean True
 "singleField boolFieldDecoder" singleField boolFieldDecoder = fieldRowDecoder
 "singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE boolFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 boolFieldDecoder :: FieldDecoder Bool
 boolFieldDecoder = parsePgType "Bool" [boolOid] $ \case
@@ -1221,6 +1225,7 @@ instance FromPgField LBS.ByteString where
 "singleField textFieldDecoder" singleField textFieldDecoder = fieldRowDecoder
 "singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE textFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 textFieldDecoder :: FieldDecoder Text
 textFieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid] $ \case
@@ -1246,6 +1251,7 @@ instance FromPgField Text where
 "singleField lazyTextFieldDecoder" singleField lazyTextFieldDecoder = fieldRowDecoder
 "singleField (nullableField lazyTextFieldDecoder)" singleField (nullableField lazyTextFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE lazyTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 lazyTextFieldDecoder :: FieldDecoder LT.Text
 lazyTextFieldDecoder = LT.fromStrict <$> textFieldDecoder
@@ -1265,6 +1271,7 @@ instance FromPgField LT.Text where
 "singleField stringFieldDecoder" singleField stringFieldDecoder = fieldRowDecoder
 "singleField (nullableField stringFieldDecoder)" singleField (nullableField stringFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE stringFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 stringFieldDecoder :: FieldDecoder String
 stringFieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \case
@@ -1304,6 +1311,7 @@ instance FromPgField (CI String) where
 "singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = fieldRowDecoder
 "singleField (nullableField utcTimeFieldDecoder)" singleField (nullableField utcTimeFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE utcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 utcTimeFieldDecoder :: FieldDecoder UTCTime
 utcTimeFieldDecoder = parsePgType "UTCTime" [timestamptzOid] $ \case
@@ -1338,6 +1346,7 @@ instance FromPgField UTCTime where
 "singleField unboundedUtcTimeFieldDecoder" singleField unboundedUtcTimeFieldDecoder = fieldRowDecoder
 "singleField (nullableField unboundedUtcTimeFieldDecoder)" singleField (nullableField unboundedUtcTimeFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE unboundedUtcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 unboundedUtcTimeFieldDecoder :: FieldDecoder (Unbounded UTCTime)
 unboundedUtcTimeFieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] $ \case
@@ -1387,6 +1396,7 @@ instance FromPgField (Unbounded UTCTime) where
 "singleField zonedTimeFieldDecoder" singleField zonedTimeFieldDecoder = fieldRowDecoder
 "singleField (nullableField zonedTimeFieldDecoder)" singleField (nullableField zonedTimeFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE zonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 zonedTimeFieldDecoder :: FieldDecoder ZonedTime
 zonedTimeFieldDecoder = parsePgType "ZonedTime" [timestamptzOid] $ \case
@@ -1421,6 +1431,7 @@ instance FromPgField ZonedTime where
 "singleField unboundedZonedTimeFieldDecoder" singleField unboundedZonedTimeFieldDecoder = fieldRowDecoder
 "singleField (nullableField unboundedZonedTimeFieldDecoder)" singleField (nullableField unboundedZonedTimeFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE unboundedZonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 unboundedZonedTimeFieldDecoder :: FieldDecoder (Unbounded ZonedTime)
 unboundedZonedTimeFieldDecoder = parsePgType "Unbounded ZonedTime" [timestamptzOid] $ \case
@@ -1470,6 +1481,7 @@ instance FromPgField (Unbounded ZonedTime) where
 "singleField localTimeFieldDecoder" singleField localTimeFieldDecoder = fieldRowDecoder
 "singleField (nullableField localTimeFieldDecoder)" singleField (nullableField localTimeFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE localTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 localTimeFieldDecoder :: FieldDecoder LocalTime
 localTimeFieldDecoder = parsePgType "LocalTime" [timestampOid] $ \case
@@ -1503,6 +1515,7 @@ instance FromPgField LocalTime where
 "singleField timeOfDayFieldDecoder" singleField timeOfDayFieldDecoder = fieldRowDecoder
 "singleField (nullableField timeOfDayFieldDecoder)" singleField (nullableField timeOfDayFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE timeOfDayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 timeOfDayFieldDecoder :: FieldDecoder TimeOfDay
 timeOfDayFieldDecoder = parsePgType "TimeOfDay" [timeOid] $ \case
@@ -1532,6 +1545,7 @@ instance FromPgField TimeOfDay where
 "singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
 "singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE dayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 dayFieldDecoder :: FieldDecoder Day
 dayFieldDecoder = parsePgType "Day" [dateOid] $ \case
@@ -1560,6 +1574,7 @@ instance FromPgField Day where
 "singleField unboundedDayFieldDecoder" singleField unboundedDayFieldDecoder = fieldRowDecoder
 "singleField (nullableField unboundedDayFieldDecoder)" singleField (nullableField unboundedDayFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE unboundedDayFieldDecoder #-}
 unboundedDayFieldDecoder :: FieldDecoder (Unbounded Day)
 unboundedDayFieldDecoder = parsePgType "Unbounded Day" [dateOid] $ \case
@@ -1586,6 +1601,7 @@ instance FromPgField (Unbounded Day) where
 "singleField calendarDiffTimeFieldDecoder" singleField calendarDiffTimeFieldDecoder = fieldRowDecoder
 "singleField (nullableField calendarDiffTimeFieldDecoder)" singleField (nullableField calendarDiffTimeFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE calendarDiffTimeFieldDecoder #-}
 calendarDiffTimeFieldDecoder :: FieldDecoder CalendarDiffTime
 calendarDiffTimeFieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ \case
@@ -1605,6 +1621,7 @@ instance FromPgField CalendarDiffTime where
 "singleField uuidFieldDecoder" singleField uuidFieldDecoder = fieldRowDecoder
 "singleField (nullableField uuidFieldDecoder)" singleField (nullableField uuidFieldDecoder) = fieldRowDecoder
   #-}
+
 {-# NOINLINE uuidFieldDecoder #-}
 uuidFieldDecoder :: FieldDecoder UUID
 uuidFieldDecoder = parsePgType "UUID" [uuidOid] $ \case
