@@ -1644,23 +1644,46 @@ instance FromPgField UUID where
             <$> Parser.takeWord64BE
             <*> Parser.takeWord64BE
 
+{-# RULES
+"singleField aesonFieldDecoder" singleField aesonFieldDecoder = fieldRowDecoder
+"singleField (nullableField aesonFieldDecoder)" singleField (nullableField aesonFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE aesonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+aesonFieldDecoder :: FieldDecoder Aeson.Value
+aesonFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder =
+        \FieldInfo {fieldTypeOid} ->
+          let
+            -- jsonb has a byte prepended to the contents and json does not
+            !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+           in
+            \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
+              Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                Just d -> Right d
+                Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+      allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
+    }
+
 instance FromPgField Aeson.Value where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder =
-    FieldDecoder
-      { fieldValueDecoder =
-          \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
-        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
-      }
+  fieldDecoder = aesonFieldDecoder
+  {-# INLINE notConstFieldDecoder #-}
+  notConstFieldDecoder finfo = do
+    len <- fromIntegral <$> Parser.takeInt32BE
+    if len == (-1)
+      then pure Nothing
+      else do
+        bs <-
+          PBA.toByteString
+            <$> if finfo.fieldTypeOid == jsonbOid
+              then Parser.skip 1 >> Parser.take (len - 1)
+              else Parser.take len
+        case Aeson.decodeStrict bs of
+          Just d -> pure (Just d)
+          Nothing -> fail "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
 
 {-# INLINE [1] nullableField #-}
 

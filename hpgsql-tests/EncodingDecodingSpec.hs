@@ -339,12 +339,38 @@ jsonValuesRoundTrip conn = hedgehog $ do
   jsonVal1 :: Aeson.Value <- Gen.forAll genJsonValue
   jsonVal2 :: Aeson.Value <- Gen.forAll genJsonValue
   jsonVal3 :: Aeson.Value <- Gen.forAll genJsonValue
-  let row = (jsonVal1, jsonVal2, jsonVal3)
-  [(v1, v2, v3, v4) :: (Aeson.Value, Aeson.Value, PgJson, PgJson)] <- liftIO $ queryWith rowDecoder conn [sql|SELECT #{jsonVal1}, #{jsonVal1}::jsonb, #{jsonVal2}::json, #{jsonVal3}::jsonb|]
+  let qry = [sql|SELECT #{jsonVal1}, #{jsonVal1}::jsonb, #{jsonVal2}::json, #{jsonVal3}::jsonb, NULL::json, NULL::jsonb|]
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  (res1, res2) <-
+    liftIO $
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          <*> pipeline1With
+            ( (,,,,,)
+                <$> singleField notRewrittenFieldDecoder
+                <*> singleField notRewrittenFieldDecoder
+                <*> singleField notRewrittenFieldDecoder
+                <*> singleField notRewrittenFieldDecoder
+                <*> singleField (nullableField (notRewrittenFieldDecoder @Aeson.Value))
+                <*> singleField (nullableField (notRewrittenFieldDecoder @PgJson))
+            )
+            qry
+  (v1, v2, v3, v4, v5, v6) :: (Aeson.Value, Aeson.Value, PgJson, PgJson, Maybe Aeson.Value, Maybe PgJson) <- liftIO res1
   v1 === jsonVal1
   v2 === jsonVal1
   Aeson.toJSON v3 === jsonVal2
   Aeson.toJSON v4 === jsonVal3
+  v5 === Nothing
+  isNothing v6 === True
+  (v7, v8, v9, v10, v11, v12) :: (Aeson.Value, Aeson.Value, PgJson, PgJson, Maybe Aeson.Value, Maybe PgJson) <- liftIO res2
+  v7 === jsonVal1
+  v8 === jsonVal1
+  Aeson.toJSON v9 === jsonVal2
+  Aeson.toJSON v10 === jsonVal3
+  v11 === Nothing
+  isNothing v12 === True
 
 dateDecoding :: HPgConnection -> IO ()
 dateDecoding conn = do

@@ -100,21 +100,31 @@ instance ToJSON PgJson where
 pgJsonByteString :: PgJson -> ByteString
 pgJsonByteString (PgJson bs) = bs
 
+{-# RULES
+"singleField pgJsonFieldDecoder" singleField pgJsonFieldDecoder = fieldRowDecoder
+"singleField (nullableField pgJsonFieldDecoder)" singleField (nullableField pgJsonFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE pgJsonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+pgJsonFieldDecoder :: FieldDecoder PgJson
+pgJsonFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder =
+        \FieldInfo {fieldTypeOid} ->
+          let
+            -- jsonb has a byte prepended to the contents and json does not
+            !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+           in
+            \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls"
+              Just bs -> Right $ PgJson $ fixJsonb bs,
+      allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
+    }
+
 instance FromPgField PgJson where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder =
-    FieldDecoder
-      { fieldValueDecoder =
-          \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls"
-                Just bs -> Right $ PgJson $ fixJsonb bs,
-        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
-      }
+  fieldDecoder = pgJsonFieldDecoder
+
   {-# INLINE notConstFieldDecoder #-}
   notConstFieldDecoder finfo = do
     len <- fromIntegral <$> Parser.takeInt32BE
@@ -133,23 +143,32 @@ newtype Aeson a = Aeson {getAeson :: a}
   deriving stock (Functor, Read, Show)
   deriving newtype (Eq)
 
+{-# RULES
+"singleField aesonFieldDecoder" singleField aesonFieldDecoder = fieldRowDecoder
+"singleField (nullableField aesonFieldDecoder)" singleField (nullableField aesonFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE aesonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+aesonFieldDecoder :: (FromJSON a) => FieldDecoder (Aeson a)
+aesonFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder =
+        \FieldInfo {fieldTypeOid} ->
+          let
+            -- jsonb has a byte prepended to the contents and json does not
+            !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+           in
+            \case
+              Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls"
+              Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                Just v -> Right $ Aeson v
+                Nothing -> Left "Failed to decode the postgres JSON value into your `Aeson a` type with aeson",
+      allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
+    }
+
 instance (FromJSON a) => FromPgField (Aeson a) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder =
-    FieldDecoder
-      { fieldValueDecoder =
-          \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls"
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just v -> Right $ Aeson v
-                  Nothing -> Left "Failed to decode the postgres JSON value into your `Aeson a` type with aeson",
-        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
-      }
+  fieldDecoder = aesonFieldDecoder
   {-# INLINE notConstFieldDecoder #-}
   notConstFieldDecoder finfo =
     notConstFieldDecoder finfo >>= \case
