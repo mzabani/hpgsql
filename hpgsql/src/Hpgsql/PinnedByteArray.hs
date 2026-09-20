@@ -67,9 +67,7 @@ module Hpgsql.PinnedByteArray
 where
 
 import Control.Monad (when)
-import Data.ByteString (ByteString)
 import Data.ByteString.Internal (ByteString (..))
-import qualified Data.ByteString.Internal as BS
 import qualified Data.ByteString.Internal as InternalBS
 import Data.Int (Int16, Int32, Int64)
 import Foreign.C (CInt (..))
@@ -85,7 +83,11 @@ import Data.Word (Word16, Word64)
 #else
 import Data.Word (Word16, Word64, byteSwap16, byteSwap64, Word8, byteSwap32)
 #endif
+#if MIN_VERSION_base(4,19,0)
 import Data.Array.Byte (ByteArray (..))
+#else
+import Data.Text.Array (Array (..))
+#endif
 import Data.Bits (Bits (unsafeShiftR))
 import Data.Coerce (coerce)
 import Data.Text.Internal (Text (..))
@@ -133,7 +135,7 @@ fromByteString (BS fptr len) = unsafeDupablePerformIO $ createPinnedByteArray le
   pure $ fromIntegral len
 
 toByteString :: PinnedByteArray -> ByteString
-toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ BS.create len $ \dst ->
+toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ InternalBS.create len $ \dst ->
   copyBytes dst (Ptr (byteArrayContents# src) `plusPtr` start) len
 
 {-# INLINE unsafeToUtf8Text #-}
@@ -241,10 +243,10 @@ data CoolWordDec a where
 decodeWord :: CoolWordDec a -> ByteStringIdx -> PinnedByteArray -> (a -> a) -> Either String a
 decodeWord wdec (ByteStringIdx boxedIdx@(I# idx)) (PinnedByteArray (I# start) len byArrSharp) endianConvert =
   case wdec of
-    CWord8 -> if len < 1 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W8# $ indexWord8Array# byArrSharp (idx +# start)
-    CWord16 -> if len < 2 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W16# $ indexWord8ArrayAsWord16# byArrSharp (idx +# start)
-    CWord32 -> if len < 4 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W32# $ indexWord8ArrayAsWord32# byArrSharp (idx +# start)
-    CWord64 -> if len < 8 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W64# $ indexWord8ArrayAsWord64# byArrSharp (idx +# start)
+    CWord8 -> if len < 1 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W8# (indexWord8Array# byArrSharp (idx +# start))
+    CWord16 -> if len < 2 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W16# (indexWord8ArrayAsWord16# byArrSharp (idx +# start))
+    CWord32 -> if len < 4 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W32# (indexWord8ArrayAsWord32# byArrSharp (idx +# start))
+    CWord64 -> if len < 8 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W64# (indexWord8ArrayAsWord64# byArrSharp (idx +# start))
 
 {-# INLINE unsafeEncodeWord #-}
 unsafeEncodeWord :: (Storable a) => a -> (a -> a) -> Int -> ByteString
