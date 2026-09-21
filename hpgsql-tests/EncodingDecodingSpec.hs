@@ -8,6 +8,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
+import Data.Char (chr)
 import Data.Functor ((<&>))
 import Data.Functor.Contravariant (contramap)
 import Data.Int (Int16, Int32, Int64, Int8)
@@ -48,7 +49,7 @@ import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (.
 import Hpgsql.Pipeline (pipeline, pipeline1With, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (Oid, TypeInfo (..), lookupTypeByOid)
+import Hpgsql.TypeInfo (Oid (..), TypeInfo (..), lookupTypeByOid)
 import Hpgsql.Types (Only (..), PGArray (..), PgJson)
 import Numeric (showHex)
 import Test.Hspec
@@ -112,6 +113,12 @@ spec = parallel $ do
     it
       "Numeric extreme text decoding"
       numericExtremeTextDecoding
+    it
+      "Oid text decoding"
+      oidTextDecoding
+    it
+      "Char text decoding"
+      charTextDecoding
     it
       "UUID values round-trip"
       uuidRoundTrip
@@ -328,11 +335,29 @@ rationalValuesRoundTrip :: HPgConnection -> IO ()
 rationalValuesRoundTrip conn = do
   -- Rationals with terminating decimal representations round-trip exactly
   let row = (1 % 2 :: Rational, 3 % 4 :: Rational, 7 % 8 :: Rational, 1 % 5 :: Rational, (-3) % 20 :: Rational, 0 % 1 :: Rational, 123456789 % 1000 :: Rational)
-  queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7" row) `shouldReturn` [row]
+      qry = mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7" row
+  queryWith rowDecoder conn qry `shouldReturn` [row]
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  queryWith
+    ( (,,,,,,)
+        <$> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+        <*> singleField notRewrittenFieldDecoder
+    )
+    conn
+    qry
+    `shouldReturn` [row]
   -- Decoding from integer types
   let intRow = (42 :: Int32, (-7) :: Int16)
       ratRes = (42 % 1 :: Rational, (-7) % 1 :: Rational)
-  queryWith rowDecoder conn (mkQuery "SELECT $1, $2" intRow) `shouldReturn` [ratRes]
+      intQry = mkQuery "SELECT $1, $2" intRow
+  queryWith rowDecoder conn intQry `shouldReturn` [ratRes]
+  queryWith ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) conn intQry `shouldReturn` [ratRes]
 
 jsonValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 jsonValuesRoundTrip conn = hedgehog $ do
@@ -685,6 +710,55 @@ jsonTextDecoding conn = hedgehog $ do
       '\'' -> "''"
       c -> [c]
 
+oidTextDecoding :: HPgConnection -> PropertyT IO ()
+oidTextDecoding conn = hedgehog $ do
+  oidVal :: Int32 <- Gen.forAll $ Gen.int32 (Gen.linearFrom 0 0 maxBound)
+  let qry = fromString $ "SELECT '" <> show oidVal <> "'::oid"
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  (res1, res2) <-
+    liftIO $
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          <*> pipeline1With (Only <$> singleField notRewrittenFieldDecoder) qry
+  let expectedResult = Only (Oid oidVal)
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
+
+charTextDecoding :: HPgConnection -> PropertyT IO ()
+charTextDecoding conn = hedgehog $ do
+  textChar :: Char <- Gen.forAll $ Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.unicode
+  asciiChar :: Char <- Gen.forAll $ Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.ascii
+  bpcharChar :: Char <- Gen.forAll $ Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.unicode
+  let qry =
+        fromString $
+          "SELECT '"
+            <> [textChar]
+            <> "'::text, '"
+            <> [asciiChar]
+            <> "'::\"char\", '"
+            <> [bpcharChar]
+            <> "'::bpchar"
+            -- Postgres's `"char"` type (distinct from `char`/`character`, which is `bpchar`)
+            -- stores only a single raw byte: casting a multi-byte UTF8 character truncates
+            -- it down to its first byte, which need not be valid UTF8 on its own (e.g. 'é'
+            -- is UTF8 bytes 0xC3 0xA9, truncated to the single byte 0xC3). This must decode
+            -- as that raw byte's numeric value (code point 195, i.e. 'Ã'), not be routed
+            -- through UTF8 text decoding.
+            <> ", 'é'::\"char\""
+  -- Specialized row parsers of each type are a different implementation from
+  -- the simpler fieldDecoders, so we need to test both
+  (res1, res2) <-
+    liftIO $
+      runPipeline conn $
+        (,)
+          <$> pipeline1With rowDecoder qry
+          <*> pipeline1With ((,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
+  let expectedResult = (textChar, asciiChar, bpcharChar, chr 195)
+  liftIO res1 >>= (=== expectedResult)
+  liftIO res2 >>= (=== expectedResult)
+
 uuidRoundTrip :: HPgConnection -> PropertyT IO ()
 uuidRoundTrip conn = hedgehog $ do
   let genUuid = Gen.maybe $ do
@@ -777,7 +851,7 @@ textRoundTrip conn = hedgehog $ do
 textTextDecoding :: HPgConnection -> PropertyT IO ()
 textTextDecoding conn = hedgehog $ do
   someText :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 300) (Gen.filter (\c -> c /= '\0' && c /= '\'') Gen.unicode)
-  let qry = fromString $ "SELECT '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text"
+  let qry = fromString $ "SELECT '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::text, '" <> Text.unpack someText <> "'::bpchar"
   (res1, res2) <-
     liftIO $
       runPipeline conn $
@@ -785,8 +859,8 @@ textTextDecoding conn = hedgehog $ do
           <$> pipeline1With rowDecoder qry
           -- Specialized row parsers of each type are a different implementation from
           -- the simpler fieldDecoders, so we need to test both
-          <*> pipeline1With ((,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
-  let expectedResult = (someText, LT.fromStrict someText, Text.unpack someText)
+          <*> pipeline1With ((,,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qry
+  let expectedResult = (someText, LT.fromStrict someText, Text.unpack someText, someText)
   liftIO res1 >>= (=== expectedResult)
   liftIO res2 >>= (=== expectedResult)
 

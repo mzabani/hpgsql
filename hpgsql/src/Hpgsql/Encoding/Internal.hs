@@ -52,6 +52,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
+import Data.Char (chr)
 import Data.Coerce (coerce)
 import Data.Fixed (divMod')
 import Data.Functor.Contravariant (Contravariant (..))
@@ -86,7 +87,7 @@ import Hpgsql.PinnedByteArray (PinnedByteArray)
 import qualified Hpgsql.PinnedByteArray as PBA
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeDetails (..), TypeInfo (..), boolOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeDetails (..), TypeInfo (..), boolOid, bpcharOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
 
 data FieldInfo = FieldInfo
   { fieldTypeOid :: !Oid,
@@ -102,21 +103,6 @@ data FieldDecoder a = FieldDecoder
     allowedPgTypes :: FieldInfo -> Bool
   }
   deriving stock (Functor)
-
--- | A way to build a `FieldDecoder` from another `FieldDecoder` that is more
--- versatile than `fmap` because you can reject some values with an error.
--- TODO: We could consider exposing this publicly. Our docs on deriving enum
--- decoders suggest using `error`, which is not great.
-mapFieldDecoder :: FieldDecoder a -> (a -> Either String b) -> FieldDecoder b
-mapFieldDecoder fdec f =
-  FieldDecoder
-    { allowedPgTypes = fdec.allowedPgTypes,
-      fieldValueDecoder = \finfo ->
-        let !dec = fdec.fieldValueDecoder finfo
-         in \mbs -> case dec mbs of
-              Right v -> f v
-              Left err -> Left err
-    }
 
 -- | `f1 <> f2` produces a `FieldDecoder` that tries `f1` first, and if that fails it tries `f2`.
 instance Semigroup (FieldDecoder a) where
@@ -1269,43 +1255,43 @@ instance FromPgField Bool where
 {-# NOINLINE charFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 charFieldDecoder :: FieldDecoder Char
 charFieldDecoder =
-  fieldDecoder @Text `mapFieldDecoder` \t -> case Text.length t of
-    0 -> Left "Cannot parse text with zero characters into a Haskell Char type."
-    1 -> Right (Text.head t)
-    _ -> Left "Cannot parse text with more than one character into a Haskell Char type."
-
--- let textParser = fieldValueDecoder (fieldDecoder @Text)
---  in FieldDecoder
---       { fieldValueDecoder = \colInfo@FieldInfo {fieldTypeOid = oid} ->
---           let !decodeText = textParser colInfo
---            in \case
---                 Nothing -> Left "Cannot decode SQL null as the Haskell Char type. Use a `Maybe Char`"
---                 Just bs ->
---                   if oid == charOid
---                     then Right $ BSC.head bs
---                     else case decodeText (Just bs) of
---                       Left err -> Left err
---                       Right t -> if Text.length t > 1 then Left "Cannot parse text with more than one character into a Haskell Char type." else Right (Text.head t),
---         -- TODO: All the varchar types?
---         allowedPgTypes = (`elem` [charOid, textOid]) . fieldTypeOid
---       }
+  FieldDecoder
+    { fieldValueDecoder = \finfo@FieldInfo {fieldTypeOid} ->
+        -- The Postgres "char" type is just a byte, so we should consider
+        -- not decoding it into `Char`, but rather just into Word8.
+        -- This would be a breaking change, however.
+        if fieldTypeOid == charOid
+          then \case
+            Nothing -> Left "Cannot decode SQL null as the Haskell Char type. Use a `Maybe Char`"
+            Just bs -> Right $ chr (fromIntegral (BS.head bs))
+          else
+            let !decodeText = (fieldDecoder @Text).fieldValueDecoder finfo
+             in \mbs -> case decodeText mbs of
+                  Left err -> Left err
+                  Right t -> case Text.length t of
+                    1 -> Right (Text.head t)
+                    0 -> Left "Cannot parse text with zero characters into a Haskell Char type."
+                    _ -> Left "Cannot parse text with more than one character into a Haskell Char type.",
+      allowedPgTypes = (`elem` [charOid, textOid, varcharOid, nameOid, bpcharOid]) . fieldTypeOid
+    }
 
 instance FromPgField Char where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = charFieldDecoder
 
-  {-# INLINE inlinedConstFieldDecoder #-}
-  inlinedConstFieldDecoder =
-    let !textDec = fromMaybe (error "Impossible: no Text constFieldDecoder") inlinedConstFieldDecoder
-     in Just $ do
-          mt <- textDec
-          case mt of
-            Nothing -> pure Nothing
-            Just t ->
-              case Text.length t of
-                0 -> fail "Cannot parse text with zero characters into a Haskell Char type."
-                1 -> pure $ Just (Text.head t)
-                _ -> fail "Cannot parse text with more than one character into a Haskell Char type."
+  {-# INLINE notConstFieldDecoder #-}
+  notConstFieldDecoder finfo =
+    if finfo.fieldTypeOid == charOid
+      then fmap (chr . fromIntegral) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
+      else do
+        mt <- notConstFieldDecoder @Text finfo
+        case mt of
+          Nothing -> pure Nothing
+          Just t ->
+            case Text.length t of
+              1 -> pure $ Just (Text.head t)
+              0 -> fail "Cannot parse text with zero characters into a Haskell Char type."
+              _ -> fail "Cannot parse text with more than one character into a Haskell Char type."
 
 instance FromPgField ByteString where
   {-# INLINE fieldDecoder #-}
@@ -1326,7 +1312,7 @@ instance FromPgField LBS.ByteString where
 
 {-# NOINLINE textFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 textFieldDecoder :: FieldDecoder Text
-textFieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid, charOid] $ \case
+textFieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid, bpcharOid] $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
   Just bs -> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
 
@@ -1387,23 +1373,62 @@ instance FromPgField String where
   {-# INLINE inlinedConstFieldDecoder #-}
   inlinedConstFieldDecoder = Just stringDecoder
 
+{-# RULES
+"singleField ciTextFieldDecoder" singleField ciTextFieldDecoder = fieldRowDecoder
+"singleField (nullableField ciTextFieldDecoder)" singleField (nullableField ciTextFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE ciTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+ciTextFieldDecoder :: FieldDecoder (CI Text)
+ciTextFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
+
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
 instance FromPgField (CI Text) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
+  fieldDecoder = ciTextFieldDecoder
+  {-# INLINE inlinedConstFieldDecoder #-}
+  inlinedConstFieldDecoder =
+    let !textDec = fromMaybe (error "Impossible: no Text constFieldDecoder") inlinedConstFieldDecoder
+     in Just $ fmap CI.mk <$> textDec
+
+{-# RULES
+"singleField ciLazyTextFieldDecoder" singleField ciLazyTextFieldDecoder = fieldRowDecoder
+"singleField (nullableField ciLazyTextFieldDecoder)" singleField (nullableField ciLazyTextFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE ciLazyTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+ciLazyTextFieldDecoder :: FieldDecoder (CI LT.Text)
+ciLazyTextFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> lazyTextFieldDecoder
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
 instance FromPgField (CI LT.Text) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
+  fieldDecoder = ciLazyTextFieldDecoder
+  {-# INLINE inlinedConstFieldDecoder #-}
+  inlinedConstFieldDecoder =
+    let !textDec = fromMaybe (error "Impossible: no LT.Text constFieldDecoder") inlinedConstFieldDecoder
+     in Just $ fmap CI.mk <$> textDec
+
+{-# RULES
+"singleField ciStringFieldDecoder" singleField ciStringFieldDecoder = fieldRowDecoder
+"singleField (nullableField ciStringFieldDecoder)" singleField (nullableField ciStringFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE ciStringFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+ciStringFieldDecoder :: FieldDecoder (CI String)
+ciStringFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> stringFieldDecoder
 
 -- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
 -- connection option).
 instance FromPgField (CI String) where
   {-# INLINE fieldDecoder #-}
-  fieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
+  fieldDecoder = ciStringFieldDecoder
+  {-# INLINE inlinedConstFieldDecoder #-}
+  inlinedConstFieldDecoder =
+    let !stringDec = fromMaybe (error "Impossible: no String constFieldDecoder") inlinedConstFieldDecoder
+     in Just $ fmap CI.mk <$> stringDec
 
 {-# RULES
 "singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = fieldRowDecoder
