@@ -1,3 +1,4 @@
+- Rename inlineConstFieldDecoder to just constFieldDecoder
 - Test both `singleField fieldDecoder` and `singleFieldRowDecoder` for every type in our tests.
   - For array types too we have more than one arrayField* variant
 - Some types might still not derive specialized row decoders
