@@ -391,8 +391,8 @@ fromWordDec = \case
 
 {-# INLINE decodePgFieldWithAtMost4Bytes #-}
 
--- | A specialized decoder that decoders a query result's
--- field's contents, but only for PG fields at most 4 bytes long and
+-- | A specialized decoder that decodes a row field's
+-- contents, but only for PG fields at most 4 bytes long and
 -- at least 1 byte long (so no text or void types, for example).
 -- This includes essentially int32, int16, and booleans.
 -- Pass in as type argument a Word8, Word16 or Word32 to indicate

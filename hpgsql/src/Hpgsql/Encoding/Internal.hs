@@ -941,21 +941,23 @@ int64FieldDecoder =
 
 -- | Parses smaller integer types too.
 {-# INLINE int64ConstFieldDecoder #-}
-int64ConstFieldDecoder :: Parser.Parser (Maybe Int64)
-int64ConstFieldDecoder = do
-  fieldLen <- Parser.takeInt32BE
-  case fieldLen of
-    8 -> Just <$> Parser.takeInt64BE
-    4 -> Just . fromIntegral <$> Parser.takeInt32BE
-    (-1) -> pure Nothing
-    2 -> Just . fromIntegral <$> Parser.takeInt16BE
-    _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
+int64ConstFieldDecoder :: FieldInfo -> Parser.Parser (Maybe Int64)
+int64ConstFieldDecoder finfo = do
+  if finfo.fieldTypeOid == int4Oid
+    then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
+    else
+      if finfo.fieldTypeOid == int8Oid
+        then Parser.takeInt64BEWithFieldLength
+        else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
 
 instance FromPgField Int64 where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = int64FieldDecoder
+
+  -- Interestingly, the notConst field decoder is a tiny little bit
+  -- faster than the constFieldDecoder
   {-# INLINE specializedFieldDecoder #-}
-  specializedFieldDecoder = const int64ConstFieldDecoder
+  specializedFieldDecoder = int64ConstFieldDecoder
 
 {-# RULES
 "singleField integerFieldDecoder" singleField integerFieldDecoder = fieldRowDecoder
@@ -1167,9 +1169,9 @@ instance FromPgField Scientific where
 
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder singleColInfo =
-    if singleColInfo.fieldTypeOid /= numericOid
-      then fmap (flip scientific 0 . fromIntegral) <$> int64ConstFieldDecoder
-      else numericRowParser
+    if singleColInfo.fieldTypeOid == numericOid
+      then numericRowParser
+      else fmap (flip scientific 0 . fromIntegral) <$> int64ConstFieldDecoder singleColInfo
 
 {-# RULES
 "singleField ratioIntegerFieldDecoder" singleField ratioIntegerFieldDecoder = fieldRowDecoder
