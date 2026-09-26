@@ -221,8 +221,6 @@ smallerThan4BytesValuesAndNullsRoundtrip conn = hedgehog $ do
   -- TODO: float4, char
   -- TODO: Varying recvChunkSize sizes for this test
   -- TODO: More variations of rows
-  -- TODO: Test `singleField notRewrittenFieldDecoder` as well: we now have two implementations to test for each
-  --       of these types.
   -- TODO: test errors when trying to decode NULL::type into a non-Maybe in Haskell
   let r1 = (date, i16, i32, b)
       r2 = (i16, date, i32, b)

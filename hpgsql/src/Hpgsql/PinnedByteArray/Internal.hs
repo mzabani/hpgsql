@@ -79,6 +79,9 @@ module Hpgsql.PinnedByteArray.Internal
     CoolWordDec (..),
     WordDecoding (..),
     unsafeToUtf8Text,
+    append,
+    emptyLazyPBA,
+    fromChunks,
   )
 where
 
@@ -126,18 +129,29 @@ instance Eq PinnedByteArray where
 instance Show PinnedByteArray where
   show _ = "<PinnedByteArray>"
 
--- TODO: dlist for efficient snoc, because buffers can grow very large when fetching binaries/json/text blobs
-data LazyPinnedByteArray = LazyPinnedByteArray !Int ![PinnedByteArray]
+data LazyPinnedByteArray
+  = -- | PinnedByteArrays are in reverse order for efficient appending
+    LazyPinnedByteArray !Int ![PinnedByteArray]
 
-instance Semigroup LazyPinnedByteArray where
-  LazyPinnedByteArray l1 pbs1 <> LazyPinnedByteArray l2 pbs2 = LazyPinnedByteArray (l1 + l2) (pbs1 ++ pbs2)
+append :: LazyPinnedByteArray -> PinnedByteArray -> LazyPinnedByteArray
+append (LazyPinnedByteArray l1 pbs1) pba = LazyPinnedByteArray (l1 + length pba) (pba : pbs1 {- Reverse order -})
 
-instance Monoid LazyPinnedByteArray where
-  mempty = LazyPinnedByteArray 0 []
+fromChunks :: [PinnedByteArray] -> LazyPinnedByteArray
+fromChunks pbas =
+  let len = sum $ map length pbas
+   in LazyPinnedByteArray len (reverse pbas)
+
+-- instance Semigroup LazyPinnedByteArray where
+--   LazyPinnedByteArray l1 pbs1 <> LazyPinnedByteArray l2 pbs2 = LazyPinnedByteArray (l1 + l2) (reverse $ reverse pbs1 ++ reverse pbs2)
+-- instance Monoid LazyPinnedByteArray where
+--   mempty = LazyPinnedByteArray 0 []
 
 {-# NOINLINE emptyPBA #-}
 emptyPBA :: PinnedByteArray
 emptyPBA = unsafeDupablePerformIO $ createPinnedByteArray 0 (\_ -> pure 0)
+
+emptyLazyPBA :: LazyPinnedByteArray
+emptyLazyPBA = fromStrict emptyPBA
 
 createPinnedByteArray :: Int -> (Addr# -> IO CInt) -> IO PinnedByteArray
 createPinnedByteArray (I# size#) f = IO $ \s0 ->
@@ -198,7 +212,7 @@ toStrict lpba@(LazyPinnedByteArray totalLen _) = copyStrictSlice 0 totalLen lpba
 -- the bytes in the supplied `LazyPinnedByteArray` - no reference is kept
 -- to the supplied bytes.
 copyStrictSlice :: Int -> Int -> LazyPinnedByteArray -> PinnedByteArray
-copyStrictSlice skip n' (LazyPinnedByteArray totalLen' chunks) =
+copyStrictSlice skip n' (LazyPinnedByteArray totalLen' (reverse -> chunks)) =
   let n = min n' totalLen'
    in unsafeDupablePerformIO $ createPinnedByteArray n $ \dst -> do
         let go copied _ _ [] = pure copied

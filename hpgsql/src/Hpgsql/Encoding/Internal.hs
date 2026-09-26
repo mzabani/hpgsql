@@ -292,12 +292,12 @@ compositeTypeDecoder (RowDecoder {..}) =
       let mkColInfo oid = FieldInfo oid Nothing encodingContext
       cols <- replicateM numCols $ do
         !oid <- Oid . fromIntegral <$> Parser.takeInt32BE
-        (sizeBs, !size) <- Parser.match $ fromIntegral <$> Parser.takeInt32BE
-        !bs <- Parser.take (max 0 size)
-        pure (oid, PBA.fromStrict sizeBs <> PBA.fromStrict bs)
+        !size <- fromIntegral <$> Parser.peekInt32BE
+        sizeAndValueBs <- Parser.take (4 + max 0 size)
+        pure (oid, sizeAndValueBs)
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
       unless (all snd typecheckedCols) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
-      case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (PBA.toStrict $ mconcat $ map snd cols) of
+      case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (PBA.toStrict $ PBA.fromChunks $ map snd cols) of
         Parser.ParseOk v -> pure v
         Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
 

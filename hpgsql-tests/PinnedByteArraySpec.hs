@@ -5,6 +5,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.List as List
 import Data.Text (Text)
 import Data.Text.Encoding (encodeUtf8)
 import Hedgehog (Gen, PropertyT, annotateShow, (===))
@@ -36,7 +37,7 @@ slicingStrictAndLazyPBAs :: PropertyT IO ()
 slicingStrictAndLazyPBAs = hedgehog $ do
   bss :: [ByteString] <- Gen.forAll $ Gen.list (Gen.linear 0 10) (Gen.bytes (Gen.linear 0 100))
   let lazyBs = LBS.fromChunks bss
-      lazyPba = foldl' (\acc bs -> acc <> PBA.fromStrict (PBA.fromByteString bs)) mempty bss
+      lazyPba = PBA.fromChunks (map PBA.fromByteString bss)
       bs = LBS.toStrict lazyBs
       pba = PBA.fromByteString bs
       len = PBA.length pba
@@ -45,6 +46,7 @@ slicingStrictAndLazyPBAs = hedgehog $ do
   -- let's test it anyway
   PBA.toStrict lazyPba === pba
   len === PBA.lazyLength lazyPba
+  PBA.toStrict (List.foldl' (\acc bs -> acc `PBA.append` PBA.fromByteString bs) PBA.emptyLazyPBA bss) === pba
 
   -- Now we test with varied offset and length because these
   -- functions have a lot of bounds-checking in them, which is

@@ -246,7 +246,7 @@ internalConnectOrCancel connectOrCancel connOpts originalConnStr@ConnectionStrin
         False -> throwIrrecoverableError "Socket is not marked as non-blocking, which is not supported by hpgsql. You might be running on an unsupported platform"
         True -> pure ()
       socketIsClosed <- newMVar False
-      recvBuffer <- newIORef mempty
+      recvBuffer <- newIORef PBA.emptyLazyPBA
       sendBuffer <- newMVar mempty
       socketMutex <- mkMutex
       encodingContext <- newMVar (EncodingContext builtinPgTypesMap)
@@ -612,7 +612,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
             someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            atomicWriteIORef recvBuffer (currentBuffer <> PBA.fromStrict someBytes)
+            atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()
