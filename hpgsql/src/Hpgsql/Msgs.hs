@@ -24,7 +24,7 @@ import Data.Word (Word8)
 import Hpgsql.Builder (BinaryField, Builder, builderLength)
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
-import qualified Hpgsql.PinnedByteArray as PBA
+import qualified Hpgsql.PinnedByteArray.Internal as PBA
 import Hpgsql.ScramSHA256 (ScramClientFinalMessage (..), ScramServerFirstMessage (..))
 import Hpgsql.TypeInfo (Oid (..))
 

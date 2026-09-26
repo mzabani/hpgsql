@@ -5,20 +5,37 @@
 {-# LANGUAGE UnliftedFFITypes #-}
 
 -- |
--- Why our own `PinnedByteArray` type instead of just using `ByteString`?
--- It all started when upon inspecting our row decoder's GHC Core, I saw
--- `lazy`, `keepAlive` and boxing+unboxing of Word32s that seemed completely
--- unnecessary. Claude suggested `lazy` - which appeared in GHC Core - acted
--- like an optimization fence, and I don't remember the details now, but
--- basically a `ByteString` uses a `ForeignPtr` under the hood, which requires
--- `withForeignPtr`, which uses `keepAlive#`, adding a lot of code to peek a
--- Word from a pointer.
--- Whether Claude's assumption that that code acts as an optimization fence
--- is correct is inconsequential, what matters is that we can remove all that
--- code by using pinned `ByteArray`s, and that the extra Word boxing+unboxing
--- indeed goes away with that.
 --
--- After I wrote this, I realized _maybe_ I could've moved `withForeignPtr`
+-- = Pinned byte arrays
+--
+-- This is an internal module so the interface can change very often.
+-- The author still commits to following Hackage's PVP when changes are made
+-- here (and in any other Internal module), but don't expect this to be a stable
+-- interface.
+--
+-- = Why this module?
+--
+-- Why create our own `PinnedByteArray` type instead of just using `ByteString`?
+-- `ByteString` uses a `ForeignPtr` under the hood, so peeking into its bytes for
+-- decoding means our field decoders must use `withForeignPtr`, which runs in IO.
+-- We don't want IO infecting our decoding code at all, so this required
+-- `unsafePerformIO` (or rather its variant `unsafeDupablePerformIO`), which calls
+-- `lazy` internally.
+--
+-- As per the documentation, "The 'lazy' function restrains strictness analysis a little",
+-- and also "After strictness analysis has run, calls to 'lazy' are inlined to be the
+-- identity function".
+--
+-- What this meant in practice is that when inspecting row decoders for a type,
+-- I could see boxing of intermediary values that was completely unnecessary.
+-- When decoding a postgres int4 into a Haskell Int, for example, the
+-- GHC Core clearly showed a Word32 being boxed/allocated when all we needed
+-- was a short-lived Word32#.
+--
+-- That's when I thought of pinned byte arrays, backed up by `ByteArray#`:
+-- those aren't moved by the GC so they can be decoded without being in IO.
+--
+-- After I wrote all of this, I realized _maybe_ I could've just moved `withForeignPtr`
 -- higher up in the call stack and in a single location, then pass down the
 -- `Ptr Word8` in a newtype instead of doing this. But it wasn't only late,
 -- `PinnedByteArray` has the advantage that I can push it down even to user
@@ -27,7 +44,7 @@
 -- problem). Also, we only use pinned byte arrays for our receive buffer,
 -- which has such a short life span (it gets decoded into user rows immediately)
 -- that heap fragmentation doesn't sound too concerning.
-module Hpgsql.PinnedByteArray
+module Hpgsql.PinnedByteArray.Internal
   ( PinnedByteArray (..),
     LazyPinnedByteArray,
     createPinnedByteArray,
@@ -39,11 +56,10 @@ module Hpgsql.PinnedByteArray
     length,
     take,
     lazyLength,
-    null,
     emptyPBA,
     fromByteString,
     toByteString,
-    toStrictN,
+    copyStrictSlice,
 
     -- * Binary (de)serializer
     ByteStringIdx (..),
@@ -107,6 +123,9 @@ instance Eq PinnedByteArray where
       0# -> True
       _ -> False
 
+instance Show PinnedByteArray where
+  show _ = "<PinnedByteArray>"
+
 -- TODO: dlist for efficient snoc, because buffers can grow very large when fetching binaries/json/text blobs
 data LazyPinnedByteArray = LazyPinnedByteArray !Int ![PinnedByteArray]
 
@@ -119,8 +138,6 @@ instance Monoid LazyPinnedByteArray where
 {-# NOINLINE emptyPBA #-}
 emptyPBA :: PinnedByteArray
 emptyPBA = unsafeDupablePerformIO $ createPinnedByteArray 0 (\_ -> pure 0)
-
--- TODO: write property-based tests for these functions. This is tricky to get right.
 
 createPinnedByteArray :: Int -> (Addr# -> IO CInt) -> IO PinnedByteArray
 createPinnedByteArray (I# size#) f = IO $ \s0 ->
@@ -143,13 +160,13 @@ toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ Internal
 -- | Assuming the pinned byte array contains valid UTF8 text, creates
 -- returns an instance of `Text` with the same contents (but does make a copy).
 unsafeToUtf8Text :: ByteStringIdx -> Int -> PinnedByteArray -> Either String Text
-unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray {}) = let !(PinnedByteArray start arrLen arr#) = toStrictN idx.idx desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
+unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray {}) = let !(PinnedByteArray start arrLen arr#) = copyStrictSlice idx.idx desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
 
 takePgMessageIdentAndLen :: LazyPinnedByteArray -> Maybe (Char, Int32)
 takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =
   if len >= 5
     then
-      let !(PinnedByteArray (I# start) _ arr#) = toStrictN 0 5 lpba
+      let !(PinnedByteArray (I# start) _ arr#) = copyStrictSlice 0 5 lpba
        in Just (C# (indexWord8ArrayAsChar# arr# start), fromIntegral $ fromBigEndian32 $ W32# (indexWord8ArrayAsWord32# arr# (start +# 1#)))
     else Nothing
 
@@ -173,12 +190,15 @@ fromStrict pba@(PinnedByteArray _ len _) = LazyPinnedByteArray len [pba]
 -- when there's already just a single chunk.
 toStrict :: LazyPinnedByteArray -> PinnedByteArray
 toStrict (LazyPinnedByteArray _ [pba]) = pba
-toStrict lpba@(LazyPinnedByteArray totalLen _) = toStrictN 0 totalLen lpba
+toStrict lpba@(LazyPinnedByteArray totalLen _) = copyStrictSlice 0 totalLen lpba
 
--- | Creates strict PBA from a Lazy one, but just with the first @n@
+-- | Creates a strict PBA from a Lazy one, but just with the first `n`
 -- bytes after the first `skip` (or less if they're not all there).
-toStrictN :: Int -> Int -> LazyPinnedByteArray -> PinnedByteArray
-toStrictN skip n' (LazyPinnedByteArray totalLen' chunks) =
+-- The returned `PinnedByteArray` is _always_ pointing to a new copy of
+-- the bytes in the supplied `LazyPinnedByteArray` - no reference is kept
+-- to the supplied bytes.
+copyStrictSlice :: Int -> Int -> LazyPinnedByteArray -> PinnedByteArray
+copyStrictSlice skip n' (LazyPinnedByteArray totalLen' chunks) =
   let n = min n' totalLen'
    in unsafeDupablePerformIO $ createPinnedByteArray n $ \dst -> do
         let go copied _ _ [] = pure copied
@@ -196,9 +216,6 @@ splitAt n pba = (take n pba, drop n pba)
 
 length :: PinnedByteArray -> Int
 length (PinnedByteArray _ len _) = len
-
-null :: PinnedByteArray -> Bool
-null = (== 0) . length
 
 lazyLength :: LazyPinnedByteArray -> Int
 lazyLength (LazyPinnedByteArray len _) = len

@@ -27,7 +27,7 @@ import Data.Int (Int64)
 import Foreign (Ptr, Storable (..), Word8, allocaArray, castPtr, nullPtr, plusPtr)
 import Foreign.C (CInt (..), CSize (..), eAGAIN, eWOULDBLOCK, getErrno)
 import GHC.Base (Addr#)
-import Hpgsql.PinnedByteArray (PinnedByteArray, createPinnedByteArray)
+import Hpgsql.PinnedByteArray.Internal (PinnedByteArray, createPinnedByteArray)
 import Network.Socket (Socket, withFdSocket)
 import System.Posix.Types (CSsize (..))
 

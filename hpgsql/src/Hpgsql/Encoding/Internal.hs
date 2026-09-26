@@ -83,8 +83,8 @@ import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
 import Hpgsql.Builder (BinaryField (..))
 import qualified Hpgsql.Builder as Builder
-import Hpgsql.PinnedByteArray (PinnedByteArray)
-import qualified Hpgsql.PinnedByteArray as PBA
+import Hpgsql.PinnedByteArray.Internal (PinnedByteArray)
+import qualified Hpgsql.PinnedByteArray.Internal as PBA
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeDetails (..), TypeInfo (..), boolOid, bpcharOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)

@@ -36,6 +36,7 @@ library
       Hpgsql.InternalTypes
       Hpgsql.Notification
       Hpgsql.ParsingInternal
+      Hpgsql.PinnedByteArray.Internal
       Hpgsql.Pipeline
       Hpgsql.Query
       Hpgsql.Time
@@ -52,7 +53,6 @@ library
       Hpgsql.Locking
       Hpgsql.Msgs
       Hpgsql.Networking
-      Hpgsql.PinnedByteArray
       Hpgsql.QueryInternal
       Hpgsql.ScramSHA256
       Hpgsql.SimpleParser

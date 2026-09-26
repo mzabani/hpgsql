@@ -141,8 +141,8 @@ import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
 import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
-import Hpgsql.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray, takePgMessageIdentAndLen)
-import qualified Hpgsql.PinnedByteArray as PBA
+import Hpgsql.PinnedByteArray.Internal (LazyPinnedByteArray, PinnedByteArray, takePgMessageIdentAndLen)
+import qualified Hpgsql.PinnedByteArray.Internal as PBA
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.ScramSHA256 as ScramSHA256
 import qualified Hpgsql.SimpleParser as Parser
@@ -536,7 +536,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   let lenLeftToFetch :: Int = fromIntegral $ lenPlus4 - 4
       fullMessageLen = 5 + lenLeftToFetch
   (nowBuf, nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
-  let fullMsg = PBA.toStrictN 0 fullMessageLen nowBuf
+  let fullMsg = PBA.copyStrictSlice 0 fullMessageLen nowBuf
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg nowBuf nowBufLen
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
@@ -551,7 +551,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
     go msgIdentChar fullMsgPBA nowBuf nowBufLen = mask_ $ modifyIORefIO recvBuffer $ do
-      let bufferWithoutMsg = PBA.fromStrict $ PBA.toStrictN (PBA.length fullMsgPBA) (nowBufLen - PBA.length fullMsgPBA) nowBuf
+      let bufferWithoutMsg = PBA.fromStrict $ PBA.copyStrictSlice (PBA.length fullMsgPBA) (nowBufLen - PBA.length fullMsgPBA) nowBuf
           fullMsg = LBS.fromStrict $ PBA.toByteString fullMsgPBA
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
