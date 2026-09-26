@@ -22,12 +22,10 @@ import Hpgsql.Encoding (FromPgField (..), FromPgRow (..), genericFromPgRow, sing
 --   invokes it, only to find where the RowDecoder is.
 -- - Grep for numbers that exist in the decoders' implementation, such as 8#, 13#, 4#.
 --   These are strong indicators that each decoder was inlined into the RowDecoder.
--- There still are unnecessary allocations/boxing even with full inlining, but maybe
--- one day we'll find a way to get rid of all of them.
 data BestCaseScenarioRecord = BestCaseScenarioRecord
   { bcsId :: !Int,
     bcsDate :: !Day,
-    bcsText :: !(Maybe Int)
+    bcsText :: !(Maybe Text)
   }
 
 instance FromPgRow BestCaseScenarioRecord where

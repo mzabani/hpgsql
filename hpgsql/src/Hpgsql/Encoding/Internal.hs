@@ -246,7 +246,7 @@ class FromPgField a where
                       case mv of
                         Nothing -> valueForNull
                         Just v -> pure v
-              _ -> error "singleField expected a single column OID but got 0 or >1",
+              _ -> fail "singleField expected a single column OID but got 0 or >1",
             rowColumnsTypeCheck = \case
               [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
               _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
@@ -954,8 +954,6 @@ instance FromPgField Int64 where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = int64FieldDecoder
 
-  -- Interestingly, the notConst field decoder is a tiny little bit
-  -- faster than the constFieldDecoder
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder = int64ConstFieldDecoder
 

@@ -36,14 +36,11 @@
 -- those aren't moved by the GC so they can be decoded without being in IO.
 --
 -- After I wrote all of this, I realized _maybe_ I could've just moved `withForeignPtr`
--- higher up in the call stack and in a single location, then pass down the
--- `Ptr Word8` in a newtype instead of doing this. But it wasn't only late,
--- `PinnedByteArray` has the advantage that I can push it down even to user
--- facing methods without being concerned with everything happening inside
--- the context of `withForeignPtr` (though I don't think it would've been a
--- problem). Also, we only use pinned byte arrays for our receive buffer,
--- which has such a short life span (it gets decoded into user rows immediately)
--- that heap fragmentation doesn't sound too concerning.
+-- higher immediately above the call to parsing buffer chunks into rows, then pass down the
+-- `Ptr Word8` in a newtype instead of doing this.
+-- But not only did this thought come late, `PinnedByteArray` feels right and easier to use
+-- as there's no concerns about scoping decoding, and our buffers are short-lived so heap
+-- fragmentation is not a concern.
 module Hpgsql.Internal.PinnedByteArray
   ( PinnedByteArray (..),
     LazyPinnedByteArray,
