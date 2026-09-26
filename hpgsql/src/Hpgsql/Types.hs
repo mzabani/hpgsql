@@ -53,8 +53,8 @@ pgArrayFieldDecoder = PGArray <$> fst (arrayFieldRowDec replicateM)
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = pgArrayFieldDecoder
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder = \finfo -> do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> do
     len <- Parser.takeInt32BE
     case len of
       (-1) -> pure Nothing
@@ -125,8 +125,8 @@ instance FromPgField PgJson where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = pgJsonFieldDecoder
 
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder finfo = do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo = do
     len <- fromIntegral <$> Parser.takeInt32BE
     if len == (-1)
       then pure Nothing
@@ -169,9 +169,9 @@ aesonFieldDecoder =
 instance (FromJSON a) => FromPgField (Aeson a) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = aesonFieldDecoder
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder finfo =
-    notConstFieldDecoder finfo >>= \case
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo =
+    specializedFieldDecoder finfo >>= \case
       Nothing -> pure Nothing
       Just (PgJson jsonBs) ->
         case Aeson.decodeStrict jsonBs of

@@ -202,43 +202,24 @@ class FromPgField a where
   {-# MINIMAL fieldDecoder #-}
   fieldDecoder :: FieldDecoder a
 
-  -- regardless of what `FieldDecoder` would do with a SQL NULL.
-  --
-  -- Define this as `Nothing` if implementing it isn't possible.
-  -- This isn't exposed to users yet, but we should recommend they add an INLINE pragma,
-  -- as the method's name suggests.
-  --
-  -- Any implementation of this _must_ return a `Nothing` for a SQL NULL value,
-  -- regardless of what `FieldDecoder` would do with a SQL NULL.
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder :: Maybe (Parser.Parser (Maybe a))
-  constFieldDecoder = Nothing
-
-  -- | For types that can't implement `constFieldDecoder` because they
-  -- need to know the value's OID for decoding, this is the next best thing:
-  -- also a specialized field+value decoder that can be faster than the
-  -- one derived from `fieldDecoder`.
+  -- | When possible, a specialized field-length+field-value parser that is
+  -- much faster than shelling out to the `FieldDecoder a` instance, because
+  -- that requires intantiating a `ByteString` while this operates on top of
+  -- the `PinnedByteArray` in our buffers directly.
   --
   -- Any implementation of this _must_ return a `Nothing` for a SQL NULL value,
   -- regardless of what `FieldDecoder` would do with a SQL NULL.
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder :: FieldInfo -> Parser.Parser (Maybe a)
-  notConstFieldDecoder =
-    case constFieldDecoder of
-      Nothing -> slowerParser
-      Just fd -> const fd
-    where
-      -- slowerParser takes a ByteString and passes it to the
-      -- field decoder.
-      slowerParser singleColInfo = do
-        len <- Parser.takeInt32BE
-        if len == (-1)
-          then pure Nothing
-          else do
-            bs <- Parser.take (fromIntegral len)
-            case fieldDecoder.fieldValueDecoder singleColInfo (Just (PBA.toByteString bs)) of
-              Left err -> fail err
-              Right v -> pure (Just v)
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder :: FieldInfo -> Parser.Parser (Maybe a)
+  specializedFieldDecoder singleColInfo = do
+    len <- Parser.takeInt32BE
+    if len == (-1)
+      then pure Nothing
+      else do
+        bs <- Parser.take (fromIntegral len)
+        case fieldDecoder.fieldValueDecoder singleColInfo (Just (PBA.toByteString bs)) of
+          Left err -> fail err
+          Right v -> pure (Just v)
 
   -- | Semantically equivalent to `singleField fieldDecoder`, but for
   -- most types it can provide a much faster `RowDecoder`. This doesn't
@@ -254,45 +235,25 @@ class FromPgField a where
   -- compilation times and binary size.
   {-# INLINE inlinedFieldRowDecoder #-}
   inlinedFieldRowDecoder :: RowDecoder a
-  inlinedFieldRowDecoder = case constFieldDecoder @a of
-    Nothing ->
-      let !typeCheck = (fieldDecoder @a).allowedPgTypes
-       in RowDecoder
-            { fullRowDecoder = \case
-                [singleColInfo] ->
-                  let !valueForNull = case (fieldDecoder @a).fieldValueDecoder singleColInfo Nothing of
-                        Left err -> fail err
-                        Right v -> pure v
-                   in do
-                        mv <- notConstFieldDecoder singleColInfo
-                        case mv of
-                          Nothing -> valueForNull
-                          Just v -> pure v
-                _ -> error "singleField expected a single column OID but got 0 or >1",
-              rowColumnsTypeCheck = \case
-                [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
-                _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-              numExpectedColumns = 1
-            }
-    Just p ->
-      let !typeCheck = (fieldDecoder @a).allowedPgTypes
-       in RowDecoder
-            { fullRowDecoder = \case
-                [singleColInfo] ->
-                  let !valueForNull = case (fieldDecoder @a).fieldValueDecoder singleColInfo Nothing of
-                        Left err -> fail err
-                        Right v -> pure v
-                   in do
-                        mv <- p
-                        case mv of
-                          Nothing -> valueForNull
-                          Just v -> pure v
-                _ -> error "singleField expected a single column OID but got 0 or >1",
-              rowColumnsTypeCheck = \case
-                [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
-                _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
-              numExpectedColumns = 1
-            }
+  inlinedFieldRowDecoder =
+    let !typeCheck = (fieldDecoder @a).allowedPgTypes
+     in RowDecoder
+          { fullRowDecoder = \case
+              [singleColInfo] ->
+                let !valueForNull = case (fieldDecoder @a).fieldValueDecoder singleColInfo Nothing of
+                      Left err -> fail err
+                      Right v -> pure v
+                 in do
+                      mv <- specializedFieldDecoder singleColInfo
+                      case mv of
+                        Nothing -> valueForNull
+                        Just v -> pure v
+              _ -> error "singleField expected a single column OID but got 0 or >1",
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
 
 class FromPgRow a where
   rowDecoder :: RowDecoder a
@@ -902,8 +863,8 @@ instance FromPgField Int where
 
   -- Interestingly, the notConst field decoder is a tiny little bit
   -- faster than the constFieldDecoder
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder = \finfo ->
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo ->
     if finfo.fieldTypeOid == int4Oid
       then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
       else
@@ -931,8 +892,8 @@ int16FieldDecoder =
 instance FromPgField Int16 where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = int16FieldDecoder
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just Parser.takeInt16BEWithFieldLength
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const Parser.takeInt16BEWithFieldLength
 
 {-# RULES
 "singleField int32FieldDecoder" singleField int32FieldDecoder = fieldRowDecoder
@@ -954,8 +915,8 @@ int32FieldDecoder =
 instance FromPgField Int32 where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = int32FieldDecoder
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just $ do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
     fieldLen <- Parser.takeInt32BE
     case fieldLen of
       4 -> Just <$> Parser.takeInt32BE
@@ -980,18 +941,23 @@ int64FieldDecoder =
       allowedPgTypes = (`elem` [int2Oid, int4Oid, int8Oid]) . fieldTypeOid
     }
 
+-- | Parses smaller integer types too.
+{-# INLINE int64ConstFieldDecoder #-}
+int64ConstFieldDecoder :: Parser.Parser (Maybe Int64)
+int64ConstFieldDecoder = do
+  fieldLen <- Parser.takeInt32BE
+  case fieldLen of
+    8 -> Just <$> Parser.takeInt64BE
+    4 -> Just . fromIntegral <$> Parser.takeInt32BE
+    (-1) -> pure Nothing
+    2 -> Just . fromIntegral <$> Parser.takeInt16BE
+    _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
+
 instance FromPgField Int64 where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = int64FieldDecoder
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just $ do
-    fieldLen <- Parser.takeInt32BE
-    case fieldLen of
-      8 -> Just <$> Parser.takeInt64BE
-      4 -> Just . fromIntegral <$> Parser.takeInt32BE
-      (-1) -> pure Nothing
-      2 -> Just . fromIntegral <$> Parser.takeInt16BE
-      _ -> fail "Trying to decode PG integer but it's not 2, 4 or 8 bytes long"
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const int64ConstFieldDecoder
 
 {-# RULES
 "singleField integerFieldDecoder" singleField integerFieldDecoder = fieldRowDecoder
@@ -1022,8 +988,8 @@ instance FromPgField Integer where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = integerFieldDecoder
 
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder = \finfo -> do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> do
     let !decodeInt = binaryIntDecoder @Int64 finfo.fieldTypeOid
     len <- fromIntegral <$> Parser.takeInt32BE
     case len of
@@ -1061,8 +1027,8 @@ instance FromPgField Oid where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = oidFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just $ do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
     fieldLen <- Parser.takeInt32BE
     fmap Oid <$> case fieldLen of
       4 -> Just <$> Parser.takeInt32BE
@@ -1084,8 +1050,8 @@ instance FromPgField Float where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = floatFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just Parser.takeFloatBEWithFieldLength
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const Parser.takeFloatBEWithFieldLength
 
 {-# RULES
 "singleField doubleFieldDecoder" singleField doubleFieldDecoder = fieldRowDecoder
@@ -1119,8 +1085,8 @@ instance FromPgField Double where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = doubleFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just doubleRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const doubleRowDecoder
 
 -- | Allows you to specify a type (and other checks, possibly) for a `FieldDecoder`.
 -- This can be useful to ensure you're not accidentally decoding a different type.
@@ -1201,13 +1167,11 @@ instance FromPgField Scientific where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = scientificFieldDecoder
 
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder =
-    let !int64RowDec = fromMaybe (error "Bug in HPgsql: Int64 does not have an constFieldDecoder") $ constFieldDecoder @Int64
-     in \singleColInfo ->
-          if singleColInfo.fieldTypeOid /= numericOid
-            then fmap (flip scientific 0 . fromIntegral) <$> int64RowDec
-            else numericRowParser
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder singleColInfo =
+    if singleColInfo.fieldTypeOid /= numericOid
+      then fmap (flip scientific 0 . fromIntegral) <$> int64ConstFieldDecoder
+      else numericRowParser
 
 {-# RULES
 "singleField ratioIntegerFieldDecoder" singleField ratioIntegerFieldDecoder = fieldRowDecoder
@@ -1222,8 +1186,8 @@ instance FromPgField (Ratio Integer) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = ratioIntegerFieldDecoder
 
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder = \finfo -> let sciDec = notConstFieldDecoder finfo in fmap (toRational :: Scientific -> Rational) <$> sciDec
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> let sciDec = specializedFieldDecoder finfo in fmap (toRational :: Scientific -> Rational) <$> sciDec
 
 binaryTrue :: PinnedByteArray
 binaryTrue = PBA.fromByteString $ PBA.encodePgBoolean True
@@ -1247,8 +1211,8 @@ instance FromPgField Bool where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = boolFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just boolRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const boolRowDecoder
 
 {-# RULES
 "singleField charFieldDecoder" singleField charFieldDecoder = fieldRowDecoder
@@ -1282,12 +1246,12 @@ instance FromPgField Char where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = charFieldDecoder
 
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder finfo =
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo =
     if finfo.fieldTypeOid == charOid
       then fmap (chr . fromIntegral) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
       else do
-        mt <- notConstFieldDecoder @Text finfo
+        mt <- specializedFieldDecoder @Text finfo
         case mt of
           Nothing -> pure Nothing
           Just t ->
@@ -1331,8 +1295,8 @@ instance FromPgField Text where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = textFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just textDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const textDecoder
 
 {-# RULES
 "singleField lazyTextFieldDecoder" singleField lazyTextFieldDecoder = fieldRowDecoder
@@ -1351,8 +1315,8 @@ instance FromPgField LT.Text where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = lazyTextFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just lazyTextDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const lazyTextDecoder
 
 {-# RULES
 "singleField stringFieldDecoder" singleField stringFieldDecoder = fieldRowDecoder
@@ -1373,8 +1337,8 @@ instance FromPgField String where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = stringFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just stringDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const stringDecoder
 
 {-# RULES
 "singleField ciTextFieldDecoder" singleField ciTextFieldDecoder = fieldRowDecoder
@@ -1390,10 +1354,9 @@ ciTextFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fie
 instance FromPgField (CI Text) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = ciTextFieldDecoder
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder =
-    let !textDec = fromMaybe (error "Impossible: no Text constFieldDecoder") constFieldDecoder
-     in Just $ fmap CI.mk <$> textDec
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder =
+    const $ fmap CI.mk <$> textDecoder
 
 {-# RULES
 "singleField ciLazyTextFieldDecoder" singleField ciLazyTextFieldDecoder = fieldRowDecoder
@@ -1409,10 +1372,9 @@ ciLazyTextFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$>
 instance FromPgField (CI LT.Text) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = ciLazyTextFieldDecoder
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder =
-    let !textDec = fromMaybe (error "Impossible: no LT.Text constFieldDecoder") constFieldDecoder
-     in Just $ fmap CI.mk <$> textDec
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder =
+    const $ fmap CI.mk <$> lazyTextDecoder
 
 {-# RULES
 "singleField ciStringFieldDecoder" singleField ciStringFieldDecoder = fieldRowDecoder
@@ -1428,10 +1390,9 @@ ciStringFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> s
 instance FromPgField (CI String) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = ciStringFieldDecoder
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder =
-    let !stringDec = fromMaybe (error "Impossible: no String constFieldDecoder") constFieldDecoder
-     in Just $ fmap CI.mk <$> stringDec
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder =
+    const $ fmap CI.mk <$> stringDecoder
 
 {-# RULES
 "singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = fieldRowDecoder
@@ -1465,8 +1426,8 @@ instance FromPgField UTCTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = utcTimeFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just utcTimeRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const utcTimeRowDecoder
 
 {-# RULES
 "singleField unboundedUtcTimeFieldDecoder" singleField unboundedUtcTimeFieldDecoder = fieldRowDecoder
@@ -1515,8 +1476,8 @@ instance FromPgField (Unbounded UTCTime) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = unboundedUtcTimeFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just unboundedUtcTimeRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const unboundedUtcTimeRowDecoder
 
 {-# RULES
 "singleField zonedTimeFieldDecoder" singleField zonedTimeFieldDecoder = fieldRowDecoder
@@ -1550,8 +1511,8 @@ instance FromPgField ZonedTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = zonedTimeFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just zonedTimeRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const zonedTimeRowDecoder
 
 {-# RULES
 "singleField unboundedZonedTimeFieldDecoder" singleField unboundedZonedTimeFieldDecoder = fieldRowDecoder
@@ -1600,8 +1561,8 @@ instance FromPgField (Unbounded ZonedTime) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = unboundedZonedTimeFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just unboundedZonedTimeRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const unboundedZonedTimeRowDecoder
 
 {-# RULES
 "singleField localTimeFieldDecoder" singleField localTimeFieldDecoder = fieldRowDecoder
@@ -1634,8 +1595,8 @@ instance FromPgField LocalTime where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = localTimeFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just localTimeRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const localTimeRowDecoder
 
 {-# RULES
 "singleField timeOfDayFieldDecoder" singleField timeOfDayFieldDecoder = fieldRowDecoder
@@ -1664,8 +1625,8 @@ instance FromPgField TimeOfDay where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = timeOfDayFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just timeOfDayRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const timeOfDayRowDecoder
 
 {-# RULES
 "singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
@@ -1693,8 +1654,8 @@ instance FromPgField Day where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = dayFieldDecoder
 
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just dayRowDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const dayRowDecoder
 
 {-# RULES
 "singleField unboundedDayFieldDecoder" singleField unboundedDayFieldDecoder = fieldRowDecoder
@@ -1759,8 +1720,8 @@ uuidFieldDecoder = parsePgType "UUID" [uuidOid] $ \case
 instance FromPgField UUID where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = uuidFieldDecoder
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = Just $ do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
     len <- Parser.takeInt32BE
     case len of
       (-1) -> pure Nothing
@@ -1794,8 +1755,8 @@ aesonFieldDecoder =
 instance FromPgField Aeson.Value where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = aesonFieldDecoder
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder finfo = do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo = do
     len <- fromIntegral <$> Parser.takeInt32BE
     if len == (-1)
       then pure Nothing
@@ -1828,21 +1789,12 @@ instance (FromPgField a) => FromPgField (Maybe a) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = nullableField fieldDecoder
 
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder finfo = do
-    mv <- notConstFieldDecoder @a finfo
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo = do
+    mv <- specializedFieldDecoder @a finfo
     case mv of
       Nothing -> pure Nothing
       jv -> pure $ Just jv
-
-  {-# INLINE constFieldDecoder #-}
-  constFieldDecoder = case constFieldDecoder @a of
-    Nothing -> Nothing
-    Just p -> Just $ do
-      mv <- p
-      case mv of
-        Nothing -> pure Nothing -- Must return Nothing for SQL Nulls
-        jv -> pure $ Just jv
 
 allowOnlyArrayTypes :: FieldInfo -> Bool
 allowOnlyArrayTypes fieldInfo =
@@ -1864,8 +1816,8 @@ arrayFieldDecoder = fst $ arrayFieldRowDec Vector.replicateM
 instance forall a. (FromPgField a) => FromPgField (Vector a) where
   {-# INLINE fieldDecoder #-}
   fieldDecoder = arrayFieldDecoder
-  {-# INLINE notConstFieldDecoder #-}
-  notConstFieldDecoder = \finfo -> do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> do
     len <- Parser.takeInt32BE
     case len of
       (-1) -> pure Nothing
@@ -1893,9 +1845,7 @@ instance {-# INCOHERENT #-} forall a. (FromPgField a) => FromPgField (Vector (Ve
             Left err -> fail $ "Array element is NULL: " ++ err
             Right v -> pure v
           Just v -> pure v
-      fieldDec = case constFieldDecoder of
-        Just d -> handleNulls d
-        Nothing -> \finfo -> handleNulls (notConstFieldDecoder finfo) finfo
+      fieldDec = \finfo -> handleNulls (specializedFieldDecoder finfo) finfo
       arrayParser :: EncodingContext -> Parser.Parser (Vector (Vector a))
       arrayParser encodingContext = do
         !ndim <- Parser.takeInt32BE
@@ -1974,7 +1924,8 @@ newtype LowerCasedPgEnum a = LowerCasedPgEnum a
 
 instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) where
   fieldDecoder = LowerCasedPgEnum <$> genericEnumFieldDecoder LT.toLower
-  constFieldDecoder = Just $ do
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
     enumAsText <- lazyTextDecoder
     case enumAsText of
       Nothing -> pure Nothing
@@ -2162,9 +2113,7 @@ arrayFieldRowDec !replicateFunction =
           Left err -> fail $ "Array element is NULL: " ++ err
           Right v -> pure v
         Just v -> pure v
-    fieldDec = case constFieldDecoder of
-      Just d -> handleNulls d
-      Nothing -> \finfo -> handleNulls (notConstFieldDecoder finfo) finfo
+    fieldDec = \finfo -> handleNulls (specializedFieldDecoder finfo) finfo
     arrayParser :: EncodingContext -> Parser.Parser (f a)
     arrayParser encodingContext = do
       !ndim <- Parser.takeInt32BE
