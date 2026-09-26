@@ -81,8 +81,8 @@ import GHC.Float (castWord32ToFloat, castWord64ToDouble, expt, float2Double)
 import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
 import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
 import qualified GHC.TypeLits as TypeLits
-import Hpgsql.Internal.Builder (BinaryField (..))
-import qualified Hpgsql.Internal.Builder as Builder
+import Hpgsql.Builder (BinaryField (..))
+import qualified Hpgsql.Builder as Builder
 import Hpgsql.Internal.PinnedByteArray (PinnedByteArray)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import qualified Hpgsql.SimpleParser as Parser

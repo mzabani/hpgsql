@@ -47,10 +47,10 @@ import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
+import Hpgsql.Builder
+import qualified Hpgsql.Builder as Builder
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowDecoder, RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
-import Hpgsql.Internal.Builder
-import qualified Hpgsql.Internal.Builder as Builder
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Pipeline (pipeline, pipeline1With, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)

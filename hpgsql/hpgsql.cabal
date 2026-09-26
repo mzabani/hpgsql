@@ -27,6 +27,7 @@ source-repository head
 library
   exposed-modules:
       Hpgsql
+      Hpgsql.Builder
       Hpgsql.Cancellation
       Hpgsql.Connection
       Hpgsql.Copy
@@ -35,7 +36,6 @@ library
       Hpgsql.Internal.InternalTypes
       Hpgsql.Notification
       Hpgsql.ParsingInternal
-      Hpgsql.Internal.Builder
       Hpgsql.Internal.PinnedByteArray
       Hpgsql.Pipeline
       Hpgsql.Query

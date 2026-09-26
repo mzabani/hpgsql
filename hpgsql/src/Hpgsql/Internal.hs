@@ -133,9 +133,9 @@ import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
+import qualified Hpgsql.Builder as Builder
 import Hpgsql.Encoding.Internal (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
-import qualified Hpgsql.Internal.Builder as Builder
 import Hpgsql.Internal.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), ConnectionString (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResetConnectionOpts (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
 import Hpgsql.Internal.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray, takePgMessageIdentAndLen)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
