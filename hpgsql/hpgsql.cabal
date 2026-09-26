@@ -27,16 +27,16 @@ source-repository head
 library
   exposed-modules:
       Hpgsql
-      Hpgsql.Builder
       Hpgsql.Cancellation
       Hpgsql.Connection
       Hpgsql.Copy
       Hpgsql.Encoding
       Hpgsql.Encoding.RowDecoderMonadic
-      Hpgsql.InternalTypes
+      Hpgsql.Internal.InternalTypes
       Hpgsql.Notification
       Hpgsql.ParsingInternal
-      Hpgsql.PinnedByteArray.Internal
+      Hpgsql.Internal.Builder
+      Hpgsql.Internal.PinnedByteArray
       Hpgsql.Pipeline
       Hpgsql.Query
       Hpgsql.Time

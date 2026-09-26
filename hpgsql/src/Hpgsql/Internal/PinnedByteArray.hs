@@ -44,7 +44,7 @@
 -- problem). Also, we only use pinned byte arrays for our receive buffer,
 -- which has such a short life span (it gets decoded into user rows immediately)
 -- that heap fragmentation doesn't sound too concerning.
-module Hpgsql.PinnedByteArray.Internal
+module Hpgsql.Internal.PinnedByteArray
   ( PinnedByteArray (..),
     LazyPinnedByteArray,
     createPinnedByteArray,
@@ -286,7 +286,7 @@ unsafeEncodeWord n endianConvert len =
     poke (coerce bufferPtr) $ endianConvert n
 
 newtype ByteStringIdx = ByteStringIdx {idx :: Int}
-  deriving newtype (Num)
+  deriving newtype (Eq, Num, Show)
 
 {-# INLINE decodeInt16BE #-}
 decodeInt16BE :: ByteStringIdx -> PinnedByteArray -> Either String Int16

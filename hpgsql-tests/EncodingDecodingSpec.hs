@@ -1,10 +1,12 @@
 module EncodingDecodingSpec where
 
-import Control.Monad (join, void)
+import Control.Monad (join, void, when)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as Aeson
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Builder as BSBuilder
+import qualified Data.ByteString.Builder.Extra as BSBuilder
 import qualified Data.ByteString.Lazy as LBS
 import Data.CaseInsensitive (CI)
 import qualified Data.CaseInsensitive as CI
@@ -14,7 +16,7 @@ import Data.Functor.Contravariant (contramap)
 import Data.Int (Int16, Int32, Int64, Int8)
 import qualified Data.List as List
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isNothing)
+import Data.Maybe (isJust, isNothing)
 import Data.Ratio ((%))
 import Data.Scientific (Scientific)
 import Data.String (fromString)
@@ -29,6 +31,7 @@ import Data.UUID.Types (UUID)
 import qualified Data.UUID.Types as UUID
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
+import Data.Word (Word16, Word32, Word8)
 import DbUtils
   ( aroundConn,
     irrecoverableErrorWithMsg,
@@ -46,10 +49,13 @@ import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowDecoder, RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Internal.Builder
+import qualified Hpgsql.Internal.Builder as Builder
+import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Pipeline (pipeline, pipeline1With, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (Oid (..), TypeInfo (..), lookupTypeByOid)
+import Hpgsql.TypeInfo (Oid (..), TypeInfo (..), builtinPgTypesMap, lookupTypeByOid)
 import Hpgsql.Types (Only (..), PGArray (..), PgJson)
 import Numeric (showHex)
 import Test.Hspec
@@ -58,106 +64,107 @@ import TestUtils (genJsonValue)
 
 spec :: Spec
 spec = parallel $ do
-  aroundConn $ describe "Encoding and decoding" $ do
-    it
-      "Values round-trip"
-      valuesRoundTrip
-    it
-      "bytea values round-trip"
-      byteaValuesRoundTrip
-    it
-      "Date types round-trip"
-      dateAndTimestampTzRoundTrip
-    it
-      "Numeric values round-trip"
-      numericValuesRoundTrip
-    it
-      "Numeric values round-trip even when result types are larger"
-      numericValuesRoundTripEvenWhenTargetTypesAreLarger
-    it
-      "Numeric extreme values round-trip"
-      numericExtremeValuesRoundTrip
-    it
-      "Rational values round-trip"
-      rationalValuesRoundTrip
-    it
-      "Json values round-trip"
-      jsonValuesRoundTrip
-    it
-      "Date decoding"
-      dateDecoding
-    it
-      "Date encoding"
-      dateEncoding
-    it
-      "Timestamp decoding"
-      timestampDecoding
-    it
-      "Timestamp encoding"
-      timestampEncoding
-    it
-      "Less usual types"
-      lessUsualTypes
-    it
-      "bytea text decoding"
-      byteaTextDecoding
-    it
-      "Date and timestamp text decoding"
-      dateAndTimestampTextDecoding
-    it
-      "Numeric text decoding"
-      numericTextDecoding
-    it
-      "Numeric text decoding with larger result types"
-      numericTextDecodingLargerTypes
-    it
-      "Numeric extreme text decoding"
-      numericExtremeTextDecoding
-    it
-      "Oid text decoding"
-      oidTextDecoding
-    it
-      "Char text decoding"
-      charTextDecoding
-    it
-      "UUID values round-trip"
-      uuidRoundTrip
-    it
-      "UUID text decoding"
-      uuidTextDecoding
-    it
-      "CI Text values round-trip"
-      ciTextRoundTrip
-    it
-      "CI Text text decoding"
-      ciTextTextDecoding
-    it
-      "Text values round-trip"
-      textRoundTrip
-    it
-      "Text text decoding"
-      textTextDecoding
-    it
-      "TimeOfDay values round-trip"
-      timeOfDayRoundTrip
-    it
-      "LocalTime values round-trip"
-      localTimeRoundTrip
-    it
-      "TimeOfDay text decoding"
-      timeOfDayTextDecoding
-    it
-      "LocalTime text decoding"
-      localTimeTextDecoding
-    it
-      "ZonedTime text decoding"
-      zonedTimeTextDecoding
-    it
-      "Json text decoding"
-      jsonTextDecoding
-    it
-      "Values type round-trip"
-      valuesTypeRoundTrip
+  describe "Encoding and decoding" $ do
+    aroundConn $ do
+      it
+        "Values round-trip"
+        valuesRoundTrip
+      it
+        "bytea values round-trip"
+        byteaValuesRoundTrip
+      it
+        "Date types round-trip"
+        dateAndTimestampTzRoundTrip
+      it
+        "Numeric values round-trip"
+        numericValuesRoundTrip
+      it
+        "Numeric values round-trip even when result types are larger"
+        numericValuesRoundTripEvenWhenTargetTypesAreLarger
+      it
+        "Numeric extreme values round-trip"
+        numericExtremeValuesRoundTrip
+      it
+        "Rational values round-trip"
+        rationalValuesRoundTrip
+      it
+        "Json values round-trip"
+        jsonValuesRoundTrip
+      it
+        "Date decoding"
+        dateDecoding
+      it
+        "Date encoding"
+        dateEncoding
+      it
+        "Timestamp decoding"
+        timestampDecoding
+      it
+        "Timestamp encoding"
+        timestampEncoding
+      it
+        "Less usual types"
+        lessUsualTypes
+      it
+        "bytea text decoding"
+        byteaTextDecoding
+      it
+        "Date and timestamp text decoding"
+        dateAndTimestampTextDecoding
+      it
+        "Numeric text decoding"
+        numericTextDecoding
+      it
+        "Numeric text decoding with larger result types"
+        numericTextDecodingLargerTypes
+      it
+        "Numeric extreme text decoding"
+        numericExtremeTextDecoding
+      it
+        "Oid text decoding"
+        oidTextDecoding
+      it
+        "Char text decoding"
+        charTextDecoding
+      it
+        "UUID values round-trip"
+        uuidRoundTrip
+      it
+        "UUID text decoding"
+        uuidTextDecoding
+      it
+        "CI Text values round-trip"
+        ciTextRoundTrip
+      it
+        "CI Text text decoding"
+        ciTextTextDecoding
+      it
+        "Text values round-trip"
+        textRoundTrip
+      it
+        "Text text decoding"
+        textTextDecoding
+      it
+        "TimeOfDay values round-trip"
+        timeOfDayRoundTrip
+      it
+        "LocalTime values round-trip"
+        localTimeRoundTrip
+      it
+        "TimeOfDay text decoding"
+        timeOfDayTextDecoding
+      it
+        "LocalTime text decoding"
+        localTimeTextDecoding
+      it
+        "ZonedTime text decoding"
+        zonedTimeTextDecoding
+      it
+        "Json text decoding"
+        jsonTextDecoding
+      it
+        "Values type round-trip"
+        valuesTypeRoundTrip
     it
       "Especially optimized less-than-4-bytes long value decoders work"
       smallerThan4BytesValuesAndNullsRoundtrip
@@ -197,53 +204,38 @@ valuesRoundTrip conn = do
   let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Nothing :: Maybe Bool)
   queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
 
-smallerThan4BytesValuesAndNullsRoundtrip :: HPgConnection -> PropertyT IO ()
-smallerThan4BytesValuesAndNullsRoundtrip conn = hedgehog $ do
-  yearForDate :: Integer <- Gen.forAll $ Gen.integral (Gen.linear 1 9999)
-  month :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 12
-  day :: Int <- Gen.forAll $ Gen.int $ Gen.linear 1 28
-  date <- Gen.forAll $ Gen.element [Just $ fromGregorian yearForDate month day, Nothing]
-  let i16Boundary :: [Int16]
-      i16Boundary =
-        [minBound .. minBound + 10]
-          ++ [maxBound - 10 .. maxBound]
-          ++ [2 ^ (14 :: Int) - 10 .. 2 ^ (14 :: Int) + 10]
-          ++ [-(2 ^ (14 :: Int)) - 10 .. -(2 ^ (14 :: Int)) + 10]
-      i32Boundary :: [Int32]
-      i32Boundary =
-        [minBound .. minBound + 10]
-          ++ [maxBound - 10 .. maxBound]
-          ++ [2 ^ (30 :: Int) - 10 .. 2 ^ (30 :: Int) + 10]
-          ++ [-(2 ^ (30 :: Int)) - 10 .. -(2 ^ (30 :: Int)) + 10]
-  i16 :: Maybe Int16 <- Gen.forAll $ Gen.choice [Just <$> Gen.element i16Boundary, Just <$> Gen.integral (Gen.linear (-10) 10), pure Nothing]
-  i32 :: Maybe Int32 <- Gen.forAll $ Gen.choice [Just <$> Gen.element i32Boundary, Just <$> Gen.integral (Gen.linear (-10) 10), pure Nothing]
-  b :: Maybe Bool <- Gen.forAll $ Gen.choice [Just <$> Gen.bool, pure Nothing]
-  -- TODO: float4, char
-  -- TODO: Varying recvChunkSize sizes for this test
-  -- TODO: More variations of rows
-  -- TODO: test errors when trying to decode NULL::type into a non-Maybe in Haskell
-  let r1 = (date, i16, i32, b)
-      r2 = (i16, date, i32, b)
-      r3 = (i32, date, i16, b)
-      r4 = (b, date, i16, i32)
-      r5 = (b, i32, i16, date)
-      r6 = (b, date, i32, i16)
-  (resR1, resR2, resR3, resR4, resR5, resR6) <-
-    liftIO $
-      runPipeline conn $
-        (,,,,,)
-          <$> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r1]}) subq|]
-          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r2]}) subq|]
-          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r3]}) subq|]
-          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r4]}) subq|]
-          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r5]}) subq|]
-          <*> pipeline1With rowDecoder [sql|SELECT * FROM (^{vALUES [r6]}) subq|]
-  liftIO resR1 >>= (=== r1)
-  liftIO resR2 >>= (=== r2)
-  liftIO resR3 >>= (=== r3)
-  liftIO resR4 >>= (=== r4)
-  liftIO resR5 >>= (=== r5)
-  liftIO resR6 >>= (=== r6)
+smallerThan4BytesValuesAndNullsRoundtrip :: PropertyT IO ()
+smallerThan4BytesValuesAndNullsRoundtrip = hedgehog $ do
+  w8 :: Maybe Word8 <- Gen.forAll $ Gen.maybe Gen.enumBounded
+  w16 :: Maybe Word16 <- Gen.forAll $ Gen.maybe Gen.enumBounded
+  w32 :: Maybe Word32 <- Gen.forAll $ Gen.maybe Gen.enumBounded
+  precedingBytes <- Gen.forAll $ Gen.bytes (Gen.linear 0 30)
+  trailingBytes <- Gen.forAll $ Gen.bytes (Gen.linear 0 30)
+  let mkRow :: (a -> BSBuilder.Builder) -> Maybe a -> PBA.PinnedByteArray
+      mkRow toBytes w =
+        let field = Builder.toStrictByteString $ case w of
+              Nothing -> Builder.binaryField SqlNull
+              Just v -> Builder.binaryField (NotNull $ BS.toStrict $ BSBuilder.toLazyByteString $ toBytes v)
+         in PBA.fromByteString $ precedingBytes <> field <> trailingBytes
+
+  let offset = PBA.ByteStringIdx (BS.length precedingBytes)
+      w8Field = mkRow BSBuilder.word8 w8
+      w16Field = mkRow BSBuilder.word16BE w16
+      w32Field = mkRow BSBuilder.word32BE w32
+  PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize1 offset w8Field === Right (w8, offset + if isNothing w8 then 4 else 5)
+  PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize2 offset w16Field === Right (w16, offset + if isNothing w16 then 4 else 6)
+  PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize4 offset w32Field === Right (w32, offset + if isNothing w32 then 4 else 8)
+  when (isJust w8) $ do
+    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize2 offset w8Field === differentTypeLengthErr
+    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize4 offset w8Field === differentTypeLengthErr
+  when (isJust w16) $ do
+    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize1 offset w16Field === differentTypeLengthErr
+    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize4 offset w16Field === differentTypeLengthErr
+  when (isJust w32) $ do
+    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize1 offset w32Field === differentTypeLengthErr
+    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize2 offset w32Field === differentTypeLengthErr
+  where
+    differentTypeLengthErr = Left "decodePgFieldWithAtMost4Bytes being used to decode field with different length than the one asked for"
 
 byteaValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 byteaValuesRoundTrip conn = hedgehog $ do

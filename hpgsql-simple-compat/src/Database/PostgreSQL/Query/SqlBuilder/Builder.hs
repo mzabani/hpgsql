@@ -10,7 +10,7 @@ import Database.PostgreSQL.Query.SqlBuilder.Types (LogMasker)
 import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple.HpgsqlUtils (PgSimpleRow, toPgSimpleQuery)
 import qualified Database.PostgreSQL.Simple.Types as PgSimple
-import qualified Hpgsql.InternalTypes as HQ
+import qualified Hpgsql.Internal.InternalTypes as HQ
 
 -- | This is just an alias for hpgsql's `Query` type in hpgsql-simple-compat.
 type SqlBuilder = HQ.Query

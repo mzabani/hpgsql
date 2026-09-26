@@ -15,7 +15,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Hpgsql (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..), execute, execute_)
 import Hpgsql.Connection (defaultConnectOpts, withConnection, withConnectionOpts)
-import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..))
+import Hpgsql.Internal.InternalTypes (ConnectOpts (..), ConnectionString (..))
 import System.Environment (getEnv, lookupEnv)
 import System.Mem (performGC)
 import Test.Hspec

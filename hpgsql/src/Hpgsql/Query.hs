@@ -21,9 +21,9 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.List as List
 import Data.Proxy (Proxy (..))
-import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (RowEncoder (..), ToPgRow (..))
-import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements)
+import Hpgsql.Internal.Builder (BinaryField (..))
+import Hpgsql.Internal.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements)
 import Hpgsql.QueryInternal (encodeParam, mkQuery, mkQueryInternal, sql, sqlPrep)
 import Hpgsql.TypeInfo (EncodingContext, Oid)
 

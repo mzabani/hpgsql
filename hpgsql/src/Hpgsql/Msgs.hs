@@ -21,10 +21,10 @@ import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeASCII, decodeUtf8, encodeUtf8)
 import Data.Word (Word8)
-import Hpgsql.Builder (BinaryField, Builder, builderLength)
-import qualified Hpgsql.Builder as Builder
-import Hpgsql.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
-import qualified Hpgsql.PinnedByteArray.Internal as PBA
+import Hpgsql.Internal.Builder (BinaryField, Builder, builderLength)
+import qualified Hpgsql.Internal.Builder as Builder
+import Hpgsql.Internal.InternalTypes (BindComplete (..), CommandComplete (..), CopyInResponse (..), DataRow (..), ErrorDetail (..), ErrorResponse (..), NoData (..), NotificationResponse (..), ParseComplete (..), ReadyForQuery (..), RowDescription (..), TransactionStatus (..))
+import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.ScramSHA256 (ScramClientFinalMessage (..), ScramServerFirstMessage (..))
 import Hpgsql.TypeInfo (Oid (..))
 

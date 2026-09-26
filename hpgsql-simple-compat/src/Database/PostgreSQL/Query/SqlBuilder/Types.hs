@@ -11,7 +11,7 @@ module Database.PostgreSQL.Query.SqlBuilder.Types
 where
 
 import Data.ByteString (ByteString)
-import qualified Hpgsql.InternalTypes as HQ
+import qualified Hpgsql.Internal.InternalTypes as HQ
 
 -- | Result of SqlBuilder. In hpgsql-simple-compat the query string is an
 -- hpgsql 'HQ.Query' and logging is a no-op.

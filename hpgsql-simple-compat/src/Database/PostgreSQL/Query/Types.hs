@@ -21,7 +21,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Database.PostgreSQL.Query.SqlBuilder (ToSqlBuilder (..))
 import Database.PostgreSQL.Simple.Internal (Connection)
-import Hpgsql.InternalTypes (Query)
+import Hpgsql.Internal.InternalTypes (Query)
 import Hpgsql.Query (escapeIdentifier)
 
 -- | Dot-separated field name. Each element in nested list will be

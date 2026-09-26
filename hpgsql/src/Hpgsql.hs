@@ -112,4 +112,4 @@ module Hpgsql
 where
 
 import Hpgsql.Internal
-import Hpgsql.InternalTypes (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))
+import Hpgsql.Internal.InternalTypes (ErrorDetail (..), HPgConnection, IrrecoverableHpgsqlError (..), PostgresError (..))

@@ -19,9 +19,9 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import Hpgsql.Builder (BinaryField)
 import Hpgsql.Encoding (FieldEncoder (..), RowEncoder (..), ToPgField (..), ToPgRow (..))
-import Hpgsql.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements, renumberParamsFrom)
+import Hpgsql.Internal.Builder (BinaryField)
+import Hpgsql.Internal.InternalTypes (Query (..), SingleQuery (..), SingleQueryFragment (..), breakQueryIntoStatements, renumberParamsFrom)
 import Hpgsql.LanguageHaskell.ParseHaskellExpression (parseHaskellExpression)
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockText, flattenBlocks, parseSql)
 import Hpgsql.TypeInfo (EncodingContext, Oid)

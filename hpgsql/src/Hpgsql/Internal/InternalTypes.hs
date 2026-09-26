@@ -1,4 +1,4 @@
-module Hpgsql.InternalTypes
+module Hpgsql.Internal.InternalTypes
   ( -- * Simple types
     ConnectionString (..),
     ConnectOpts (..),
@@ -75,9 +75,9 @@ import Data.Hashable (hash)
 import Data.IORef (IORef)
 import Data.Set (Set)
 import Hpgsql.Base (lastTwoAndInit, maximumOnOrDef, minimumOnOrDef)
-import Hpgsql.Builder (BinaryField)
+import Hpgsql.Internal.Builder (BinaryField)
+import Hpgsql.Internal.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray)
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), parseSql)
-import Hpgsql.PinnedByteArray.Internal (LazyPinnedByteArray, PinnedByteArray)
 import Hpgsql.TransactionStatusInternal (TransactionStatus (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..))
 import Network.Socket (AddrInfo, Socket)

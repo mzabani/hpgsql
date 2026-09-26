@@ -43,8 +43,8 @@ import Data.Text (Text)
 import Data.Word (Word64)
 import Foreign.Storable (Storable)
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
-import Hpgsql.PinnedByteArray.Internal (ByteStringIdx (..), PinnedByteArray)
-import qualified Hpgsql.PinnedByteArray.Internal as PBA
+import Hpgsql.Internal.PinnedByteArray (ByteStringIdx (..), PinnedByteArray)
+import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Prelude hiding (take)
 
 data ParseResult a

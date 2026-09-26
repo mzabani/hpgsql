@@ -12,8 +12,8 @@ import Hedgehog (Gen, PropertyT, annotateShow, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
-import Hpgsql.PinnedByteArray.Internal (PinnedByteArray)
-import qualified Hpgsql.PinnedByteArray.Internal as PBA
+import Hpgsql.Internal.PinnedByteArray (PinnedByteArray)
+import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 import TestUtils (genJsonValue)

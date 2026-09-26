@@ -4,7 +4,7 @@
 -- changes, like replacing `Maybe` with `BinaryField` in `ToPgField`) that barely
 -- changed memory usage and runtime.
 -- The benefits are exclusively for code readability, then.
-module Hpgsql.Builder where
+module Hpgsql.Internal.Builder where
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
