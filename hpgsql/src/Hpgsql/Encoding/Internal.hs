@@ -184,14 +184,17 @@ singleField fdec =
                     lenNextCol <- fromIntegral <$> Parser.takeInt32BE
                     if lenNextCol >= 0
                       then do
+                        -- Some forcing to avoid thunks keeping references to our
+                        -- PinnedByteArray buffers in case user-defined types
+                        -- don't have strict fields
                         nextColBs <- Parser.take lenNextCol
                         case decode (Just (PBA.toByteString nextColBs)) of
-                          Right v -> pure v
+                          Right !v -> pure v
                           Left err -> fail err
                       else case decode Nothing of
-                        Right v -> pure v
+                        Right !v -> pure v
                         Left err -> fail err
-            _ -> error "singleField expected a single column OID but got 0 or >1",
+            _ -> fail "singleField expected a single column OID but got 0 or >1",
           rowColumnsTypeCheck = \case
             [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
             _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
@@ -242,11 +245,14 @@ class FromPgField a where
                       Left err -> fail err
                       Right v -> pure v
                  in do
+                      -- Some forcing to avoid thunks keeping references to our
+                      -- PinnedByteArray buffers in case user-defined types
+                      -- don't have strict fields
                       mv <- specializedFieldDecoder singleColInfo
                       case mv of
                         Nothing -> valueForNull
-                        Just v -> pure v
-              _ -> fail "singleField expected a single column OID but got 0 or >1",
+                        Just !v -> pure v
+              _ -> fail "inlinedFieldRowDecoder expected a single column OID but got 0 or >1",
             rowColumnsTypeCheck = \case
               [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
               _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",

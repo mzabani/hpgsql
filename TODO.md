@@ -1,3 +1,2 @@
-- Check that we're not holding on to internal buffers when Record fields being materialized into aren't strict
 - Update BENCHMARKS.md
 - Check all TODOs in the code
