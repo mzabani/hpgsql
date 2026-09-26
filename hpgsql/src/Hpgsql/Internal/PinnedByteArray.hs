@@ -186,7 +186,7 @@ takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =
 
 -- | Drops the next `n` bytes.
 drop :: Int -> PinnedByteArray -> PinnedByteArray
-drop n (PinnedByteArray start len arr#) =
+drop (max 0 -> n) (PinnedByteArray start len arr#) =
   if n >= len
     then emptyPBA
     else
@@ -194,7 +194,7 @@ drop n (PinnedByteArray start len arr#) =
 
 -- | Takes the first `n` bytes.
 take :: Int -> PinnedByteArray -> PinnedByteArray
-take n (PinnedByteArray start len arr#) =
+take (max 0 -> n) (PinnedByteArray start len arr#) =
   PinnedByteArray start (min n len) arr#
 
 fromStrict :: PinnedByteArray -> LazyPinnedByteArray
@@ -212,7 +212,7 @@ toStrict lpba@(LazyPinnedByteArray totalLen _) = copyStrictSlice 0 totalLen lpba
 -- the bytes in the supplied `LazyPinnedByteArray` - no reference is kept
 -- to the supplied bytes.
 copyStrictSlice :: Int -> Int -> LazyPinnedByteArray -> PinnedByteArray
-copyStrictSlice skip n' (LazyPinnedByteArray totalLen' (reverse -> chunks)) =
+copyStrictSlice (max 0 -> skip) (max 0 -> n') (LazyPinnedByteArray totalLen' (reverse -> chunks)) =
   let n = min n' totalLen'
    in unsafeDupablePerformIO $ createPinnedByteArray n $ \dst -> do
         let go copied _ _ [] = pure copied
