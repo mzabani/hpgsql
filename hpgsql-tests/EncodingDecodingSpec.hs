@@ -45,7 +45,7 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
 import Hpgsql
 import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnectOpts, refreshTypeInfoCache, withConnectionOpts)
-import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowDecoder, RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
+import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowDecoder, RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import Hpgsql.Pipeline (pipeline, pipeline1With, pipelineWith, runPipeline)
 import Hpgsql.Query (mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
@@ -1106,7 +1106,6 @@ instance ToPgField IntAndBool where
 
 queryArrayTypes :: HPgConnection -> PropertyT IO ()
 queryArrayTypes conn = hedgehog $ do
-  -- TODO: hedgehog gen arrays with varying lengths, NULLs, etc.
   intArrDim1 <- fmap Vector.fromList $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
   nullIntArrDim1 <- fmap PGArray $ Gen.forAll $ Gen.list (Gen.linear 0 20) $ Gen.maybe $ Gen.int (Gen.linearFrom 0 (-1000) 1000)
   let qryIntArrays = mkQuery "SELECT $1, $1, $2" (intArrDim1, nullIntArrDim1)
@@ -1121,13 +1120,16 @@ queryArrayTypes conn = hedgehog $ do
       multiDimArray2 = Vector.fromList [Vector.fromList [1, 2, 3], Vector.fromList [4, 5, 6 :: Int], Vector.fromList [7, 8, 9 :: Int]]
   -- Specialized row parsers of each type are a different implementation from
   -- the simpler fieldDecoders, so we need to test both. We also decode each
-  -- single-dimension array query into both `Vector` and `PGArray`.
+  -- single-dimension array query into both `Vector` and `PGArray`, and the
+  -- plain int vector additionally through `arrayField`, a third, standalone
+  -- array-decoding implementation that isn't tied to any `FromPgField` instance.
   ( resIntArrays1,
     resIntArrays2,
     resIntVecV1,
     resIntVecV2,
     resIntArrP1,
     resIntArrP2,
+    resIntVecAF,
     resInt16VecV1,
     resInt16VecV2,
     resInt16ArrP1,
@@ -1151,13 +1153,14 @@ queryArrayTypes conn = hedgehog $ do
     ) <-
     liftIO $
       runPipeline conn $
-        (,,,,,,,,,,,,,,,,,,,,,,,,,)
+        (,,,,,,,,,,,,,,,,,,,,,,,,,,)
           <$> pipeline1With rowDecoder qryIntArrays
           <*> pipeline1With ((,,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) qryIntArrays
           <*> pipeline1With (rowDecoder @(Only (Vector Int))) qryIntVec
           <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector Int))) qryIntVec
           <*> pipeline1With (rowDecoder @(Only (PGArray Int))) qryIntVec
           <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(PGArray Int))) qryIntVec
+          <*> pipeline1With (Only <$> singleField (arrayField Vector.replicateM (fieldDecoder @Int))) qryIntVec
           <*> pipeline1With (rowDecoder @(Only (Vector Int16))) qryInt16Vec
           <*> pipeline1With (Only <$> singleField (notRewrittenFieldDecoder @(Vector Int16))) qryInt16Vec
           <*> pipeline1With (rowDecoder @(Only (PGArray Int16))) qryInt16Vec
@@ -1184,6 +1187,7 @@ queryArrayTypes conn = hedgehog $ do
   liftIO resIntVecV2 >>= (=== Only (Vector.fromList [13 :: Int, 31, 45]))
   liftIO resIntArrP1 >>= (=== Only (PGArray [13 :: Int, 31, 45]))
   liftIO resIntArrP2 >>= (=== Only (PGArray [13 :: Int, 31, 45]))
+  liftIO resIntVecAF >>= (=== Only (Vector.fromList [13 :: Int, 31, 45]))
   liftIO resInt16VecV1 >>= (=== Only (Vector.fromList [13, 49, 91 :: Int16]))
   liftIO resInt16VecV2 >>= (=== Only (Vector.fromList [13, 49, 91 :: Int16]))
   liftIO resInt16ArrP1 >>= (=== Only (PGArray [13, 49, 91 :: Int16]))
