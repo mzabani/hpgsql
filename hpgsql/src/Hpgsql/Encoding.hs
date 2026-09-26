@@ -14,37 +14,28 @@
 -- > persons :: [Person] <- query conn "SELECT * FROM persons"
 --
 -- Note that Hpgsql's `RowDecoder` does not have a `Monad` instance because that allows it to
--- type check query results and field counts only once per query. If you need
--- to write a row decoder that is monadic (because decoding can change depending on the values
--- of fields), check "Hpgsql.Encoding.RowDecoderMonadic".
+-- type check query results and field counts only once per query instead of paying that price
+-- for every field of every row. If you need to write a row decoder that is monadic, check "Hpgsql.Encoding.RowDecoderMonadic".
 --
--- = Performant row decoders
+-- = Manually derived row decoders
 --
--- Hpgsql provides roughly two* ways to derive row decoders from your types.
--- You can use `fieldRowDecoder` or `inlinedFieldRowDecoder` for each field.
--- For example you can define:
+-- You can use `fieldRowDecoder` for each field in manually derived row decoders.
+-- For example:
 --
 -- > data Car = Car { model :: Text, year :: Maybe Int, inGoodCondition :: Bool }
 -- >
 -- > instance FromPgRow Car where
--- >   rowDecoder = Car <$> inlinedFieldRowDecoder
--- >                    <*> inlinedFieldRowDecoder
--- >                    <*> inlinedFieldRowDecoder
+-- >   rowDecoder = Car <$> fieldRowDecoder
+-- >                    <*> fieldRowDecoder
+-- >                    <*> fieldRowDecoder
 --
--- And hpgsql will derive a row decoder that is extremely fast because almost all the
--- decoding code is inlined. Fully inlined row decoders can be ~15% faster than not fully
--- inlined row decoders.
+-- In our benchmarks hand written FromPgRow instances aren't any more performant than Generically derived ones.
 --
--- However, bear in mind that fully inlined row decoders will generate more code and can possibly slow down compilation,
--- and that often the bottleneck is in query processing, not row decoding.
---
--- Some notes:
---
--- * Generically derived row decoders are not fully inlined, and perform as well as hand-written row decoders built with `fieldRowDecoder`.
--- * Another derivation method is to use `singleField fieldDecoder`. That is the least performant way of deriving row decoders, and is only useful if you need the ability to compose `FieldDecoder`s in ways that you can't otherwise. If you can, use `fieldRowDecoder` instead.
+-- Noteworthy is you should not use `singleField fieldDecoder` when you can use `fieldRowDecoder` instead. The former
+-- is much slower, and Hpgsql even has rewrite rules to rewrite it when compiling with -O.
 module Hpgsql.Encoding
   ( -- * Decoding
-    FromPgField (fieldDecoder, fieldRowDecoder, inlinedFieldRowDecoder), --  Do not export other methods so we can change them
+    FromPgField (fieldDecoder, fieldRowDecoder), --  Do not export other methods so we can change them
     FieldDecoder (..),
     FieldInfo (..),
     FromPgRow (..),

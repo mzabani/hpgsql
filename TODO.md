@@ -5,5 +5,5 @@
 - Text internals usage.. is it safe? Double-check.
 - Check that we're not holding on to internal buffers when Record fields being materialized into aren't strict
 - Write property-based tests for PinnedByteArray functions
-- Double check that for this PR the inlined and not inlined versions really differ in performance
-- Check all TODOs
+- Update BENCHMARKS.md
+- Check all TODOs in the code

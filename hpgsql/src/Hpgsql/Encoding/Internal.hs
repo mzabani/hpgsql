@@ -222,17 +222,15 @@ class FromPgField a where
           Right v -> pure (Just v)
 
   -- | Semantically equivalent to `singleField fieldDecoder`, but for
-  -- most types it can provide a much faster `RowDecoder`. This doesn't
-  -- cause the same amount of size blowup that `inlinedFieldRowDecoder`
-  -- does, but is also not as fast as that.
+  -- most types it can provide a much faster `RowDecoder`.
   {-# NOINLINE fieldRowDecoder #-}
   fieldRowDecoder :: RowDecoder a
   fieldRowDecoder = inlinedFieldRowDecoder
 
-  -- | Semantically equivalent to `singleField fieldDecoder`, but for
-  -- most types it can provide a much faster `RowDecoder`. Beware that
-  -- using will produce more code in your row decoders, which can affect
-  -- compilation times and binary size.
+  -- | Semantically equivalent to `singleField fieldDecoder`, but might
+  -- have every field decoder's code completely inlined into the row
+  -- decoder's code. This is not faster than just `fieldRowDecoder`,
+  -- so it's not exposed for now. More investigation is necessary.
   {-# INLINE inlinedFieldRowDecoder #-}
   inlinedFieldRowDecoder :: RowDecoder a
   inlinedFieldRowDecoder =
@@ -1742,13 +1740,15 @@ aesonFieldDecoder =
   FieldDecoder
     { fieldValueDecoder =
         \FieldInfo {fieldTypeOid} ->
-          let -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-           in \case
-                Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just d -> Right d
-                  Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+          let
+            -- jsonb has a byte prepended to the contents and json does not
+            !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+           in
+            \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
+              Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                Just d -> Right d
+                Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
       allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
     }
 
