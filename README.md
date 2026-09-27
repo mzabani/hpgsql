@@ -1,6 +1,6 @@
 [![CI](https://github.com/mzabani/hpgsql/actions/workflows/main.yml/badge.svg)](https://github.com/mzabani/hpgsql/actions/workflows/main.yml)
 
-Hpgsql is a PostgreSQL driver written in pure Haskell (no libpq), with an API largely inspired by the great [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple) library, but featuring:
+Hpgsql is a very performant PostgreSQL driver written in pure Haskell (no libpq), with an API largely inspired by the great [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple) library, but featuring:
 
 - Usage of PostgreSQL's binary protocol
 - Query arguments passed via the protocol instead of being escaped into the query string
@@ -51,11 +51,11 @@ You should start by swapping all of "postgresql-simple", "postgresql-libpq", and
 
 ## Performance
 
-Some benchmarks show materializing large query results with hpgsql takes 28% the time postgresql-simple takes, and 51% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
+Some benchmarks show materializing large query results with hpgsql takes ~25% the time postgresql-simple takes, and ~42% the time hasql takes (on my computer, Linux x64, GHC 9.10.3, compiled with -O1).
 
-When comparing hpgsql's Stream querying, hpgsql takes 7-11% the time of both [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
+When comparing hpgsql's Stream querying, hpgsql takes 7-8% the time of both [streaming-postgresql-simple](https://hackage.haskell.org/package/streaming-postgresql-simple) and postgresql-simple's cursor folding functions, although this might not be a fair comparison for some use cases.
 
-hpgsql's binary COPY runs in ~68% the time of postgresql-simple's textual COPY.
+hpgsql's binary COPY runs in ~70% the time of postgresql-simple's textual COPY.
 
 Peak allocated memory is harder to analyze.
 

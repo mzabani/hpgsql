@@ -328,18 +328,11 @@ main = do
       --     withMultipleConnections numConcurrentConnections hpgsqlConnect Hpgsql.Connection.closeGracefully $ \conn -> do
       --       res <- Hpgsql.querySWith fullyInlinedBenchRowDecoder conn (Hpgsql.mkQuery sql17 (Hpgsql.Only n))
       --       S.effects res
-      it ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
+      it ("postgresql-simple Record fold (" ++ show n ++ " rows, Generically derived row decoder)") $
         void $
-          bench ("streaming-postgresql-simple Record Stream (" ++ show n ++ " rows)") $
+          bench ("postgresql-simple Record fold (" ++ show n ++ " rows, Generically derived row decoder)") $
             withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-              runResourceT @IO $ do
-                let res :: Stream (Of BenchRow) (ResourceT IO) () = StreamingPostgresSimple.query pgSimpleConn sql17Simple (PGSimple.Only n)
-                S.effects res
-      it ("postgresql-simple Record fold (" ++ show n ++ " rows)") $
-        void $
-          bench ("postgresql-simple Record fold (" ++ show n ++ " rows)") $
-            withMultipleConnections numConcurrentConnections pgSimpleConnect PGSimple.close $ \pgSimpleConn -> do
-              PGSimple.fold pgSimpleConn "SELECT g, ('2000-01-01'::date + g::int4), ('2000-06-15'::date + g::int4), ('2000-01-01T00:00:00Z'::timestamptz + g * interval '1 second'), ('2020-06-15T12:00:00Z'::timestamptz + g * interval '1 minute'), 'row-' || g::text, 'item-' || g::text, g::float8 * 1.5, g::float8 * 2.5, NULL::int4, NULL::text, NULL::float8, NULL::date FROM generate_series(1,?) g" (PGSimple.Only n) () (\() (!_ :: BenchRow) -> pure ())
+              PGSimple.fold pgSimpleConn sql17Simple (PGSimple.Only n) () (\() (!_ :: BenchRow) -> pure ())
     describe "COPY FROM STDIN" $ do
       (conn, pgSimpleConn) <- runIO $ do
         hpgsqlConnInfo <- testConnInfo

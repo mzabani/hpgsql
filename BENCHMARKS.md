@@ -49,11 +49,11 @@ This benchmark is unfair towards both hpgsql and postgresql-simple (compared to 
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple Record List (100000 rows, Generically derived row decoder) | 14.72s | 146.3MB | 315.1MB | 49595.9MB |
-| hasql Record List (100000 rows) | 8.450s | 99.2MB | 285.5MB | 14422.7MB |
-| *hpgsql Record List (100000 rows, Generically derived row decoder)* | 4.033s | 140.4MB | 140.4MB | 14966.0MB |
-| Npgsql Record List (100000 rows) | 1.050s | - | - | 481.7MB |
-| rust-tokio-postgres Record List (100000 rows) | 950.2ms | - | 50.2MB | - |
+| postgresql-simple Record List (100000 rows, Generically derived row decoder) | 15.41s | 151.7MB | 319.8MB | 52527.3MB |
+| hasql Record List (100000 rows) | 9.196s | 185.6MB | 394.4MB | 15185.6MB |
+| *hpgsql Record List (100000 rows, Generically derived row decoder)* | 3.829s | 158.2MB | 158.2MB | 10415.3MB |
+| Npgsql Record List (100000 rows) | 1.210s | - | - | 482.2MB |
+| rust-tokio-postgres Record List (100000 rows) | 1.142s | - | 50.2MB | - |
 
 ### Materializing 100_000 rows with 13 columns each into a List of Tuples
 
@@ -61,9 +61,9 @@ This runs with 2 concurrent queries, 10 times over:
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple Tuple List (100000 rows) | 14.07s | 148.5MB | 218.9MB | 43243.5MB |
-| hasql Tuple List (100000 rows) | 7.802s | 201.7MB | 342.5MB | 9841.6MB |
-| *hpgsql Tuple List (100000 rows)* | 3.969s | 151.8MB | 151.8MB | 9985.4MB |
+| postgresql-simple Tuple List (100000 rows) | 15.20s | 158.1MB | 229.6MB | 46174.6MB |
+| hasql Tuple List (100000 rows) | 9.218s | 232.6MB | 377.6MB | 10604.5MB |
+| *hpgsql Tuple List (100000 rows)* | 3.198s | 148.0MB | 148.0MB | 7367.3MB |
 
 ### Streaming 100_000 rows with 17 columns as Records
 
@@ -75,11 +75,11 @@ cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple Record fold (100000 rows, Generically derived row decoder) | 16.20s | 0.0MB | 34.3MB | 48921.4MB |
-| streaming-postgresql-simple Record Stream (100000 rows, Generically derived row decoder) | 16.13s | 0.0MB | 1.2MB | 62278.5MB |
-| *hpgsql Record Stream (100000 rows, Generically derived row decoder)* | 1.592s | 0.3MB | 0.3MB | 14318.5MB |
-| Npgsql Record Stream (100000 rows) | 1.034s | - | - | 441.9MB |
-| rust-tokio-postgres Record Stream (100000 rows) | 876.1ms | - | 0.4MB | - |
+| postgresql-simple Record fold (100000 rows, Generically derived row decoder) | 17.20s | 0.0MB | 52.9MB | 51852.7MB |
+| streaming-postgresql-simple Record Stream (100000 rows, Generically derived row decoder) | 16.67s | 0.0MB | 1.2MB | 65208.1MB |
+| *hpgsql Record Stream (100000 rows, Generically derived row decoder)* | 1.220s | 0.2MB | 0.2MB | 9879.3MB |
+| Npgsql Record Stream (100000 rows) | 1.205s | - | - | 444.2MB |
+| rust-tokio-postgres Record Stream (100000 rows) | 1.078s | - | 0.4MB | - |
 
 ### Streaming 100_000 rows with 13 columns as Tuples
 
@@ -91,9 +91,9 @@ cursors simultaneously, but not hpgsql's Streamed-from-socket streams).
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| streaming-postgresql-simple Tuple Stream (100000 rows) | 13.23s | 0.0MB | 1.3MB | 55905.7MB |
-| postgresql-simple Tuple fold (100000 rows) | 12.95s | 0.0MB | 12.3MB | 42538.1MB |
-| *hpgsql Tuple Stream (100000 rows)* | 774.3ms | 0.3MB | 0.3MB | 8270.3MB |
+| postgresql-simple Tuple fold (100000 rows) | 13.86s | 0.0MB | 21.5MB | 45468.8MB |
+| streaming-postgresql-simple Tuple Stream (100000 rows) | 13.69s | 0.0MB | 1.3MB | 58835.3MB |
+| *hpgsql Tuple Stream (100000 rows)* | 920.5ms | 0.2MB | 0.2MB | 6873.6MB |
 
 ### COPY FROM STDIN
 
@@ -101,5 +101,5 @@ This compares hpgsql's binary copy to a `forM` loop writing text rows.
 
 | name | wall_clock_time | peak_live_rts_memory | peak_memory_upper_bound | total_managed_memory_allocated |
 |---|---|---|---|---|
-| postgresql-simple text COPY (100000 rows) | 1.377s | 2.2MB | 2.2MB | 4779.1MB |
-| *hpgsql copyFromS binary COPY (100000 rows)* | 944.4ms | 9.3MB | 9.3MB | 2358.2MB |
+| postgresql-simple text COPY (100000 rows) | 1.355s | 2.1MB | 2.1MB | 4779.3MB |
+| *hpgsql copyFromS binary COPY (100000 rows)* | 974.5ms | 10.0MB | 10.0MB | 2358.3MB |
