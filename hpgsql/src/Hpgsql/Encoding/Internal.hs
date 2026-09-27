@@ -1800,7 +1800,9 @@ instance (FromPgField a) => FromPgField (Maybe a) where
     mv <- specializedFieldDecoder @a finfo
     case mv of
       Nothing -> pure Nothing
-      jv -> pure $ Just jv
+      -- Some forcing to avoid thunks keeping references to our
+      -- PinnedByteArray buffers
+      jv@(Just !_) -> pure $ Just jv
 
 allowOnlyArrayTypes :: FieldInfo -> Bool
 allowOnlyArrayTypes fieldInfo =
@@ -2104,7 +2106,9 @@ arrayFieldRowDec !replicateFunction =
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
                 Just bs -> case Parser.parseOnly dec (PBA.fromByteString bs) of
-                  Parser.ParseOk v -> Right v
+                  -- Some forcing to avoid thunks keeping references to our
+                  -- PinnedByteArray buffers
+                  Parser.ParseOk !v -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = allowOnlyArrayTypes
       },
@@ -2115,10 +2119,12 @@ arrayFieldRowDec !replicateFunction =
     handleNulls p = \finfo -> do
       mv <- p
       case mv of
+        -- Some forcing to avoid thunks keeping references to our
+        -- PinnedByteArray buffers
         Nothing -> case fdec.fieldValueDecoder finfo Nothing of
+          Right !v -> pure v
           Left err -> fail $ "Array element is NULL: " ++ err
-          Right v -> pure v
-        Just v -> pure v
+        Just !v -> pure v
     fieldDec = \finfo -> handleNulls (specializedFieldDecoder finfo) finfo
     arrayParser :: EncodingContext -> Parser.Parser (f a)
     arrayParser encodingContext = do
