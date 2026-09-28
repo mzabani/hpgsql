@@ -76,7 +76,7 @@ fromHpgsqlTypeInfo encCtx ti = case ti.typeDetails of
         typname = encodeUtf8 ti.typeName
         -- rngsubtype = error "rngsubtype not available in hpgsql-simple-compat"
       }
-  DomainType ->
+  DomainType _ ->
     Basic
       { typoid = ti.typeOid,
         typname = encodeUtf8 ti.typeName
