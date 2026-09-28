@@ -1,8 +1,8 @@
 ## v0.4.0
-- Up to X% performance improvements in row decoding
 
-API changes: use `fieldRowDecoder` instead of `singleField fieldDecoder` where you can.
+- Around 16% performance improvements in row decoding performance
 
+No breaking API changes in non-Internal modules in this version, but we now recommend using `fieldRowDecoder` instead of `singleField fieldDecoder` where you can. They're equivalent when compiling with -O1 due to rewrite rules, but the former is more performant when compiling with no optimizations.
 
 ## v0.3.0
 - Support GHC 9.12

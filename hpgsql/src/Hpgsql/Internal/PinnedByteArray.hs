@@ -42,7 +42,7 @@
 -- as there's no concerns about scoping decoding, and our buffers are short-lived so heap
 -- fragmentation is not a concern.
 module Hpgsql.Internal.PinnedByteArray
-  ( PinnedByteArray (..),
+  ( PinnedByteArray,
     LazyPinnedByteArray,
     createPinnedByteArray,
     takePgMessageIdentAndLen,
@@ -137,11 +137,6 @@ fromChunks :: [PinnedByteArray] -> LazyPinnedByteArray
 fromChunks pbas =
   let len = sum $ map length pbas
    in LazyPinnedByteArray len (reverse pbas)
-
--- instance Semigroup LazyPinnedByteArray where
---   LazyPinnedByteArray l1 pbs1 <> LazyPinnedByteArray l2 pbs2 = LazyPinnedByteArray (l1 + l2) (reverse $ reverse pbs1 ++ reverse pbs2)
--- instance Monoid LazyPinnedByteArray where
---   mempty = LazyPinnedByteArray 0 []
 
 {-# NOINLINE emptyPBA #-}
 emptyPBA :: PinnedByteArray

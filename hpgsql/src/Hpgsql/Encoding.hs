@@ -31,8 +31,7 @@
 --
 -- In our benchmarks hand written FromPgRow instances aren't any more performant than Generically derived ones.
 --
--- Noteworthy is you should not use `singleField fieldDecoder` when you can use `fieldRowDecoder` instead. The former
--- is much slower, and Hpgsql even has rewrite rules to rewrite it when compiling with -O.
+-- Noteworthy is you should not use `singleField fieldDecoder` when you can use `fieldRowDecoder` instead. Hpgsql has rewrite rules to make this replacement when compiling with -O1, but under -O0 the latter is much faster.
 module Hpgsql.Encoding
   ( -- * Decoding
     FromPgField (fieldDecoder, fieldRowDecoder), --  Do not export other methods so we can change them
