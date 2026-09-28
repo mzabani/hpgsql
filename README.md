@@ -1,6 +1,6 @@
 [![CI](https://github.com/mzabani/hpgsql/actions/workflows/main.yml/badge.svg)](https://github.com/mzabani/hpgsql/actions/workflows/main.yml)
 
-Hpgsql is a very performant PostgreSQL driver written in pure Haskell (no libpq), with an API largely inspired by the great [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple) library, but featuring:
+Hpgsql is a performant PostgreSQL driver written in pure Haskell (no libpq), with an API largely inspired by the great [postgresql-simple](https://hackage.haskell.org/package/postgresql-simple) library, but featuring:
 
 - Usage of PostgreSQL's binary protocol
 - Query arguments passed via the protocol instead of being escaped into the query string
