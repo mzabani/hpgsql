@@ -15,13 +15,9 @@ module Hpgsql.SimpleParser
     parseOnly,
     take,
     endOfInput,
-    match,
-    parseMany,
-    matchLeftUnconsumed,
     takeInt16BE,
     takeInt32BE,
     takeInt64BE,
-    takeDataRow,
     parseManyRows,
     skip,
     parsePgFieldWithAtMost4Bytes,
@@ -255,14 +251,6 @@ parsePgFieldWithAtMost4Bytes wdec =
           Right (v, restIdx) -> ks v restIdx bs
           Left err -> kf err
 
-parseMany :: Parser a -> Parser [a]
-parseMany p = Parser $ \idx' bs' _kf ks -> let (vs, restIdx) = go idx' bs' in ks vs restIdx bs'
-  where
-    go idx bs = case parseOnlyOffset (matchLeftUnconsumed p) idx bs of
-      ParseOk (unconsumedIdx, v) -> let (vs, rest) = go unconsumedIdx bs in (v : vs, rest)
-      ParseFail _ -> ([], idx)
-{-# INLINE parseMany #-}
-
 -- | Parses as many PG rows as there are available, returns
 -- the index/offset of the first left-unparsed byte and the
 -- number of rows parsed.
@@ -279,32 +267,3 @@ endOfInput :: Parser ()
 endOfInput = Parser $ \idx bs kf ks ->
   if PBA.length bs <= idx.idx then ks () idx bs else kf "endOfInput: input remaining"
 {-# INLINE endOfInput #-}
-
--- | Run a parser and additionally return the slice of input it consumed.
--- Because the input is a strict 'PinnedByteArray', the returned slice is a view
--- over the original buffer and allocates no extra memory.
-match :: Parser a -> Parser (PinnedByteArray, a)
-match (Parser p) = Parser $ \idx bs kf ks ->
-  p
-    idx
-    bs
-    kf
-    ( \a idx' bs' ->
-        -- TODO: Is take . drop this being inlined or rewritten?
-        let !consumed = PBA.take (idx'.idx - idx.idx) $ PBA.drop idx.idx bs
-         in ks (consumed, a) idx' bs'
-    )
-{-# INLINE match #-}
-
--- | Run a parser and additionally return the index to the first unconsumed/unparsed byte
--- in the supplied ByteString.
-matchLeftUnconsumed :: Parser a -> Parser (ByteStringIdx, a)
-matchLeftUnconsumed (Parser p) = Parser $ \idx bs kf ks ->
-  p
-    idx
-    bs
-    kf
-    ( \a idx' bs' ->
-        ks (idx', a) idx' bs'
-    )
-{-# INLINE matchLeftUnconsumed #-}

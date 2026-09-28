@@ -32,7 +32,7 @@
 -- GHC Core clearly showed a Word32 being boxed/allocated when all we needed
 -- was a short-lived Word32#.
 --
--- That's when I thought of pinned byte arrays, backed up by `ByteArray#`:
+-- That's when pinned byte arrays, backed up by `ByteArray#`, come to the rescue:
 -- those aren't moved by the GC so they can be decoded without being in IO.
 --
 -- After I wrote all of this, I realized _maybe_ I could've just moved `withForeignPtr`
@@ -44,19 +44,23 @@
 module Hpgsql.Internal.PinnedByteArray
   ( PinnedByteArray,
     LazyPinnedByteArray,
+    append,
+    copyStrictSlice,
     createPinnedByteArray,
-    takePgMessageIdentAndLen,
     drop,
-    fromStrict,
-    toStrict,
-    splitAt,
-    length,
-    take,
-    lazyLength,
+    emptyLazyPBA,
     emptyPBA,
     fromByteString,
+    fromChunks,
+    fromStrict,
+    lazyLength,
+    length,
+    splitAt,
+    take,
+    takePgMessageIdentAndLen,
     toByteString,
-    copyStrictSlice,
+    toStrict,
+    unsafeToUtf8Text,
 
     -- * Binary (de)serializer
     ByteStringIdx (..),
@@ -73,12 +77,7 @@ module Hpgsql.Internal.PinnedByteArray
     encodePgBoolean,
     decodeDataRow,
     decodePgFieldWithAtMost4Bytes,
-    CoolWordDec (..),
     WordDecoding (..),
-    unsafeToUtf8Text,
-    append,
-    emptyLazyPBA,
-    fromChunks,
   )
 where
 
@@ -256,14 +255,25 @@ fromBigEndian16 = Prelude.id
 fromBigEndian16 = byteSwap16
 #endif
 
-data CoolWordDec a where
-  CWord8 :: CoolWordDec Word8
-  CWord16 :: CoolWordDec Word16
-  CWord32 :: CoolWordDec Word32
-  CWord64 :: CoolWordDec Word64
+data WordDecodingAll a where
+  CWord8 :: WordDecodingAll Word8
+  CWord16 :: WordDecodingAll Word16
+  CWord32 :: WordDecodingAll Word32
+  CWord64 :: WordDecodingAll Word64
+
+data WordDecoding a where
+  TypeSize1 :: WordDecoding Word8
+  TypeSize2 :: WordDecoding Word16
+  TypeSize4 :: WordDecoding Word32
+
+fromWordDec :: WordDecoding a -> WordDecodingAll a
+fromWordDec = \case
+  TypeSize1 -> CWord8
+  TypeSize2 -> CWord16
+  TypeSize4 -> CWord32
 
 {-# INLINE decodeWord #-}
-decodeWord :: CoolWordDec a -> ByteStringIdx -> PinnedByteArray -> (a -> a) -> Either String a
+decodeWord :: WordDecodingAll a -> ByteStringIdx -> PinnedByteArray -> (a -> a) -> Either String a
 decodeWord wdec (ByteStringIdx boxedIdx@(I# idx)) (PinnedByteArray (I# start) len byArrSharp) endianConvert =
   case wdec of
     CWord8 -> if len < 1 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W8# (indexWord8Array# byArrSharp (idx +# start))
@@ -369,17 +379,6 @@ decodeDataRow idx sbs@(PinnedByteArray _ len _) =
     toResult lenFullMsg
       | len >= 1 + lenFullMsg + idx.idx = Right $ ByteStringIdx $ 1 + lenFullMsg + idx.idx
       | otherwise = Left "Less than enough bytes to decode a full DataRow"
-
-data WordDecoding a where
-  TypeSize1 :: WordDecoding Word8
-  TypeSize2 :: WordDecoding Word16
-  TypeSize4 :: WordDecoding Word32
-
-fromWordDec :: WordDecoding a -> CoolWordDec a
-fromWordDec = \case
-  TypeSize1 -> CWord8
-  TypeSize2 -> CWord16
-  TypeSize4 -> CWord32
 
 {-# INLINE decodePgFieldWithAtMost4Bytes #-}
 
