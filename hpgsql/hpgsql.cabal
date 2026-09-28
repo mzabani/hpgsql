@@ -33,9 +33,10 @@ library
       Hpgsql.Copy
       Hpgsql.Encoding
       Hpgsql.Encoding.RowDecoderMonadic
-      Hpgsql.InternalTypes
+      Hpgsql.Internal.InternalTypes
       Hpgsql.Notification
       Hpgsql.ParsingInternal
+      Hpgsql.Internal.PinnedByteArray
       Hpgsql.Pipeline
       Hpgsql.Query
       Hpgsql.Time
@@ -44,7 +45,7 @@ library
       Hpgsql.Types
   other-modules:
       Hpgsql.Base
-      Hpgsql.Encoding.BinarySerializer
+      Hpgsql.Encoding.Internal
       Hpgsql.Internal
       Hpgsql.LanguageHaskell.FromThExtension
       Hpgsql.LanguageHaskell.GhcParserOpts

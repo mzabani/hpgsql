@@ -11,7 +11,7 @@ import DbUtils
 import Hpgsql
 import Hpgsql.Cancellation (cancelActiveStatement)
 import Hpgsql.Connection (connect, connectionIsClosed, withConnection)
-import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..))
+import Hpgsql.Internal.InternalTypes (ConnectOpts (..), ConnectionString (..))
 import Hpgsql.Query (sql)
 import Hpgsql.Types (Only (..))
 import Test.Hspec

@@ -1,4 +1,4 @@
-module Hpgsql.InternalTypes
+module Hpgsql.Internal.InternalTypes
   ( -- * Simple types
     ConnectionString (..),
     ConnectOpts (..),
@@ -76,6 +76,7 @@ import Data.IORef (IORef)
 import Data.Set (Set)
 import Hpgsql.Base (lastTwoAndInit, maximumOnOrDef, minimumOnOrDef)
 import Hpgsql.Builder (BinaryField)
+import Hpgsql.Internal.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray)
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), parseSql)
 import Hpgsql.TransactionStatusInternal (TransactionStatus (..))
 import Hpgsql.TypeInfo (EncodingContext (..), Oid (..))
@@ -370,7 +371,7 @@ newtype CommandComplete = CommandComplete {numRows :: Int64}
 
 -- | A DataRow with its leading identifying character ('D'), the 32bits self-length,
 -- the 2 bytes for the number of fields and the fields' lengths and values themselves.
-newtype DataRow = DataRow {fullDataRow :: ByteString}
+newtype DataRow = DataRow {fullDataRow :: PinnedByteArray}
 
 instance Show DataRow where
   show _ = "DataRow"
@@ -464,7 +465,7 @@ data InternalConnectionState = InternalConnectionState
 data HPgConnection = HPgConnection
   { socket :: !Socket,
     socketClosed :: !(MVar Bool),
-    recvBuffer :: !(IORef LBS.ByteString),
+    recvBuffer :: !(IORef LazyPinnedByteArray),
     sendBuffer :: !(MVar [(LBS.ByteString, STM ())]),
     socketMutex :: !Mutex,
     originalConnStr :: !ConnectionString,

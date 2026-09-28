@@ -4,7 +4,7 @@ import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (Exception (..), bracketWithError, throw, tryJust)
 import Control.Monad (unless)
 import Hpgsql.Internal (execute_, fullTransactionStatus, transactionStatus)
-import Hpgsql.InternalTypes (HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError)
+import Hpgsql.Internal.InternalTypes (HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError)
 import Hpgsql.Query (Query)
 import Hpgsql.TransactionStatusInternal (TransactionStatus (..))
 

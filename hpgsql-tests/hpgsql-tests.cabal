@@ -34,6 +34,7 @@ executable hpgsql-tests
       LibPqConnStringParsingSpec
       NotificationsSpec
       ParsingSpec
+      PinnedByteArraySpec
       PipelineSpec
       PreparedStatementsSpec
       RowDecoderGhcCore

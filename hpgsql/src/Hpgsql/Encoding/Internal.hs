@@ -1,0 +1,2143 @@
+-- For the disabled warning, see Note [singleField fieldDecoder rewrite rules]
+{-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-inline-rule-shadowing #-}
+
+module Hpgsql.Encoding.Internal
+  ( -- * Decoding
+    FromPgField (..),
+    FieldDecoder (..),
+    FieldInfo (..),
+    FromPgRow (..),
+    RowDecoder (..),
+    singleField,
+    nullableField,
+    genericFromPgRow,
+
+    -- * Encoding
+    ToPgField (..),
+    FieldEncoder (..),
+    ToPgRow (..),
+    RowEncoder (..),
+    EncodingContext (..),
+    genericToPgRow,
+
+    -- * PostgreSQL enums
+    LowerCasedPgEnum (..),
+    genericEnumFieldDecoder,
+    genericEnumFieldEncoder,
+
+    -- * PostgreSQL composite types
+    compositeTypeDecoder,
+    compositeTypeEncoder,
+
+    -- * Driving PostgreSQL type inference
+    typeFieldDecoder,
+    typeFieldEncoder,
+    typeOidWithName,
+    typeMustBeNamed,
+
+    -- * Others
+    rawBytesFieldDecoder,
+    untypedFieldEncoder,
+    toPgVectorField,
+    arrayField,
+    arrayFieldRowDec,
+  )
+where
+
+import Control.Monad (replicateM, unless, when)
+import qualified Data.Aeson as Aeson
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
+import Data.CaseInsensitive (CI)
+import qualified Data.CaseInsensitive as CI
+import Data.Char (chr)
+import Data.Coerce (coerce)
+import Data.Fixed (divMod')
+import Data.Functor.Contravariant (Contravariant (..))
+import Data.Int (Int16, Int32, Int64)
+import qualified Data.List as List
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
+import Data.Monoid (Sum (..))
+import Data.Proxy (Proxy (..))
+import Data.Ratio (Ratio)
+import Data.Scientific (Scientific (..), floatingOrInteger, scientific)
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
+import qualified Data.Text.Lazy as LT
+import qualified Data.Text.Lazy.Encoding as LT
+import Data.Time (CalendarDiffDays (..), CalendarDiffTime (..), Day, LocalTime (..), NominalDiffTime, TimeOfDay, UTCTime (..), ZonedTime, diffDays, diffTimeToPicoseconds, fromGregorian, picosecondsToDiffTime, secondsToNominalDiffTime, timeOfDayToTime, timeToTimeOfDay, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.Calendar.Julian (addJulianDurationClip, fromJulian)
+import Data.Tuple.Only (Only (..))
+import Data.UUID.Types (UUID)
+import qualified Data.UUID.Types as UUID
+import Data.Vector (Vector)
+import qualified Data.Vector as Vector
+import GHC.Float (castWord32ToFloat, castWord64ToDouble, expt, float2Double)
+import GHC.Generics (C, D, Generic (..), K1 (..), M1 (..), Meta (MetaCons), U1 (..), (:*:) (..), (:+:) (..))
+import GHC.TypeLits (KnownSymbol, TypeError, symbolVal)
+import qualified GHC.TypeLits as TypeLits
+import Hpgsql.Builder (BinaryField (..))
+import qualified Hpgsql.Builder as Builder
+import Hpgsql.Internal.PinnedByteArray (PinnedByteArray)
+import qualified Hpgsql.Internal.PinnedByteArray as PBA
+import qualified Hpgsql.SimpleParser as Parser
+import Hpgsql.Time (Unbounded (..))
+import Hpgsql.TypeInfo (EncodingContext (..), Oid (..), TypeDetails (..), TypeInfo (..), boolOid, bpcharOid, byteaOid, charOid, dateOid, float4Oid, float8Oid, int2Oid, int4Oid, int8Oid, intervalOid, jsonOid, jsonbOid, lookupTypeByName, lookupTypeByOid, nameOid, numericOid, oidOid, textOid, timeOid, timestampOid, timestamptzOid, uuidOid, varcharOid, voidOid)
+
+data FieldInfo = FieldInfo
+  { fieldTypeOid :: !Oid,
+    -- | The column name from the query's result, if available.
+    fieldName :: !(Maybe Text),
+    -- | The EncodingContext as of the moment the query ran.
+    encodingContext :: !EncodingContext
+  }
+
+-- | A decoder for a single field/column.
+data FieldDecoder a = FieldDecoder
+  { fieldValueDecoder :: FieldInfo -> Maybe ByteString -> Either String a,
+    allowedPgTypes :: FieldInfo -> Bool
+  }
+  deriving stock (Functor)
+
+-- | `f1 <> f2` produces a `FieldDecoder` that tries `f1` first, and if that fails it tries `f2`.
+instance Semigroup (FieldDecoder a) where
+  dec1 <> dec2 =
+    FieldDecoder
+      { fieldValueDecoder = \cInfo ->
+          let f1 = dec1.fieldValueDecoder cInfo
+              f2 = dec2.fieldValueDecoder cInfo
+           in \mbs ->
+                let cand1 = if dec1.allowedPgTypes cInfo then f1 mbs else Left "Not first parser"
+                    cand2 = if dec2.allowedPgTypes cInfo then f2 mbs else Left "Not second parser"
+                 in cand1 <> cand2,
+        allowedPgTypes = \cInfo -> dec1.allowedPgTypes cInfo || dec2.allowedPgTypes cInfo
+      }
+
+data RowDecoder a = RowDecoder
+  { fullRowDecoder :: [FieldInfo] -> Parser.Parser a,
+    -- | Returns the same colInfos with a boolean indicating if
+    -- the expected types match for each colInfo.
+    rowColumnsTypeCheck :: [FieldInfo] -> [(FieldInfo, Bool)],
+    numExpectedColumns :: !Int
+  }
+  deriving stock (Functor, Generic)
+
+instance Applicative RowDecoder where
+  pure v = RowDecoder (const $ pure v) (map (,True)) 0
+  {-# INLINE (<*>) #-} -- This is crucial for performance. It makes our CPS Parser truly compile to CPS row decoders.
+  RowDecoder p1 tc1 nc1 <*> RowDecoder p2 tc2 nc2 = RowDecoder (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in p1 cols1 <*> p2 cols2) (\colTypes -> let (cols1, cols2) = List.splitAt nc1 colTypes in tc1 cols1 ++ tc2 cols2) (nc1 + nc2)
+
+instance (TypeError (TypeLits.Text "RowDecoder does not have a Monad instance in Hpgsql because Hpgsql type-checks the result types of queries before having access to even the first data row. Use the Applicative class to write your instances or use the Monadic decoding variants.")) => Monad RowDecoder where
+  (>>=) = error "inaccessible bind in Monad RowDecoder instance"
+
+-- Note [singleField fieldDecoder rewrite rules]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- There are strictly speaking three ways to derive a single-field/column
+-- row decoder in hpgsql: `singleField fieldDecoder`, `fieldRowDecoder`, and
+-- `inlinedFieldRowDecoder`.
+--
+-- The last two are sensible: one is more aggressive with inlining and produces faster row decoders
+-- at the cost of compilation times and binary sizes, the other produces row decoders that call out
+-- to functions when decoding each field, hence being smaller but slower.
+--
+-- But what about the first? It forces the allocation of `ByteString` values from our Pinned Byte Arrays,
+-- and is hence the slower of all three, except that it doesn't produce row decoders any smaller
+-- than `fieldRowDecoder`. It is strictly worse than that.
+--
+-- Since `singleField fieldDecoder` might be used by users of hpgsql, however, we can't just remove it.
+-- So we introduce rewrite rules to rewrite those to `fieldRowDecoder` instead.
+-- These rewrite rules require the implementations of each Field Decoder to be separated and not
+-- inlinable, or else GHC inlines `fieldDecoder` too early and these rules don't fire.
+--
+-- So there will be some phase annotations in some places and this requires a delicate choice
+-- of both INLINE and NOINLINE pragmas to work properly. To know if something's broken, the
+-- benchmarks with "Generically derived" and "singleField fieldDecoder" row decoders both
+-- should allocate the same amount of memory.
+
+-- Per-type rewrite rules for this Note live immediately above each type's
+-- FieldDecoder/RowDecoder definitions further down this file. This rule right below
+-- is still useful and triggers at call sites where the type is not known at
+-- compile time.
+{-# RULES
+"singleField fieldDecoder" singleField fieldDecoder = fieldRowDecoder
+"singleField (nullableField fieldDecoder)" singleField (nullableField fieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# INLINE [1] singleField #-}
+
+-- | Builds a single-field row decoder. Prefer to use `fieldRowDecoder`
+-- if you can because that's much faster.
+singleField :: FieldDecoder a -> RowDecoder a
+singleField fdec =
+  let !typeCheck = fdec.allowedPgTypes
+   in RowDecoder
+        { fullRowDecoder = \case
+            [singleColInfo] ->
+              let decode = fdec.fieldValueDecoder singleColInfo
+               in do
+                    lenNextCol <- fromIntegral <$> Parser.takeInt32BE
+                    if lenNextCol >= 0
+                      then do
+                        -- Some forcing to avoid thunks keeping references to our
+                        -- PinnedByteArray buffers in case user-defined types
+                        -- don't have strict fields
+                        nextColBs <- Parser.take lenNextCol
+                        case decode (Just (PBA.toByteString nextColBs)) of
+                          Right !v -> pure v
+                          Left err -> fail err
+                      else case decode Nothing of
+                        Right !v -> pure v
+                        Left err -> fail err
+            _ -> fail "singleField expected a single column OID but got 0 or >1",
+          rowColumnsTypeCheck = \case
+            [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
+            _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+          numExpectedColumns = 1
+        }
+
+class FromPgField a where
+  {-# MINIMAL fieldDecoder #-}
+  fieldDecoder :: FieldDecoder a
+
+  -- | When possible, a specialized field-length+field-value parser that is
+  -- much faster than shelling out to the `FieldDecoder a` instance, because
+  -- that requires intantiating a `ByteString` while this operates on top of
+  -- the `PinnedByteArray` in our buffers directly.
+  --
+  -- Any implementation of this _must_ return a `Nothing` for a SQL NULL value,
+  -- regardless of what `FieldDecoder` would do with a SQL NULL.
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder :: FieldInfo -> Parser.Parser (Maybe a)
+  specializedFieldDecoder singleColInfo = do
+    len <- Parser.takeInt32BE
+    if len == (-1)
+      then pure Nothing
+      else do
+        bs <- Parser.take (fromIntegral len)
+        case fieldDecoder.fieldValueDecoder singleColInfo (Just (PBA.toByteString bs)) of
+          Left err -> fail err
+          Right v -> pure (Just v)
+
+  -- | Semantically equivalent to `singleField fieldDecoder`, but for
+  -- most types it can provide a much faster `RowDecoder`.
+  {-# NOINLINE fieldRowDecoder #-}
+  fieldRowDecoder :: RowDecoder a
+  fieldRowDecoder = inlinedFieldRowDecoder
+
+  -- | Semantically equivalent to `singleField fieldDecoder`, but might
+  -- have every field decoder's code completely inlined into the row
+  -- decoder's code. This is not faster than just `fieldRowDecoder`,
+  -- so it's not exposed for now. More investigation is necessary.
+  {-# INLINE inlinedFieldRowDecoder #-}
+  inlinedFieldRowDecoder :: RowDecoder a
+  inlinedFieldRowDecoder =
+    let !typeCheck = (fieldDecoder @a).allowedPgTypes
+     in RowDecoder
+          { fullRowDecoder = \case
+              [singleColInfo] ->
+                let !valueForNull = case (fieldDecoder @a).fieldValueDecoder singleColInfo Nothing of
+                      Left err -> fail err
+                      Right v -> pure v
+                 in do
+                      -- Some forcing to avoid thunks keeping references to our
+                      -- PinnedByteArray buffers in case user-defined types
+                      -- don't have strict fields
+                      mv <- specializedFieldDecoder singleColInfo
+                      case mv of
+                        Nothing -> valueForNull
+                        Just !v -> pure v
+              _ -> fail "inlinedFieldRowDecoder expected a single column OID but got 0 or >1",
+            rowColumnsTypeCheck = \case
+              [singleColInfo] -> [(singleColInfo, typeCheck singleColInfo)]
+              _ -> error "singleField's rowColumnsTypeCheck expected a single column OID but got 0 or >1",
+            numExpectedColumns = 1
+          }
+
+class FromPgRow a where
+  rowDecoder :: RowDecoder a
+  default rowDecoder :: (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
+  rowDecoder = genericFromPgRow
+
+-- | Allows you to create a @FieldDecoder@ for composite types.
+-- For a type such as:
+--
+-- > CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);
+--
+-- You can define a Haskell type as such:
+--
+-- > data IntAndBool = IntAndBool Int Bool
+-- >
+-- > instance FromPgField IntAndBool where
+-- >   fieldDecoder = compositeTypeDecoder rowDecoder <&> \(i, b) -> IntAndBool i b
+compositeTypeDecoder :: forall a. RowDecoder a -> FieldDecoder a
+compositeTypeDecoder (RowDecoder {..}) =
+  FieldDecoder
+    { fieldValueDecoder = \compositeTypeOid ->
+        let !prs = parserForRecord compositeTypeOid.encodingContext <* Parser.endOfInput
+         in \case
+              Nothing -> Left "Got NULL in composite type but it was not allowed"
+              Just bs ->
+                case Parser.parseOnly prs (PBA.fromByteString bs) of
+                  Parser.ParseOk v -> Right v
+                  Parser.ParseFail err -> Left err,
+      allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
+    }
+  where
+    parserForRecord :: EncodingContext -> Parser.Parser a
+    parserForRecord encodingContext = do
+      -- From https://github.com/postgres/postgres/blob/50ba65e73325cf55fedb3e1f14673d816726923b/src/backend/utils/adt/rowtypes.c#L687
+      -- we can see a composite type's binary representation consists of: number of columns (Int32) + for_each_column { OID (Int32) + size_or_minus_1 (Int32) + Bytes }
+      numCols <- fromIntegral <$> Parser.takeInt32BE
+      unless (numCols == numExpectedColumns) $ fail $ "Composite type has " ++ show numCols ++ " attributes but parser expected " ++ show numExpectedColumns
+      let mkColInfo oid = FieldInfo oid Nothing encodingContext
+      cols <- replicateM numCols $ do
+        !oid <- Oid . fromIntegral <$> Parser.takeInt32BE
+        !size <- fromIntegral <$> Parser.peekInt32BE
+        sizeAndValueBs <- Parser.take (4 + max 0 size)
+        pure (oid, sizeAndValueBs)
+      let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
+      unless (all snd typecheckedCols) $ fail $ "Parser for composite found type OIDs " ++ show (map fst cols) ++ " but expected different"
+      case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (PBA.toStrict $ PBA.fromChunks $ map snd cols) of
+        Parser.ParseOk v -> pure v
+        Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
+
+-- | Allows you to create a @FieldEncoder@ for composite types.
+-- For a type such as:
+--
+-- > CREATE TYPE int_and_bool AS (numfield INT, boolfield BOOL);
+--
+-- You can define a Haskell type as such:
+--
+-- > data IntAndBool = IntAndBool Int Bool
+-- >
+-- > instance ToPgField IntAndBool where
+-- >   fieldEncoder = typeFieldEncoder (typeOidWithName "int_and_bool")
+-- >     $ compositeTypeEncoder $ contramap (\(IntAndBool i b) -> (fromIntegral i :: Int32, b)) rowEncoder
+compositeTypeEncoder :: forall a. RowEncoder a -> FieldEncoder a
+compositeTypeEncoder rowEnc =
+  FieldEncoder
+    { toTypeOid = \_ -> Nothing,
+      toPgField = \encCtx -> \a ->
+        let fields = map (\f -> f encCtx) (rowEnc.toPgParams a)
+            numCols = Builder.int32BE (fromIntegral $ length fields)
+            encodeField (mOid, bf) =
+              let Oid oid = fromMaybe (Oid 0) mOid
+               in Builder.int32BE oid <> Builder.binaryField bf
+         in NotNull (Builder.toStrictByteString (numCols <> foldMap encodeField fields))
+    }
+
+instance (FromPgField a) => FromPgRow (Only a) where
+  rowDecoder = Only <$> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b) => FromPgRow (a, b) where
+  rowDecoder = (,) <$> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c) => FromPgRow (a, b, c) where
+  rowDecoder = (,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d) => FromPgRow (a, b, c, d) where
+  rowDecoder = (,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e) => FromPgRow (a, b, c, d, e) where
+  rowDecoder = (,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f) => FromPgRow (a, b, c, d, e, f) where
+  rowDecoder = (,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g) => FromPgRow (a, b, c, d, e, f, g) where
+  rowDecoder = (,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h) => FromPgRow (a, b, c, d, e, f, g, h) where
+  rowDecoder = (,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i) => FromPgRow (a, b, c, d, e, f, g, h, i) where
+  rowDecoder = (,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j) => FromPgRow (a, b, c, d, e, f, g, h, i, j) where
+  rowDecoder = (,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k) where
+  rowDecoder = (,,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l) where
+  rowDecoder = (,,,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+instance (FromPgField a, FromPgField b, FromPgField c, FromPgField d, FromPgField e, FromPgField f, FromPgField g, FromPgField h, FromPgField i, FromPgField j, FromPgField k, FromPgField l, FromPgField m) => FromPgRow (a, b, c, d, e, f, g, h, i, j, k, l, m) where
+  rowDecoder = (,,,,,,,,,,,,) <$> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder <*> fieldRowDecoder
+
+data FieldEncoder a = FieldEncoder
+  { toTypeOid :: !(EncodingContext -> Maybe Oid),
+    toPgField :: !(EncodingContext -> a -> BinaryField)
+  }
+
+instance Contravariant FieldEncoder where
+  contramap f fEnc = FieldEncoder {toTypeOid = fEnc.toTypeOid, toPgField = \encCtx -> let toF = fEnc.toPgField encCtx in \v -> toF (f v)}
+
+class ToPgField a where
+  fieldEncoder :: FieldEncoder a
+
+-- | Allows you to specify a type for a FieldEncoder. This can be useful to avoid
+-- letting postgres infer types itself, which can cause errors. For example:
+--
+-- > data MyEnum = Val1 | Val2 | Val3
+-- > myEnumFieldDecoderWithTypeInfoCheck :: FieldEncoder MyEnum
+-- > myEnumFieldDecoderWithTypeInfoCheck =
+-- >   let convert = \case
+-- >         Val1 -> "val1" :: Text
+-- >         Val2 -> "val2"
+-- >         Val3 -> "val3"
+-- >    in typeFieldEncoder
+-- >         (typeOidWithName "my_enum")
+-- >         $ contramap convert fieldEncoder
+--
+-- This will work unless you use non-default flags in your connection options.
+typeFieldEncoder :: (EncodingContext -> Maybe Oid) -> FieldEncoder a -> FieldEncoder a
+typeFieldEncoder ttoid enc = enc {toTypeOid = ttoid}
+
+typeOidWithName :: Text -> (EncodingContext -> Maybe Oid)
+typeOidWithName typName = \encCtx -> typeOid <$> lookupTypeByName typName encCtx.typeInfoCache
+
+instance ToPgField Int where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just haskellIntOid,
+        toPgField = \_ -> binaryIntEncoder
+      }
+
+instance ToPgField Int16 where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just int2Oid,
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt16BE n
+      }
+
+instance ToPgField Int32 where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just int4Oid,
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt32BE n
+      }
+
+instance ToPgField Int64 where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just int8Oid,
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt64BE n
+      }
+
+instance ToPgField Integer where
+  fieldEncoder =
+    let fe = fieldEncoder @Scientific
+     in FieldEncoder
+          { toTypeOid = \_ -> Just numericOid,
+            toPgField = \encCtx -> \n -> fe.toPgField encCtx (fromIntegral n)
+          }
+
+instance ToPgField (Ratio Integer) where
+  fieldEncoder =
+    let fe = fieldEncoder @Scientific
+     in FieldEncoder
+          { toTypeOid = \_ -> Just numericOid,
+            toPgField = \encCtx -> \r -> fe.toPgField encCtx (fromRational r)
+          }
+
+instance ToPgField Oid where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just oidOid,
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeInt32BE $ fromIntegral n
+      }
+
+instance ToPgField Scientific where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just numericOid,
+        toPgField = \_ -> \n ->
+          let sign = PBA.encodeInt16BE $ if n >= 0 then 0 else 0x4000
+              -- The number is coeff * 10^exp, but we want it in base-10000 so we convert it to
+              -- new_coeff * 10^new_exp with new_exp a multiple of 4
+              base10000Expon = 4 * (base10Exponent n `div` 4)
+              base10000Coeff = coefficient n * expt 10 (base10Exponent n - base10000Expon)
+              ndigits, weight :: Int16
+              digits :: ByteString
+              (ndigits, weight, digits) = calculateDigits 0 0 (abs base10000Coeff) ""
+              dscale = PBA.encodeInt16BE (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
+           in NotNull $ PBA.encodeInt16BE ndigits <> PBA.encodeInt16BE (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
+      }
+    where
+      calculateDigits :: Int16 -> Int16 -> Integer -> BS.ByteString -> (Int16, Int16, BS.ByteString)
+      calculateDigits !ndigitsSoFar !weightSoFar 0 !encodedDigits = (ndigitsSoFar, weightSoFar, encodedDigits)
+      calculateDigits !ndigitsSoFar !weightSoFar !val !encodedDigits =
+        let (quotient, fromIntegral -> (rest :: Int16)) = val `divMod` 10000
+         in calculateDigits
+              (ndigitsSoFar + 1)
+              (weightSoFar + 1)
+              quotient
+              (PBA.encodeInt16BE rest <> encodedDigits)
+
+instance ToPgField Float where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just float4Oid,
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeFloat n
+      }
+
+instance ToPgField Double where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just float8Oid,
+        toPgField = \_ -> \n -> NotNull $ PBA.encodeDouble n
+      }
+
+instance ToPgField Bool where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just boolOid,
+        toPgField = \_ n -> NotNull $ PBA.encodePgBoolean n
+      }
+
+instance ToPgField Day where
+  -- PG Dates are Int32 number of days relative to 2000-01-01
+  -- https://github.com/postgres/postgres/blob/master/src/include/datatype/timestamp.h#L235
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just dateOid,
+        -- TODO: Catch integer overflow and do what?
+        toPgField = \_ d -> NotNull $ PBA.encodeInt32BE $ fromIntegral $ diffDays d (fromGregorian 2000 1 1)
+      }
+
+instance ToPgField (Unbounded Day) where
+  fieldEncoder =
+    let fe = fieldEncoder @Day
+     in FieldEncoder
+          { toTypeOid = fe.toTypeOid,
+            toPgField = \encCtx -> \case
+              NegInfinity -> NotNull $ PBA.encodeInt32BE minBound
+              Finite v -> fe.toPgField encCtx v
+              PosInfinity -> NotNull $ PBA.encodeInt32BE maxBound
+          }
+
+instance ToPgField CalendarDiffTime where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just intervalOid,
+        toPgField = \_ CalendarDiffTime {..} ->
+          let (days :: Int32, timeUnderOneDay) = ctTime `divMod'` 86_400
+           in NotNull $ PBA.encodeInt64BE (round $ timeUnderOneDay * 1_000_000) <> PBA.encodeInt32BE days <> PBA.encodeInt32BE (fromIntegral ctMonths)
+      }
+
+instance ToPgField NominalDiffTime where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just intervalOid,
+        toPgField = \_ ndt ->
+          NotNull $ PBA.encodeInt64BE (round $ ndt * 1_000_000) <> PBA.encodeInt32BE 0 <> PBA.encodeInt32BE 0
+      }
+
+instance ToPgField UTCTime where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just timestamptzOid,
+        -- TODO: Catch integer overflow and do what?
+        toPgField = \_ (UTCTime parsedDate timeinday) ->
+          let day :: Int64 = fromInteger $ parsedDate `diffDays` fromJulian 1999 12 19
+              totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds timeinday `div` 1_000_000)
+           in NotNull $ PBA.encodeInt64BE totalusecs
+      }
+
+instance ToPgField (Unbounded UTCTime) where
+  fieldEncoder =
+    let fe = fieldEncoder @UTCTime
+     in FieldEncoder
+          { toTypeOid = fe.toTypeOid,
+            toPgField = \encCtx -> \case
+              NegInfinity -> NotNull $ PBA.encodeInt64BE minBound
+              Finite v -> fe.toPgField encCtx v
+              PosInfinity -> NotNull $ PBA.encodeInt64BE maxBound
+          }
+
+instance ToPgField ZonedTime where
+  fieldEncoder =
+    let fe = fieldEncoder @UTCTime
+     in FieldEncoder
+          { toTypeOid = \_ -> Just timestamptzOid,
+            toPgField = \encCtx -> fe.toPgField encCtx . zonedTimeToUTC
+          }
+
+instance ToPgField (Unbounded ZonedTime) where
+  fieldEncoder =
+    let fe = fieldEncoder @ZonedTime
+     in FieldEncoder
+          { toTypeOid = fe.toTypeOid,
+            toPgField = \encCtx -> \case
+              NegInfinity -> NotNull $ PBA.encodeInt64BE minBound
+              Finite v -> fe.toPgField encCtx v
+              PosInfinity -> NotNull $ PBA.encodeInt64BE maxBound
+          }
+
+instance ToPgField LocalTime where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just timestampOid,
+        toPgField = \_ (LocalTime localDay localTimeOfDay) ->
+          let day :: Int64 = fromInteger $ localDay `diffDays` fromJulian 1999 12 19
+              totalusecs :: Int64 = 86_400_000_000 * day + fromInteger (diffTimeToPicoseconds (timeOfDayToTime localTimeOfDay) `div` 1_000_000)
+           in NotNull $ PBA.encodeInt64BE totalusecs
+      }
+
+instance ToPgField TimeOfDay where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just timeOid,
+        toPgField = \_ tod ->
+          let usecs :: Int64 = fromInteger $ diffTimeToPicoseconds (timeOfDayToTime tod) `div` 1_000_000
+           in NotNull $ PBA.encodeInt64BE usecs
+      }
+
+instance ToPgField Char where
+  fieldEncoder =
+    let fe = fieldEncoder @Text
+     in FieldEncoder
+          { toTypeOid = \_ -> Just textOid,
+            toPgField = \encCtx -> let !toTextField = fe.toPgField encCtx in \t -> toTextField $ Text.singleton t
+          }
+
+instance ToPgField ByteString where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just byteaOid,
+        toPgField = \_ -> \bs -> NotNull bs
+      }
+
+instance ToPgField LBS.ByteString where
+  fieldEncoder =
+    let fe = fieldEncoder @ByteString
+     in FieldEncoder
+          { toTypeOid = \_ -> Just byteaOid,
+            toPgField = \encCtx -> fe.toPgField encCtx . LBS.toStrict
+          }
+
+instance ToPgField Text where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just textOid,
+        toPgField = \_ -> \t ->
+          let bs = encodeUtf8 t
+           in NotNull bs
+      }
+
+instance ToPgField LT.Text where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just textOid,
+        toPgField = \_ -> \t ->
+          let bs = LBS.toStrict $ LT.encodeUtf8 t
+           in NotNull bs
+      }
+
+instance ToPgField String where
+  fieldEncoder =
+    let fe = fieldEncoder @Text
+     in FieldEncoder
+          { toTypeOid = \_ -> Just textOid,
+            toPgField = \encCtx -> fe.toPgField encCtx . Text.pack
+          }
+
+-- From https://hackage.haskell.org/package/case-insensitive-1.2.1.0/docs/Data-CaseInsensitive.html,
+-- "Note that the FoldCase instance for ByteStrings is only guaranteed to be correct for ISO-8859-1 encoded strings!".
+-- So we don't have those instances.
+
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
+instance ToPgField (CI Text) where
+  fieldEncoder = typeFieldEncoder (typeOidWithName "citext") $ contramap CI.original fieldEncoder
+
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
+instance ToPgField (CI LT.Text) where
+  fieldEncoder = typeFieldEncoder (typeOidWithName "citext") $ contramap CI.original fieldEncoder
+
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
+instance ToPgField (CI String) where
+  fieldEncoder = typeFieldEncoder (typeOidWithName "citext") $ contramap CI.original fieldEncoder
+
+instance ToPgField UUID where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just uuidOid,
+        toPgField = \_ -> NotNull . LBS.toStrict . UUID.toByteString
+      }
+
+instance ToPgField Aeson.Value where
+  fieldEncoder =
+    FieldEncoder
+      { toTypeOid = \_ -> Just jsonbOid,
+        toPgField = \_ -> \v ->
+          let bs = BS.cons 1 (LBS.toStrict $ Aeson.encode v)
+           in NotNull bs
+      }
+
+instance (ToPgField a) => ToPgField (Maybe a) where
+  fieldEncoder =
+    let fe = fieldEncoder @a
+     in FieldEncoder
+          { toTypeOid = fe.toTypeOid,
+            toPgField = \encCtx -> \case
+              Nothing -> SqlNull
+              Just n -> fe.toPgField encCtx n
+          }
+
+instance (ToPgField a) => ToPgField (Vector a) where
+  fieldEncoder =
+    let fe = fieldEncoder @a
+     in FieldEncoder
+          { toTypeOid = \encodingContext -> do
+              -- Maybe monad
+              elOid <- fe.toTypeOid encodingContext
+              arrayTypInfo <- lookupTypeByOid elOid encodingContext.typeInfoCache
+              arrayTypInfo.oidOfArrayType,
+            toPgField = toPgVectorField
+          }
+
+data RowEncoder a = RowEncoder
+  { toPgParams :: !(a -> [EncodingContext -> (Maybe Oid, BinaryField)]),
+    toTypeOids :: !(Proxy a -> [EncodingContext -> Maybe Oid]),
+    -- | This produces bytes for Binary COPY FROM STDIN rows, which can increase performance
+    -- and reduce memory usage comparing to deriving these bytes from `toPgParams`.
+    -- The produced bytes should not contain the total number of fields in the
+    -- beginning.
+    toBinaryCopyBytes :: !(EncodingContext -> a -> Builder.Builder)
+  }
+
+instance Contravariant RowEncoder where
+  contramap f rec = RowEncoder (\v -> rec.toPgParams (f v)) (\_ -> rec.toTypeOids Proxy) (\encCtx -> let !toBytes = rec.toBinaryCopyBytes encCtx in \v -> toBytes (f v))
+
+-- | These are from `Divisible`, but we don't currently pull in the extra dependency that has that.
+divide :: (a -> (b, c)) -> RowEncoder b -> RowEncoder c -> RowEncoder a
+divide d re1 re2 =
+  RowEncoder
+    { toPgParams = \a -> let (b, c) = d a in re1.toPgParams b ++ re2.toPgParams c,
+      toTypeOids = \_ -> re1.toTypeOids Proxy ++ re2.toTypeOids Proxy,
+      toBinaryCopyBytes = \encCtx ->
+        let !toBytes1 = re1.toBinaryCopyBytes encCtx
+            !toBytes2 = re2.toBinaryCopyBytes encCtx
+         in \a -> let (b, c) = d a in toBytes1 b <> toBytes2 c
+    }
+
+class ToPgRow a where
+  rowEncoder :: RowEncoder a
+  default rowEncoder :: (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
+  rowEncoder = genericToPgRow
+
+instance ToPgRow () where
+  rowEncoder = RowEncoder (\_ -> []) (\_ -> []) (\_ -> \_ -> mempty)
+
+singleFieldRowEncoder :: forall a. (ToPgField a) => RowEncoder a
+singleFieldRowEncoder =
+  let fe = fieldEncoder @a
+   in RowEncoder
+        { toPgParams = \a -> [\encodingContext -> (fe.toTypeOid encodingContext, fe.toPgField encodingContext a)],
+          toTypeOids = \_ -> [fe.toTypeOid],
+          toBinaryCopyBytes = \encCtx -> let !enc = fe.toPgField encCtx in \a -> Builder.binaryField $ enc a
+        }
+
+instance (ToPgField a) => ToPgRow (Only a) where
+  rowEncoder = contramap fromOnly singleFieldRowEncoder
+
+instance (ToPgField a, ToPgField b) => ToPgRow (a, b) where
+  rowEncoder = divide id singleFieldRowEncoder singleFieldRowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c) => ToPgRow (a, b, c) where
+  rowEncoder = divide (\(a, b, c) -> ((a, b), c)) rowEncoder singleFieldRowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d) => ToPgRow (a, b, c, d) where
+  rowEncoder = divide (\(a, b, c, d) -> ((a, b), (c, d))) rowEncoder rowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e) => ToPgRow (a, b, c, d, e) where
+  rowEncoder = divide (\(a, b, c, d, e) -> ((a, b, c), (d, e))) rowEncoder rowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f) => ToPgRow (a, b, c, d, e, f) where
+  rowEncoder = divide (\(a, b, c, d, e, f) -> ((a, b, c), (d, e, f))) rowEncoder rowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g) => ToPgRow (a, b, c, d, e, f, g) where
+  rowEncoder = divide (\(a, b, c, d, e, f, g) -> ((a, b, c), (d, e, f, g))) rowEncoder rowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h) => ToPgRow (a, b, c, d, e, f, g, h) where
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h) -> ((a, b, c, d), (e, f, g, h))) rowEncoder rowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i) => ToPgRow (a, b, c, d, e, f, g, h, i) where
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h, i) -> ((a, b, c, d), (e, f, g, h, i))) rowEncoder rowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j) => ToPgRow (a, b, c, d, e, f, g, h, i, j) where
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j) -> ((a, b, c, d, e), (f, g, h, i, j))) rowEncoder rowEncoder
+
+instance (ToPgField a, ToPgField b, ToPgField c, ToPgField d, ToPgField e, ToPgField f, ToPgField g, ToPgField h, ToPgField i, ToPgField j, ToPgField k) => ToPgRow (a, b, c, d, e, f, g, h, i, j, k) where
+  rowEncoder = divide (\(a, b, c, d, e, f, g, h, i, j, k) -> ((a, b, c, d, e, f), (g, h, i, j, k))) rowEncoder rowEncoder
+
+-- | The OID for `Data.Int`, which is machine dependent.
+haskellIntOid :: Oid
+
+-- | All pg type OIDs that fit into Haskell's `Data.Int`, whose size is machine dependent.
+haskellIntOids :: [Oid]
+(haskellIntOid, haskellIntOids)
+  | (fromIntegral (maxBound @Int) :: Integer) > fromIntegral (maxBound @Int32) = (int8Oid, [int2Oid, int4Oid, int8Oid])
+  | (fromIntegral (maxBound @Int) :: Integer) > fromIntegral (maxBound @Int16) = (int4Oid, [int2Oid, int4Oid])
+  | otherwise = (int2Oid, [int2Oid])
+
+-- | Big-Endian binary encoder for Haskell's `Data.Int`, which is machine-dependent.
+binaryIntEncoder :: Int -> BinaryField
+binaryIntEncoder
+  | haskellIntOid == int8Oid = NotNull . PBA.encodeInt64BE . fromIntegral
+  | haskellIntOid == int4Oid = NotNull . PBA.encodeInt32BE . fromIntegral
+  | otherwise = NotNull . PBA.encodeInt16BE . fromIntegral
+
+-- | Big-Endian binary decoder for Haskell's various IntXX types.
+binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> PinnedByteArray -> Either String a
+binaryIntDecoder typOid = \bs ->
+  if doesFit
+    then intDecoder bs
+    else Left $ "Chosen integral type does not fit every value for PG type with OID " ++ show typOid
+  where
+    maxBoundPgType :: Integer
+    intDecoder :: PinnedByteArray -> Either String a
+    (maxBoundPgType, intDecoder)
+      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . PBA.decodeInt64BE 0)
+      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . PBA.decodeInt32BE 0)
+      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . PBA.decodeInt16BE 0)
+      | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
+    doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
+
+binaryFloat4Decoder :: PinnedByteArray -> Float
+binaryFloat4Decoder = castWord32ToFloat . either error id . PBA.decodeWord32BE 0
+
+binaryFloat8Decoder :: PinnedByteArray -> Double
+binaryFloat8Decoder = castWord64ToDouble . either error id . PBA.decodeWord64BE 0
+
+parsePgType :: String -> [Oid] -> (Maybe ByteString -> Either String a) -> FieldDecoder a
+parsePgType !_typeName !requiredTypeOids !fieldValueDecoder = parsePgTypeFull ((`elem` requiredTypeOids) . fieldTypeOid) fieldValueDecoder
+
+parsePgTypeFull :: (FieldInfo -> Bool) -> (Maybe ByteString -> Either String a) -> FieldDecoder a
+parsePgTypeFull !allowedPgTypes !fieldValueDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \_oid -> fieldValueDecoder,
+      allowedPgTypes
+    }
+
+instance FromPgField () where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder =
+    FieldDecoder
+      { fieldValueDecoder = \_oid -> \case
+          Nothing -> Left "Cannot decode SQL null as the Haskell () type. Use a `Maybe ()`"
+          Just bs ->
+            if BS.length bs == 0
+              then Right ()
+              else
+                Left "Invalid value for postgres void type",
+        allowedPgTypes = (== voidOid) . fieldTypeOid
+      }
+
+{-# RULES
+"singleField intFieldDecoder" singleField intFieldDecoder = fieldRowDecoder
+"singleField (nullableField intFieldDecoder)" singleField (nullableField intFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE intFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+intFieldDecoder :: FieldDecoder Int
+intFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
+        let !decode = binaryIntDecoder oid
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`"
+              Just bs -> decode (PBA.fromByteString bs),
+      allowedPgTypes = (`elem` haskellIntOids) . fieldTypeOid
+    }
+
+instance FromPgField Int where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = intFieldDecoder
+
+  -- Interestingly, the notConst field decoder is a tiny little bit
+  -- faster than the constFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo ->
+    if finfo.fieldTypeOid == int4Oid
+      then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
+      else
+        if finfo.fieldTypeOid == int8Oid
+          then fmap fromIntegral <$> Parser.takeInt64BEWithFieldLength
+          else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
+
+{-# RULES
+"singleField int16FieldDecoder" singleField int16FieldDecoder = fieldRowDecoder
+"singleField (nullableField int16FieldDecoder)" singleField (nullableField int16FieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE int16FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+int16FieldDecoder :: FieldDecoder Int16
+int16FieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \_ ->
+        let !decode = binaryIntDecoder int2Oid
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Int16 type. Use a `Maybe Int16`"
+              Just bs -> decode (PBA.fromByteString bs),
+      allowedPgTypes = (== int2Oid) . fieldTypeOid
+    }
+
+instance FromPgField Int16 where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = int16FieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const Parser.takeInt16BEWithFieldLength
+
+{-# RULES
+"singleField int32FieldDecoder" singleField int32FieldDecoder = fieldRowDecoder
+"singleField (nullableField int32FieldDecoder)" singleField (nullableField int32FieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE int32FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+int32FieldDecoder :: FieldDecoder Int32
+int32FieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
+        let !decode = binaryIntDecoder oid
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Int32 type. Use a `Maybe Int32`"
+              Just bs -> decode (PBA.fromByteString bs),
+      allowedPgTypes = (`elem` [int2Oid, int4Oid]) . fieldTypeOid
+    }
+
+instance FromPgField Int32 where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = int32FieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
+    fieldLen <- Parser.takeInt32BE
+    case fieldLen of
+      4 -> Just <$> Parser.takeInt32BE
+      (-1) -> pure Nothing
+      2 -> Just . fromIntegral <$> Parser.takeInt16BE
+      _ -> fail "Trying to decode PG int4 but it's not 2 or 4 bytes long"
+
+{-# RULES
+"singleField int64FieldDecoder" singleField int64FieldDecoder = fieldRowDecoder
+"singleField (nullableField int64FieldDecoder)" singleField (nullableField int64FieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE int64FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+int64FieldDecoder :: FieldDecoder Int64
+int64FieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
+        let !decode = binaryIntDecoder oid
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Int64 type. Use a `Maybe Int64`"
+              Just bs -> decode (PBA.fromByteString bs),
+      allowedPgTypes = (`elem` [int2Oid, int4Oid, int8Oid]) . fieldTypeOid
+    }
+
+-- | Parses smaller integer types too.
+{-# INLINE int64ConstFieldDecoder #-}
+int64ConstFieldDecoder :: FieldInfo -> Parser.Parser (Maybe Int64)
+int64ConstFieldDecoder finfo = do
+  if finfo.fieldTypeOid == int4Oid
+    then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
+    else
+      if finfo.fieldTypeOid == int8Oid
+        then Parser.takeInt64BEWithFieldLength
+        else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
+
+instance FromPgField Int64 where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = int64FieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = int64ConstFieldDecoder
+
+{-# RULES
+"singleField integerFieldDecoder" singleField integerFieldDecoder = fieldRowDecoder
+"singleField (nullableField integerFieldDecoder)" singleField (nullableField integerFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE integerFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+integerFieldDecoder :: FieldDecoder Integer
+integerFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \FieldInfo {fieldTypeOid} ->
+        let !decodeInt = binaryIntDecoder @Int64 fieldTypeOid
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Integer type. Use a `Maybe Integer`"
+              Just bs ->
+                let !pbaBs = PBA.fromByteString bs
+                 in if fieldTypeOid /= numericOid
+                      then fromIntegral <$> decodeInt pbaBs
+                      else case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
+                        Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
+                          Right i -> Right i
+                          Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
+                        Parser.ParseFail err -> Left err,
+      allowedPgTypes = (`elem` [int8Oid, numericOid, int4Oid, int2Oid]) . fieldTypeOid
+    }
+
+instance FromPgField Integer where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = integerFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> do
+    let !decodeInt = binaryIntDecoder @Int64 finfo.fieldTypeOid
+    len <- fromIntegral <$> Parser.takeInt32BE
+    case len of
+      (-1) -> pure Nothing
+      _ -> do
+        pbaBs <- Parser.take len
+        if finfo.fieldTypeOid == numericOid
+          then case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
+            Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
+              Right i -> pure $ Just i
+              Left _ -> fail "Internal error in Hpgsql. Scientific to Integer conversion failed"
+            Parser.ParseFail err -> fail err
+          else case decodeInt pbaBs of
+            -- This case is for ints sized less than or equal to 64 bits
+            Right v -> pure $ Just (fromIntegral v)
+            Left err -> fail err
+
+{-# RULES
+"singleField oidFieldDecoder" singleField oidFieldDecoder = fieldRowDecoder
+"singleField (nullableField oidFieldDecoder)" singleField (nullableField oidFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE oidFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+oidFieldDecoder :: FieldDecoder Oid
+oidFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \_ -> \case
+        Nothing -> Left "Cannot decode SQL null as the Haskell Oid type. Use a `Maybe Oid`"
+        -- Oids are just int4
+        Just bs -> Oid <$> binaryIntDecoder int4Oid (PBA.fromByteString bs),
+      allowedPgTypes = (== oidOid) . fieldTypeOid
+    }
+
+instance FromPgField Oid where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = oidFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
+    fieldLen <- Parser.takeInt32BE
+    fmap Oid <$> case fieldLen of
+      4 -> Just <$> Parser.takeInt32BE
+      (-1) -> pure Nothing
+      _ -> fail "Trying to decode PG Oid but it's not 4 bytes long"
+
+{-# RULES
+"singleField floatFieldDecoder" singleField floatFieldDecoder = fieldRowDecoder
+"singleField (nullableField floatFieldDecoder)" singleField (nullableField floatFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE floatFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+floatFieldDecoder :: FieldDecoder Float
+floatFieldDecoder = parsePgType "Float" [float4Oid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Float type. Use a `Maybe Float`"
+  Just bs -> Right $ binaryFloat4Decoder (PBA.fromByteString bs)
+
+instance FromPgField Float where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = floatFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const Parser.takeFloatBEWithFieldLength
+
+{-# RULES
+"singleField doubleFieldDecoder" singleField doubleFieldDecoder = fieldRowDecoder
+"singleField (nullableField doubleFieldDecoder)" singleField (nullableField doubleFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE doubleFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+doubleFieldDecoder :: FieldDecoder Double
+doubleFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \FieldInfo {fieldTypeOid = oid} ->
+        let decoder
+              | oid == float8Oid = binaryFloat8Decoder
+              | otherwise = float2Double . binaryFloat4Decoder
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`"
+              Just bs -> Right $ decoder (PBA.fromByteString bs),
+      allowedPgTypes = (`elem` [float8Oid, float4Oid]) . fieldTypeOid
+    }
+
+{-# INLINE doubleRowDecoder #-}
+doubleRowDecoder :: Parser.Parser (Maybe Double)
+doubleRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> Just <$> Parser.takeDoubleBE
+    4 -> Just . float2Double <$> Parser.takeFloatBE
+    _ -> pure Nothing
+
+instance FromPgField Double where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = doubleFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const doubleRowDecoder
+
+-- | Allows you to specify a type (and other checks, possibly) for a `FieldDecoder`.
+-- This can be useful to ensure you're not accidentally decoding a different type.
+--
+-- > data MyEnum = Val1 | Val2 | Val3
+-- > myEnumFieldDecoderWithTypeInfoCheck :: FieldDecoder MyEnum
+-- > myEnumFieldDecoderWithTypeInfoCheck =
+-- >   let convert = \case
+-- >         "val1" -> Val1
+-- >         "val2" -> Val2
+-- >         "val3" -> Val3
+-- >         _ -> error "Invalid value for MyEnum"
+-- >    in typeFieldDecoder
+-- >         (typeMustBeNamed "my_enum")
+-- >         $ convert <$> rawBytesFieldDecoder
+--
+-- This will work unless you use non-default flags in your connection options.
+typeFieldDecoder :: (FieldInfo -> Bool) -> FieldDecoder a -> FieldDecoder a
+typeFieldDecoder fieldCheck dec = dec {allowedPgTypes = fieldCheck}
+
+typeMustBeNamed :: Text -> (FieldInfo -> Bool)
+typeMustBeNamed typName = \fieldInfo ->
+  (typeName <$> lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache) == Just typName
+
+{-# INLINE scientificDecoder #-}
+scientificDecoder :: Bool -> Parser.Parser Scientific
+scientificDecoder mustBeInteger = do
+  ndigits <- Parser.takeInt16BE
+  weight <- Parser.takeInt16BE
+  sign <- Parser.takeInt16BE -- 0x0000 is positive, 0x4000 is negative, 0xC000 is NAN, 0xD000 is Positive Infinity, 0xF000 is Negative Infinity
+  unless (sign == 0x0000 || sign == 0x4000) $ fail "NaN, positive or negative infinities cannot be decoded into Integer or Scientific"
+  !dscale <- Parser.takeInt16BE
+  when (mustBeInteger && dscale /= 0) $ fail "Decoding into `Integer` requires explicit casting with `numeric(X,0)` to force integral values"
+  valueAbs <- parseAndMult ndigits (fromIntegral weight * 4) 0
+  pure $ (if sign == 0x0000 then 1 else (-1)) * valueAbs
+  where
+    parseAndMult :: Int16 -> Int -> Scientific -> Parser.Parser Scientific
+    parseAndMult 0 _ !val = pure val
+    parseAndMult !ndigitsLeft !currexpon !val = do
+      !digit <- fromIntegral <$> Parser.takeInt16BE
+      parseAndMult (ndigitsLeft - 1) (currexpon - 4) (val + scientific digit currexpon)
+
+{-# INLINE numericRowParser #-}
+numericRowParser :: Parser.Parser (Maybe Scientific)
+numericRowParser = do
+  fieldLen <- Parser.takeInt32BE
+  case fieldLen of
+    (-1) -> pure Nothing
+    _ -> Just <$> scientificDecoder False
+
+{-# RULES
+"singleField scientificFieldDecoder" singleField scientificFieldDecoder = fieldRowDecoder
+"singleField (nullableField scientificFieldDecoder)" singleField (nullableField scientificFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE scientificFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+scientificFieldDecoder :: FieldDecoder Scientific
+scientificFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \FieldInfo {fieldTypeOid} ->
+        \case
+          Nothing -> Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`"
+          Just bs ->
+            let !pbaBs = PBA.fromByteString bs
+             in if fieldTypeOid /= numericOid
+                  then let intdec = binaryIntDecoder @Int64 fieldTypeOid in flip scientific 0 . fromIntegral <$> intdec pbaBs
+                  else
+                    -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
+                    -- float4Oid and float8Oid here?
+                    case Parser.parseOnly (scientificDecoder False <* Parser.endOfInput) pbaBs of
+                      Parser.ParseOk sci -> Right sci
+                      Parser.ParseFail err -> Left err,
+      allowedPgTypes = (`elem` [numericOid, int2Oid, int4Oid, int8Oid]) . fieldTypeOid
+    }
+
+instance FromPgField Scientific where
+  -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = scientificFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder singleColInfo =
+    if singleColInfo.fieldTypeOid == numericOid
+      then numericRowParser
+      else fmap (flip scientific 0 . fromIntegral) <$> int64ConstFieldDecoder singleColInfo
+
+{-# RULES
+"singleField ratioIntegerFieldDecoder" singleField ratioIntegerFieldDecoder = fieldRowDecoder
+"singleField (nullableField ratioIntegerFieldDecoder)" singleField (nullableField ratioIntegerFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE ratioIntegerFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+ratioIntegerFieldDecoder :: FieldDecoder Rational
+ratioIntegerFieldDecoder = toRational <$> fieldDecoder @Scientific
+
+instance FromPgField (Ratio Integer) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = ratioIntegerFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> let sciDec = specializedFieldDecoder finfo in fmap (toRational :: Scientific -> Rational) <$> sciDec
+
+binaryTrue :: PinnedByteArray
+binaryTrue = PBA.fromByteString $ PBA.encodePgBoolean True
+
+{-# RULES
+"singleField boolFieldDecoder" singleField boolFieldDecoder = fieldRowDecoder
+"singleField (nullableField boolFieldDecoder)" singleField (nullableField boolFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE boolFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+boolFieldDecoder :: FieldDecoder Bool
+boolFieldDecoder = parsePgType "Bool" [boolOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Bool type. Use a `Maybe Bool`"
+  Just bs -> Right $ PBA.fromByteString bs == binaryTrue
+
+{-# INLINE boolRowDecoder #-}
+boolRowDecoder :: Parser.Parser (Maybe Bool)
+boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
+
+instance FromPgField Bool where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = boolFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const boolRowDecoder
+
+{-# RULES
+"singleField charFieldDecoder" singleField charFieldDecoder = fieldRowDecoder
+"singleField (nullableField charFieldDecoder)" singleField (nullableField charFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE charFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+charFieldDecoder :: FieldDecoder Char
+charFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \finfo@FieldInfo {fieldTypeOid} ->
+        -- The Postgres "char" type is just a byte, so we should consider
+        -- not decoding it into `Char`, but rather just into Word8.
+        -- This would be a breaking change, however.
+        if fieldTypeOid == charOid
+          then \case
+            Nothing -> Left "Cannot decode SQL null as the Haskell Char type. Use a `Maybe Char`"
+            Just bs -> Right $ chr (fromIntegral (BS.head bs))
+          else
+            let !decodeText = (fieldDecoder @Text).fieldValueDecoder finfo
+             in \mbs -> case decodeText mbs of
+                  Left err -> Left err
+                  Right t -> case Text.length t of
+                    1 -> Right (Text.head t)
+                    0 -> Left "Cannot parse text with zero characters into a Haskell Char type."
+                    _ -> Left "Cannot parse text with more than one character into a Haskell Char type.",
+      allowedPgTypes = (`elem` [charOid, textOid, varcharOid, nameOid, bpcharOid]) . fieldTypeOid
+    }
+
+instance FromPgField Char where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = charFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo =
+    if finfo.fieldTypeOid == charOid
+      then fmap (chr . fromIntegral) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
+      else do
+        mt <- specializedFieldDecoder @Text finfo
+        case mt of
+          Nothing -> pure Nothing
+          Just t ->
+            case Text.length t of
+              1 -> pure $ Just (Text.head t)
+              0 -> fail "Cannot parse text with zero characters into a Haskell Char type."
+              _ -> fail "Cannot parse text with more than one character into a Haskell Char type."
+
+instance FromPgField ByteString where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = parsePgType "byteString" [byteaOid] $ \case
+    Nothing -> Left "Cannot decode SQL null as the Haskell byteString type. Use a `Maybe byteString`"
+    Just bs -> Right bs
+
+instance FromPgField LBS.ByteString where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = parsePgType "ByteString" [byteaOid] $ \case
+    Nothing -> Left "Cannot decode SQL null as the Haskell ByteString type. Use a `Maybe ByteString`"
+    Just bs -> Right $ LBS.fromStrict bs
+
+{-# RULES
+"singleField textFieldDecoder" singleField textFieldDecoder = fieldRowDecoder
+"singleField (nullableField textFieldDecoder)" singleField (nullableField textFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE textFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+textFieldDecoder :: FieldDecoder Text
+textFieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid, bpcharOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
+  Just bs -> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+
+{-# INLINE textDecoder #-}
+textDecoder :: Parser.Parser (Maybe Text)
+textDecoder = do
+  len <- Parser.takeInt32BE
+  if len >= 0
+    then Just <$> Parser.takeUtf8Text (fromIntegral len)
+    else pure Nothing
+
+instance FromPgField Text where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = textFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const textDecoder
+
+{-# RULES
+"singleField lazyTextFieldDecoder" singleField lazyTextFieldDecoder = fieldRowDecoder
+"singleField (nullableField lazyTextFieldDecoder)" singleField (nullableField lazyTextFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE lazyTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+lazyTextFieldDecoder :: FieldDecoder LT.Text
+lazyTextFieldDecoder = LT.fromStrict <$> textFieldDecoder
+
+{-# INLINE lazyTextDecoder #-}
+lazyTextDecoder :: Parser.Parser (Maybe LT.Text)
+lazyTextDecoder = fmap LT.fromStrict <$> textDecoder
+
+instance FromPgField LT.Text where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = lazyTextFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const lazyTextDecoder
+
+{-# RULES
+"singleField stringFieldDecoder" singleField stringFieldDecoder = fieldRowDecoder
+"singleField (nullableField stringFieldDecoder)" singleField (nullableField stringFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE stringFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+stringFieldDecoder :: FieldDecoder String
+stringFieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
+  Just bs -> Text.unpack <$> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+
+{-# INLINE stringDecoder #-}
+stringDecoder :: Parser.Parser (Maybe String)
+stringDecoder = fmap Text.unpack <$> textDecoder
+
+instance FromPgField String where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = stringFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const stringDecoder
+
+{-# RULES
+"singleField ciTextFieldDecoder" singleField ciTextFieldDecoder = fieldRowDecoder
+"singleField (nullableField ciTextFieldDecoder)" singleField (nullableField ciTextFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE ciTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+ciTextFieldDecoder :: FieldDecoder (CI Text)
+ciTextFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> fieldDecoder
+
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
+instance FromPgField (CI Text) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = ciTextFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder =
+    const $ fmap CI.mk <$> textDecoder
+
+{-# RULES
+"singleField ciLazyTextFieldDecoder" singleField ciLazyTextFieldDecoder = fieldRowDecoder
+"singleField (nullableField ciLazyTextFieldDecoder)" singleField (nullableField ciLazyTextFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE ciLazyTextFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+ciLazyTextFieldDecoder :: FieldDecoder (CI LT.Text)
+ciLazyTextFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> lazyTextFieldDecoder
+
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
+instance FromPgField (CI LT.Text) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = ciLazyTextFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder =
+    const $ fmap CI.mk <$> lazyTextDecoder
+
+{-# RULES
+"singleField ciStringFieldDecoder" singleField ciStringFieldDecoder = fieldRowDecoder
+"singleField (nullableField ciStringFieldDecoder)" singleField (nullableField ciStringFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE ciStringFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+ciStringFieldDecoder :: FieldDecoder (CI String)
+ciStringFieldDecoder = typeFieldDecoder (typeMustBeNamed "citext") $ CI.mk <$> stringFieldDecoder
+
+-- | This instance does not work if you have fillTypeInfoCache disabled (that would be a non-default
+-- connection option).
+instance FromPgField (CI String) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = ciStringFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder =
+    const $ fmap CI.mk <$> stringDecoder
+
+{-# RULES
+"singleField utcTimeFieldDecoder" singleField utcTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField utcTimeFieldDecoder)" singleField (nullableField utcTimeFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE utcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+utcTimeFieldDecoder :: FieldDecoder UTCTime
+utcTimeFieldDecoder = parsePgType "UTCTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+    Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+
+{-# INLINE utcTimeRowDecoder #-}
+utcTimeRowDecoder :: Parser.Parser (Maybe UTCTime)
+utcTimeRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> do
+      totalusecs <- Parser.takeInt64BE
+      let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+          parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+      pure $ Just $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    _ -> pure Nothing
+
+instance FromPgField UTCTime where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = utcTimeFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const utcTimeRowDecoder
+
+{-# RULES
+"singleField unboundedUtcTimeFieldDecoder" singleField unboundedUtcTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField unboundedUtcTimeFieldDecoder)" singleField (nullableField unboundedUtcTimeFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE unboundedUtcTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+unboundedUtcTimeFieldDecoder :: FieldDecoder (Unbounded UTCTime)
+unboundedUtcTimeFieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded UTCTime type. Use a `Maybe (Unbounded UTCTime)`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    Right $
+      if totalusecs == minBound
+        then NegInfinity
+        else
+          if totalusecs == maxBound
+            then PosInfinity
+            else
+              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+               in Finite $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+
+{-# INLINE unboundedUtcTimeRowDecoder #-}
+unboundedUtcTimeRowDecoder :: Parser.Parser (Maybe (Unbounded UTCTime))
+unboundedUtcTimeRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> do
+      totalusecs <- Parser.takeInt64BE
+      pure $
+        Just $
+          if totalusecs == minBound
+            then NegInfinity
+            else
+              if totalusecs == maxBound
+                then PosInfinity
+                else
+                  let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                      parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+                   in Finite $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    _ -> pure Nothing
+
+instance FromPgField (Unbounded UTCTime) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = unboundedUtcTimeFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const unboundedUtcTimeRowDecoder
+
+{-# RULES
+"singleField zonedTimeFieldDecoder" singleField zonedTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField zonedTimeFieldDecoder)" singleField (nullableField zonedTimeFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE zonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+zonedTimeFieldDecoder :: FieldDecoder ZonedTime
+zonedTimeFieldDecoder = parsePgType "ZonedTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+    Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+
+{-# INLINE zonedTimeRowDecoder #-}
+zonedTimeRowDecoder :: Parser.Parser (Maybe ZonedTime)
+zonedTimeRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> do
+      totalusecs <- Parser.takeInt64BE
+      let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+          parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+      pure $ Just $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    _ -> pure Nothing
+
+instance FromPgField ZonedTime where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = zonedTimeFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const zonedTimeRowDecoder
+
+{-# RULES
+"singleField unboundedZonedTimeFieldDecoder" singleField unboundedZonedTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField unboundedZonedTimeFieldDecoder)" singleField (nullableField unboundedZonedTimeFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE unboundedZonedTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+unboundedZonedTimeFieldDecoder :: FieldDecoder (Unbounded ZonedTime)
+unboundedZonedTimeFieldDecoder = parsePgType "Unbounded ZonedTime" [timestamptzOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded ZonedTime type. Use a `Maybe (Unbounded ZonedTime)`"
+  Just bs -> do
+    -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    Right $
+      if totalusecs == minBound
+        then NegInfinity
+        else
+          if totalusecs == maxBound
+            then PosInfinity
+            else
+              let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                  parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+               in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+
+{-# INLINE unboundedZonedTimeRowDecoder #-}
+unboundedZonedTimeRowDecoder :: Parser.Parser (Maybe (Unbounded ZonedTime))
+unboundedZonedTimeRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> do
+      totalusecs <- Parser.takeInt64BE
+      pure $
+        Just $
+          if totalusecs == minBound
+            then NegInfinity
+            else
+              if totalusecs == maxBound
+                then PosInfinity
+                else
+                  let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+                      parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+                   in Finite $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    _ -> pure Nothing
+
+instance FromPgField (Unbounded ZonedTime) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = unboundedZonedTimeFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const unboundedZonedTimeRowDecoder
+
+{-# RULES
+"singleField localTimeFieldDecoder" singleField localTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField localTimeFieldDecoder)" singleField (nullableField localTimeFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE localTimeFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+localTimeFieldDecoder :: FieldDecoder LocalTime
+localTimeFieldDecoder = parsePgType "LocalTime" [timestampOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell LocalTime type. Use a `Maybe LocalTime`"
+  Just bs -> do
+    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+        parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+    Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+
+{-# INLINE localTimeRowDecoder #-}
+localTimeRowDecoder :: Parser.Parser (Maybe LocalTime)
+localTimeRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> do
+      totalusecs <- Parser.takeInt64BE
+      let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
+          parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
+      pure $ Just $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
+    _ -> pure Nothing
+
+instance FromPgField LocalTime where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = localTimeFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const localTimeRowDecoder
+
+{-# RULES
+"singleField timeOfDayFieldDecoder" singleField timeOfDayFieldDecoder = fieldRowDecoder
+"singleField (nullableField timeOfDayFieldDecoder)" singleField (nullableField timeOfDayFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE timeOfDayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+timeOfDayFieldDecoder :: FieldDecoder TimeOfDay
+timeOfDayFieldDecoder = parsePgType "TimeOfDay" [timeOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell TimeOfDay type. Use a `Maybe TimeOfDay`"
+  Just bs -> do
+    usecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
+
+{-# INLINE timeOfDayRowDecoder #-}
+timeOfDayRowDecoder :: Parser.Parser (Maybe TimeOfDay)
+timeOfDayRowDecoder = do
+  len <- Parser.takeInt32BE
+  case len of
+    8 -> do
+      usecs <- Parser.takeInt64BE
+      pure $ Just $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
+    _ -> pure Nothing
+
+instance FromPgField TimeOfDay where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = timeOfDayFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const timeOfDayRowDecoder
+
+{-# RULES
+"singleField dayFieldDecoder" singleField dayFieldDecoder = fieldRowDecoder
+"singleField (nullableField dayFieldDecoder)" singleField (nullableField dayFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE dayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+dayFieldDecoder :: FieldDecoder Day
+dayFieldDecoder = parsePgType "Day" [dateOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Day type. Use a `Maybe Day`"
+  Just bs -> do
+    -- There is a very specific conversion function for these, which I poorly translated to Haskell
+    -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
+    -- But I found a simpler way to do this. Let's see if it works in our property based tests
+    jd <- PBA.decodeInt32BE 0 (PBA.fromByteString bs)
+    Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
+
+{-# INLINE dayRowDecoder #-}
+dayRowDecoder :: Parser.Parser (Maybe Day)
+dayRowDecoder =
+  let int32ToDay (i32 :: Int32) = let jd = fromIntegral i32 :: Integer in addJulianDurationClip (CalendarDiffDays 0 (jd - 13)) $ fromJulian 2000 01 01
+   in fmap int32ToDay <$> Parser.takeInt32BEWithFieldLength
+
+instance FromPgField Day where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = dayFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const dayRowDecoder
+
+{-# RULES
+"singleField unboundedDayFieldDecoder" singleField unboundedDayFieldDecoder = fieldRowDecoder
+"singleField (nullableField unboundedDayFieldDecoder)" singleField (nullableField unboundedDayFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE unboundedDayFieldDecoder #-}
+unboundedDayFieldDecoder :: FieldDecoder (Unbounded Day)
+unboundedDayFieldDecoder = parsePgType "Unbounded Day" [dateOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded Day type. Use a `Maybe (Unbounded Day)`"
+  Just bs -> do
+    -- There is a very specific conversion function for these, which I poorly translated to Haskell
+    -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
+    -- But I found a simpler way to do this. Let's see if it works in our property based tests
+    jd <- PBA.decodeInt32BE 0 (PBA.fromByteString bs)
+    Right $
+      if jd == minBound
+        then NegInfinity
+        else
+          if jd == maxBound
+            then PosInfinity
+            else
+              Finite $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
+
+instance FromPgField (Unbounded Day) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = unboundedDayFieldDecoder
+
+{-# RULES
+"singleField calendarDiffTimeFieldDecoder" singleField calendarDiffTimeFieldDecoder = fieldRowDecoder
+"singleField (nullableField calendarDiffTimeFieldDecoder)" singleField (nullableField calendarDiffTimeFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE calendarDiffTimeFieldDecoder #-}
+calendarDiffTimeFieldDecoder :: FieldDecoder CalendarDiffTime
+calendarDiffTimeFieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime  type. Use a `Maybe CalendarDiffTime `"
+  Just bs -> do
+    let !pbaBs = PBA.fromByteString bs
+    nMicrosecs <- PBA.decodeInt64BE 0 pbaBs
+    nDays <- PBA.decodeInt32BE 8 pbaBs
+    nMonths <- PBA.decodeInt32BE 12 pbaBs
+    Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
+
+instance FromPgField CalendarDiffTime where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = calendarDiffTimeFieldDecoder
+
+{-# RULES
+"singleField uuidFieldDecoder" singleField uuidFieldDecoder = fieldRowDecoder
+"singleField (nullableField uuidFieldDecoder)" singleField (nullableField uuidFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE uuidFieldDecoder #-}
+uuidFieldDecoder :: FieldDecoder UUID
+uuidFieldDecoder = parsePgType "UUID" [uuidOid] $ \case
+  Nothing -> Left "Cannot decode SQL null as the Haskell UUID type. Use a `Maybe UUID`"
+  Just bs -> case UUID.fromByteString (LBS.fromStrict bs) of
+    Just uuid -> Right uuid
+    Nothing -> Left "Bug in Hpgsql: UUID field could not be decoded"
+
+instance FromPgField UUID where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = uuidFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
+    len <- Parser.takeInt32BE
+    case len of
+      (-1) -> pure Nothing
+      _ ->
+        fmap Just $
+          UUID.fromWords64
+            <$> Parser.takeWord64BE
+            <*> Parser.takeWord64BE
+
+{-# RULES
+"singleField aesonFieldDecoder" singleField aesonFieldDecoder = fieldRowDecoder
+"singleField (nullableField aesonFieldDecoder)" singleField (nullableField aesonFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE aesonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+aesonFieldDecoder :: FieldDecoder Aeson.Value
+aesonFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder =
+        \FieldInfo {fieldTypeOid} ->
+          let
+            -- jsonb has a byte prepended to the contents and json does not
+            !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+           in
+            \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
+              Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                Just d -> Right d
+                Nothing -> Left "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid.",
+      allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
+    }
+
+instance FromPgField Aeson.Value where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = aesonFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo = do
+    len <- fromIntegral <$> Parser.takeInt32BE
+    if len == (-1)
+      then pure Nothing
+      else do
+        bs <-
+          PBA.toByteString
+            <$> if finfo.fieldTypeOid == jsonbOid
+              then Parser.skip 1 >> Parser.take (len - 1)
+              else Parser.take len
+        case Aeson.decodeStrict bs of
+          Just d -> pure (Just d)
+          Nothing -> fail "Bug in Hpgsql. Postgres produced a json or jsonb value that Aeson does not consider valid."
+
+{-# INLINE [1] nullableField #-}
+
+-- | A FieldDecoder that accepts and decodes SQL NULLs into `Nothing` values
+-- for a given decoder.
+nullableField :: FieldDecoder a -> FieldDecoder (Maybe a)
+nullableField FieldDecoder {..} =
+  FieldDecoder
+    { fieldValueDecoder = \oid ->
+        let origFieldValueParser = fieldValueDecoder oid
+         in \case
+              Nothing -> Right Nothing
+              Just bs -> Just <$> origFieldValueParser (Just bs),
+      allowedPgTypes
+    }
+
+instance (FromPgField a) => FromPgField (Maybe a) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = nullableField fieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo = do
+    mv <- specializedFieldDecoder @a finfo
+    case mv of
+      Nothing -> pure Nothing
+      -- Some forcing to avoid thunks keeping references to our
+      -- PinnedByteArray buffers
+      jv@(Just !_) -> pure $ Just jv
+
+allowOnlyArrayTypes :: FieldInfo -> Bool
+allowOnlyArrayTypes fieldInfo =
+  -- TODO: We could check the elemTypeOid too, but maybe later
+  case lookupTypeByOid fieldInfo.fieldTypeOid fieldInfo.encodingContext.typeInfoCache of
+    Just (TypeInfo {typeDetails = ArrayType _}) -> True
+    Nothing -> True -- Assume user knows what they're doing
+    Just _ -> False -- Definitely not an array
+
+{-# RULES
+"singleField arrayFieldDecoder" singleField arrayFieldDecoder = fieldRowDecoder
+"singleField (nullableField arrayFieldDecoder)" singleField (nullableField arrayFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE arrayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+arrayFieldDecoder :: (FromPgField a) => FieldDecoder (Vector a)
+arrayFieldDecoder = fst $ arrayFieldRowDec Vector.replicateM
+
+instance forall a. (FromPgField a) => FromPgField (Vector a) where
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = arrayFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> do
+    len <- Parser.takeInt32BE
+    case len of
+      (-1) -> pure Nothing
+      _ -> Just <$> snd (arrayFieldRowDec Vector.replicateM) finfo
+
+instance {-# INCOHERENT #-} forall a. (FromPgField a) => FromPgField (Vector (Vector a)) where
+  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
+  fieldDecoder =
+    FieldDecoder
+      { fieldValueDecoder = \colInfo ->
+          let !arrfdec = arrayParser colInfo.encodingContext <* Parser.endOfInput
+           in \case
+                Nothing -> Left "Cannot decode SQL null as the Haskell (Vector (Vector a)) type. Use a `Maybe (Vector (Vector a))`"
+                Just bs -> case Parser.parseOnly arrfdec (PBA.fromByteString bs) of
+                  Parser.ParseOk v -> Right v
+                  Parser.ParseFail err -> Left err,
+        allowedPgTypes = allowOnlyArrayTypes
+      }
+    where
+      fdec = fieldDecoder @a
+      handleNulls p = \finfo -> do
+        mv <- p
+        case mv of
+          Nothing -> case fdec.fieldValueDecoder finfo Nothing of
+            Left err -> fail $ "Array element is NULL: " ++ err
+            Right v -> pure v
+          Just v -> pure v
+      fieldDec = \finfo -> handleNulls (specializedFieldDecoder finfo) finfo
+      arrayParser :: EncodingContext -> Parser.Parser (Vector (Vector a))
+      arrayParser encodingContext = do
+        !ndim <- Parser.takeInt32BE
+        !_hasNull <- Parser.takeInt32BE
+        !elementTypeOid :: Oid <- Oid . fromIntegral <$> Parser.takeInt32BE
+        let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
+        when (ndim /= 2) $ fail $ "TODO: No support for " ++ show ndim ++ "-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
+        unless (fdec.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+        numRows <- do
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
+          pure dim_i
+        lengthEachRow <- do
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
+          pure dim_i
+
+        Vector.replicateM numRows $ do
+          Vector.replicateM lengthEachRow (fieldDec elementColInfo)
+
+{-# INLINE genericFromPgRow #-}
+
+-- | Derives `FromPgRow` generically.
+genericFromPgRow :: forall a. (Generic a, ProductTypeDecoder (Rep a)) => RowDecoder a
+genericFromPgRow = to <$> genRowDecoder @(Rep a)
+
+class ProductTypeDecoder f where
+  genRowDecoder :: RowDecoder (f a)
+
+instance (ProductTypeDecoder a, ProductTypeDecoder b) => ProductTypeDecoder (a :*: b) where
+  {-# INLINE genRowDecoder #-}
+  genRowDecoder = (:*:) <$> genRowDecoder <*> genRowDecoder
+
+instance (ProductTypeDecoder f) => ProductTypeDecoder (M1 a c f) where
+  {-# INLINE genRowDecoder #-}
+  genRowDecoder = M1 <$> genRowDecoder
+
+instance (FromPgField a) => ProductTypeDecoder (K1 r a) where
+  {-# INLINE genRowDecoder #-}
+  -- coercing instead of fmap reduces memory usage, apparently
+  -- by reducing (unnecessary) closures in the final row decoder,
+  -- as per looking at GHC Core
+  genRowDecoder = coerce $ fieldRowDecoder @a
+
+genericToPgRow :: forall a. (Generic a, ProductTypeEncoder (Rep a)) => RowEncoder a
+genericToPgRow = contramap from genRowEncoder
+
+class ProductTypeEncoder f where
+  genRowEncoder :: RowEncoder (f a)
+
+instance (ProductTypeEncoder a, ProductTypeEncoder b) => ProductTypeEncoder (a :*: b) where
+  genRowEncoder = divide (\(a :*: b) -> (a, b)) genRowEncoder genRowEncoder
+
+instance (ProductTypeEncoder f) => ProductTypeEncoder (M1 i c f) where
+  genRowEncoder = contramap unM1 genRowEncoder
+
+instance (ToPgField a) => ProductTypeEncoder (K1 r a) where
+  genRowEncoder = contramap unK1 singleFieldRowEncoder
+
+-- | For the very common case of a Haskell enum matching a custom postgres enum type
+-- that has its values all as lower case strings, this newtype can help you derive
+-- instances as such:
+--
+-- > data Mood = Sad | Ok | Happy
+-- >   deriving stock (Generic)
+-- >   deriving (FromPgField, ToPgField) via (LowerCasedPgEnum Mood)
+--
+-- And this would match the Postgres equivalent:
+--
+-- > CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+--
+-- If you run into PostgreSQL type inference problems with this, you can
+-- write instances manually with 'genericEnumFieldDecoder', 'genericEnumFieldEncoder',
+-- 'typeFieldEncoder', and 'typeFieldDecoder'.
+newtype LowerCasedPgEnum a = LowerCasedPgEnum a
+
+instance (Generic a, EnumDecoder (Rep a)) => FromPgField (LowerCasedPgEnum a) where
+  fieldDecoder = LowerCasedPgEnum <$> genericEnumFieldDecoder LT.toLower
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = const $ do
+    enumAsText <- lazyTextDecoder
+    case enumAsText of
+      Nothing -> pure Nothing
+      Just e -> case textToEnum e of
+        Left err -> fail err
+        Right v -> pure $ Just (LowerCasedPgEnum v)
+    where
+      textToEnum = enumFieldMapper @a LT.toLower
+
+instance (Generic a, EnumEncoder (Rep a)) => ToPgField (LowerCasedPgEnum a) where
+  fieldEncoder = untypedFieldEncoder $ \_encCtx -> \(LowerCasedPgEnum v) -> NotNull $ genericEnumFieldEncoder Text.toLower v
+
+-- | One of the functions behind 'LowerCasedPgEnum', but you can decide
+-- how to map your type's constructor names arbitrarily, which can be
+-- useful if you're not using lowercase values in your postgres enums.
+genericEnumFieldDecoder ::
+  forall a.
+  (Generic a, EnumDecoder (Rep a)) =>
+  -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
+  (LT.Text -> LT.Text) ->
+  FieldDecoder a
+genericEnumFieldDecoder nameTransform = parsePgTypeFull (const True) $ \case
+  Nothing -> Left "Cannot decode SQL null with the Enum decoder. Use a `Maybe` if you want SQL nulls"
+  Just bs -> transform (LT.decodeUtf8 $ BS.fromStrict bs)
+  where
+    transform = enumFieldMapper nameTransform
+
+-- | Returns a function that maps an enum value coming from Postgres
+-- into the enum while respecting the Haskell-constructor mapping function.
+enumFieldMapper ::
+  forall a.
+  (Generic a, EnumDecoder (Rep a)) =>
+  -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
+  (LT.Text -> LT.Text) ->
+  (LT.Text -> Either String a)
+enumFieldMapper nameTransform = \enumVal -> case Map.lookup enumVal allValuesMap of
+  Nothing -> Left $ "Invalid enum value. Not one of " ++ show (Map.keys allValuesMap)
+  Just v -> Right v
+  where
+    -- TODO: Vector of pointers to ByteStrings for a bit more memory locality? Does it make a perf difference?
+    allValuesMap = Map.mapKeys nameTransform $ fmap to genEnumDecoder
+
+class EnumDecoder f where
+  -- | Returns the textual representation and constructed object for every possible
+  -- value of the enum.
+  genEnumDecoder :: Map LT.Text (f a)
+
+instance (EnumDecoder a, EnumDecoder b) => EnumDecoder (a :+: b) where
+  genEnumDecoder = (L1 <$> genEnumDecoder) `Map.union` (R1 <$> genEnumDecoder)
+
+instance (EnumDecoder f) => EnumDecoder (M1 D c f) where
+  genEnumDecoder = M1 <$> genEnumDecoder
+
+-- U1 is "Unit"-type, that is: no value in the constructor, AKA "pure enum".
+instance (KnownSymbol ctorName) => EnumDecoder (M1 C ('MetaCons ctorName ctorFixity 'False) U1) where
+  genEnumDecoder = Map.singleton (LT.pack $ symbolVal (Proxy @ctorName)) (M1 U1)
+
+-- | One of the functions behind 'LowerCasedPgEnum', but you can decide
+-- how to map your type's constructor names arbitrarily, which can be
+-- useful if you're not using lowercase values in your postgres enums.
+genericEnumFieldEncoder ::
+  forall a.
+  (Generic a, EnumEncoder (Rep a)) =>
+  -- | A function that takes in the Haskell constructor name and returns the textual representation of the enum in postgres
+  (Text -> Text) ->
+  a ->
+  ByteString
+genericEnumFieldEncoder nameTransform = encodeUtf8 . nameTransform . genEnumEncoder . from
+
+class EnumEncoder f where
+  -- | Returns the textual representation of an enum value's constructor.
+  genEnumEncoder :: f a -> Text
+
+instance (EnumEncoder a, EnumEncoder b) => EnumEncoder (a :+: b) where
+  genEnumEncoder (L1 x) = genEnumEncoder x
+  genEnumEncoder (R1 x) = genEnumEncoder x
+
+instance (EnumEncoder f) => EnumEncoder (M1 D c f) where
+  genEnumEncoder (M1 x) = genEnumEncoder x
+
+-- U1 is "Unit"-type, that is: no value in the constructor, AKA "pure enum".
+instance (KnownSymbol ctorName) => EnumEncoder (M1 C ('MetaCons ctorName ctorFixity 'False) U1) where
+  genEnumEncoder _ = Text.pack $ symbolVal (Proxy @ctorName)
+
+-- | Returns a `FieldEncoder` that is sent without a type OID in queries.
+-- This means postgres will try to infer the type of these arguments.
+-- Check `typedFieldEncoder` if you're interested in encoding your custom types,
+-- you probably don't need this.
+untypedFieldEncoder :: (EncodingContext -> a -> BinaryField) -> FieldEncoder a
+untypedFieldEncoder enc = FieldEncoder {toTypeOid = \_ -> Nothing, toPgField = enc}
+
+-- | A decoder that accepts any PG type and returns the object's
+-- postgres' binary representation as a ByteString.
+rawBytesFieldDecoder :: FieldDecoder ByteString
+rawBytesFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder = \_oid -> \case
+        Nothing -> Left "Cannot decode SQL null as the `rawBytesFieldDecoder`."
+        Just bs -> Right bs,
+      allowedPgTypes = const True
+    }
+
+-- | Returns a field-encoding function for a vector-like Foldable (e.g. Lists and Vector itself).
+toPgVectorField :: forall f a. (Foldable f, ToPgField a) => EncodingContext -> f a -> BinaryField
+toPgVectorField encCtx =
+  let fe = fieldEncoder @a
+      encodeElement el = Builder.binaryField $ fe.toPgField encCtx el
+      Oid elemOid = fromMaybe (Oid 0) (fe.toTypeOid encCtx)
+   in \vec ->
+        let ndim = Builder.int32BE 1
+            -- Postgres seems to build the "has_nulls" flag itself in the ReadArrayBinary function at https://github.com/postgres/postgres/blob/aa7f9493a02f5981c09b924323f0e7a58a32f2ed/src/backend/utils/adt/arrayfuncs.c#L1429, so we can just set it to 0
+            hasNull = Builder.byteString $ PBA.encodeInt32BE 0
+            -- hasNull = Builder.byteString $ PBA.encodeInt32BE (if Vector.any (\e -> toPgField e == Nothing) vec then 1 else 0)
+            elemOidBs = Builder.byteString $ PBA.encodeInt32BE elemOid
+            lb1 = Builder.byteString $ PBA.encodeInt32BE 1
+            (Sum len, encodedElements) = foldMap (\el -> (Sum 1, encodeElement el)) vec
+            dim1 = Builder.byteString $ PBA.encodeInt32BE len
+            fullBs = ndim <> hasNull <> elemOidBs <> dim1 <> lb1 <> encodedElements
+         in NotNull (Builder.toStrictByteString fullBs)
+
+-- | A FieldDecoder that accepts and decodes Postgres arrays.
+arrayField :: forall a f. (Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> FieldDecoder a -> FieldDecoder (f a)
+arrayField !replicateFunction !elementParser =
+  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
+  FieldDecoder
+    { fieldValueDecoder = \colInfo ->
+        let !fdec = arrayParser colInfo.encodingContext <* Parser.endOfInput
+         in \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
+              Just bs -> case Parser.parseOnly fdec (PBA.fromByteString bs) of
+                Parser.ParseOk v -> Right v
+                Parser.ParseFail err -> Left err,
+      allowedPgTypes = allowOnlyArrayTypes
+    }
+  where
+    arrayParser :: EncodingContext -> Parser.Parser (f a)
+    arrayParser encodingContext = do
+      !ndim <- Parser.takeInt32BE
+      !_hasNull <- Parser.takeInt32BE
+      !elementTypeOid :: Oid <- Oid . fromIntegral <$> Parser.takeInt32BE
+      let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
+      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
+      if ndim == 0
+        then pure mempty
+        else do
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
+          unless (elementParser.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+          replicateFunction dim_i $ do
+            size :: Int <- fromIntegral <$> Parser.takeInt32BE
+            if size == (-1)
+              then case elementParser.fieldValueDecoder elementColInfo Nothing of
+                Left err -> fail err
+                Right v -> pure v
+              else do
+                elementBs <- Parser.take size
+                -- We need to convert to ByteString here or we need to change the API in breaking fashion..
+                case elementParser.fieldValueDecoder elementColInfo (Just (PBA.toByteString elementBs)) of
+                  Left err -> fail $ "Error parsing array element: " ++ show err
+                  Right el -> pure el
+
+-- | Returns a `fieldDecoder` and a specialized parser that both accept and decodes Postgres arrays.
+{-# INLINE arrayFieldRowDec #-}
+arrayFieldRowDec :: forall a f. (FromPgField a, Monoid (f a)) => (forall m. (Monad m) => Int -> m a -> m (f a)) -> (FieldDecoder (f a), FieldInfo -> Parser.Parser (f a))
+arrayFieldRowDec !replicateFunction =
+  -- From https://github.com/postgres/postgres/blob/5941946d0934b9eccb0d5bfebd40b155249a0130/src/backend/utils/adt/arrayfuncs.c#L1548
+  ( FieldDecoder
+      { fieldValueDecoder = \colInfo ->
+          let !dec = arrayParser colInfo.encodingContext <* Parser.endOfInput
+           in \case
+                Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
+                Just bs -> case Parser.parseOnly dec (PBA.fromByteString bs) of
+                  -- Some forcing to avoid thunks keeping references to our
+                  -- PinnedByteArray buffers
+                  Parser.ParseOk !v -> Right v
+                  Parser.ParseFail err -> Left err,
+        allowedPgTypes = allowOnlyArrayTypes
+      },
+    \finfo -> arrayParser finfo.encodingContext
+  )
+  where
+    fdec = fieldDecoder @a
+    handleNulls p = \finfo -> do
+      mv <- p
+      case mv of
+        -- Some forcing to avoid thunks keeping references to our
+        -- PinnedByteArray buffers
+        Nothing -> case fdec.fieldValueDecoder finfo Nothing of
+          Right !v -> pure v
+          Left err -> fail $ "Array element is NULL: " ++ err
+        Just !v -> pure v
+    fieldDec = \finfo -> handleNulls (specializedFieldDecoder finfo) finfo
+    arrayParser :: EncodingContext -> Parser.Parser (f a)
+    arrayParser encodingContext = do
+      !ndim <- Parser.takeInt32BE
+      !_hasNull <- Parser.takeInt32BE
+      !elementTypeOid :: Oid <- Oid . fromIntegral <$> Parser.takeInt32BE
+      let !elementColInfo = FieldInfo elementTypeOid Nothing encodingContext
+      when (ndim > 1) $ fail $ "TODO: No support for multi-dimensional arrays in Hpgsql. Got array with ndim=" ++ show ndim
+      if ndim == 0
+        then pure mempty
+        else do
+          !dim_i :: Int <- fromIntegral <$> Parser.takeInt32BE
+          !_lb_i <- Parser.takeInt32BE
+          unless (fdec.allowedPgTypes elementColInfo) $ fail $ "Array contains elements of type OID " ++ show elementTypeOid ++ " but decoder does not handle that type"
+          let p = fieldDec elementColInfo
+          replicateFunction dim_i p

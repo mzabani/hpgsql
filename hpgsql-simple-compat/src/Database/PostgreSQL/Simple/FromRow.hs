@@ -83,7 +83,7 @@ instance (FromRow a, FromRow b) => FromRow (a :. b) where
   fromRow = (:.) <$> fromRow <*> fromRow
 
 field :: (FromPgField a) => RowDecoderMonadic a
-field = toMonadicRowDecoder $ singleField fieldDecoder
+field = toMonadicRowDecoder fieldRowDecoder
 
 -- | Parse a single field using the given 'FieldParser'.
 fieldWith :: FieldParser a -> RowParser a

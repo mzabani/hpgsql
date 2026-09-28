@@ -6,4 +6,4 @@ module Hpgsql.Notification
 where
 
 import Hpgsql.Internal (getNotification, getNotificationNonBlocking)
-import Hpgsql.InternalTypes (NotificationResponse (..))
+import Hpgsql.Internal.InternalTypes (NotificationResponse (..))

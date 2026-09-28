@@ -49,7 +49,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8)
 import Hpgsql.Internal (closeForcefully, closeGracefully, connect, connectOpts, connectionIsClosed, defaultConnectOpts, getBackendPid, getParameterStatus, refreshTypeInfoCache, resetConnectionState, resetTypeInfoCache, withConnection, withConnectionOpts)
-import Hpgsql.InternalTypes (ConnectOpts (..), ConnectionString (..), ResetConnectionOpts (..))
+import Hpgsql.Internal.InternalTypes (ConnectOpts (..), ConnectionString (..), ResetConnectionOpts (..))
 import Network.URI
   ( URI (..),
     URIAuth (..),

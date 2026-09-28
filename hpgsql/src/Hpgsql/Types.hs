@@ -19,7 +19,9 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Tuple.Only (Only (..))
 import Data.Typeable (Proxy (..))
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, toPgVectorField)
+import Hpgsql.Encoding.Internal (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayFieldRowDec, nullableField, singleField, toPgVectorField)
+import qualified Hpgsql.Internal.PinnedByteArray as PBA
+import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid, lookupTypeByOid)
 
 -- | Encodes a Haskell list as a postgres array. You can also use `Vector` if you prefer.
@@ -39,8 +41,24 @@ instance forall a. (ToPgField a) => ToPgField (PGArray a) where
             toPgField = \encCtx -> toPgVectorField encCtx . fromPGArray
           }
 
+{-# RULES
+"singleField pgArrayFieldDecoder" singleField pgArrayFieldDecoder = fieldRowDecoder
+"singleField (nullableField pgArrayFieldDecoder)" singleField (nullableField pgArrayFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE pgArrayFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+pgArrayFieldDecoder :: (FromPgField a) => FieldDecoder (PGArray a)
+pgArrayFieldDecoder = PGArray <$> fst (arrayFieldRowDec replicateM)
+
 instance forall a. (FromPgField a) => FromPgField (PGArray a) where
-  fieldDecoder = PGArray <$> arrayField replicateM fieldDecoder
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = pgArrayFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder = \finfo -> do
+    len <- Parser.takeInt32BE
+    case len of
+      (-1) -> pure Nothing
+      _ -> Just . PGArray <$> snd (arrayFieldRowDec replicateM) finfo
 
 -- | A way to compose two rows.
 data h :. t = !h :. !t deriving (Eq, Ord, Show, Read)
@@ -63,7 +81,7 @@ instance forall a b. (ToPgRow a, ToPgRow b) => ToPgRow (a :. b) where
 instance (FromPgRow a, FromPgRow b) => FromPgRow (a :. b) where
   rowDecoder = (:.) <$> rowDecoder <*> rowDecoder
 
--- | A JSON type that does not incur the costs of deserializing
+-- | A JSON type that does not incur the costs of JSON/aeson deserializing
 -- in its `FromPgField` instance because it assumes postgres only generates
 -- valid JSON. Useful for extra performance if its opaqueness is not a problem.
 -- Although it does have a `toJSON` method, using it will incur a
@@ -82,20 +100,41 @@ instance ToJSON PgJson where
 pgJsonByteString :: PgJson -> ByteString
 pgJsonByteString (PgJson bs) = bs
 
+{-# RULES
+"singleField pgJsonFieldDecoder" singleField pgJsonFieldDecoder = fieldRowDecoder
+"singleField (nullableField pgJsonFieldDecoder)" singleField (nullableField pgJsonFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE pgJsonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+pgJsonFieldDecoder :: FieldDecoder PgJson
+pgJsonFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder =
+        \FieldInfo {fieldTypeOid} ->
+          let
+            -- jsonb has a byte prepended to the contents and json does not
+            !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+           in
+            \case
+              Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls"
+              Just bs -> Right $ PgJson $ fixJsonb bs,
+      allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
+    }
+
 instance FromPgField PgJson where
-  fieldDecoder =
-    FieldDecoder
-      { fieldValueDecoder =
-          \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Just bs -> Right $ PgJson $ fixJsonb bs
-                Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls",
-        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
-      }
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = pgJsonFieldDecoder
+
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo = do
+    len <- fromIntegral <$> Parser.takeInt32BE
+    if len == (-1)
+      then pure Nothing
+      else
+        fmap (Just . PgJson . PBA.toByteString) $
+          if finfo.fieldTypeOid == jsonbOid
+            then Parser.skip 1 >> Parser.take (len - 1)
+            else Parser.take len
 
 -- | A newtype wrapper to decode a JSON value with Aeson
 -- into your type (from either json or jsonb), and to encode
@@ -104,22 +143,40 @@ newtype Aeson a = Aeson {getAeson :: a}
   deriving stock (Functor, Read, Show)
   deriving newtype (Eq)
 
+{-# RULES
+"singleField aesonFieldDecoder" singleField aesonFieldDecoder = fieldRowDecoder
+"singleField (nullableField aesonFieldDecoder)" singleField (nullableField aesonFieldDecoder) = fieldRowDecoder
+  #-}
+
+{-# NOINLINE aesonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
+aesonFieldDecoder :: (FromJSON a) => FieldDecoder (Aeson a)
+aesonFieldDecoder =
+  FieldDecoder
+    { fieldValueDecoder =
+        \FieldInfo {fieldTypeOid} ->
+          let
+            -- jsonb has a byte prepended to the contents and json does not
+            !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+           in
+            \case
+              Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls"
+              Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
+                Just v -> Right $ Aeson v
+                Nothing -> Left "Failed to decode the postgres JSON value into your `Aeson a` type with aeson",
+      allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
+    }
+
 instance (FromJSON a) => FromPgField (Aeson a) where
-  fieldDecoder =
-    FieldDecoder
-      { fieldValueDecoder =
-          \FieldInfo {fieldTypeOid} ->
-            let
-              -- jsonb has a byte prepended to the contents and json does not
-              !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
-             in
-              \case
-                Just bs -> case Aeson.decodeStrict $ fixJsonb bs of
-                  Just v -> Right $ Aeson v
-                  Nothing -> Left "Failed to decode postgres JSON value into your `Aeson a` type. Are you sure it's proper JSON?"
-                Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls",
-        allowedPgTypes = (`elem` [jsonOid, jsonbOid]) . fieldTypeOid
-      }
+  {-# INLINE fieldDecoder #-}
+  fieldDecoder = aesonFieldDecoder
+  {-# INLINE specializedFieldDecoder #-}
+  specializedFieldDecoder finfo =
+    specializedFieldDecoder finfo >>= \case
+      Nothing -> pure Nothing
+      Just (PgJson jsonBs) ->
+        case Aeson.decodeStrict jsonBs of
+          Just v -> pure $ Just $ Aeson v
+          Nothing -> fail "Failed to decode the postgres JSON value into your `Aeson a` type with aeson"
 
 instance (ToJSON a) => ToPgField (Aeson a) where
   fieldEncoder =

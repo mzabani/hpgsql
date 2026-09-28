@@ -4,7 +4,7 @@ import Control.Concurrent (mkWeakThreadId, myThreadId)
 import qualified Control.Concurrent.STM as STM
 import Control.Exception.Safe (bracket)
 import Control.Monad (void)
-import Hpgsql.InternalTypes (Mutex (..), WeakThreadId (..), throwIrrecoverableError)
+import Hpgsql.Internal.InternalTypes (Mutex (..), WeakThreadId (..), throwIrrecoverableError)
 #if MIN_VERSION_base(4,19,0)
 import GHC.Conc.Sync (fromThreadId)
 #else

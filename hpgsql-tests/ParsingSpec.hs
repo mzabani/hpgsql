@@ -29,7 +29,7 @@ import Hedgehog (Gen, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Hpgsql.Encoding (ToPgRow (..))
-import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
+import Hpgsql.Internal.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.ParsingInternal (BlockOrNotBlock (..), ParsingOpts (..), QQExprKind (..), blockListText, flattenBlocks, parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
 import Hpgsql.Types (Only (..))

@@ -19,7 +19,7 @@ import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (FromPgField, LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeEncoder, typeFieldEncoder, typeOidWithName)
-import Hpgsql.InternalTypes (Query (..), SingleQuery (..))
+import Hpgsql.Internal.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.ParsingInternal (ParsingOpts (..), parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
 import Hpgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
