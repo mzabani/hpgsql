@@ -1,3 +1,9 @@
+## v0.4.0
+- Up to X% performance improvements in row decoding
+
+API changes: use `fieldRowDecoder` instead of `singleField fieldDecoder` where you can.
+
+
 ## v0.3.0
 - Support GHC 9.12
 - Support OverloadedRecordDot inside the `sql` quasiquoter
