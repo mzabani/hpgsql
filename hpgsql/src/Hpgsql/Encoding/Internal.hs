@@ -307,7 +307,7 @@ compositeTypeDecoder (RowDecoder {..}) =
       unless (all snd typecheckedCols) $ fail $ "Parser for composite type found type OIDs " ++ show (map fst cols) ++ " but expected different"
       case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (PBA.toStrict $ PBA.fromChunks $ map snd cols) of
         Parser.ParseOk v -> pure v
-        Parser.ParseFail err -> error $ "Error decoding composite type: " ++ show err
+        Parser.ParseFail err -> fail $ "Error decoding composite type: " ++ show err
 
 -- | Allows you to create a @FieldEncoder@ for composite types.
 -- For a type such as:
@@ -819,11 +819,11 @@ binaryIntDecoder finfo =
     fits :: forall b. (Integral b, Bounded b) => Proxy b -> Bool
     fits _ = fromIntegral @b @Integer (maxBound @b) <= fromIntegral (maxBound @a)
 
-binaryFloat4Decoder :: PinnedByteArray -> Float
-binaryFloat4Decoder = castWord32ToFloat . either error id . PBA.decodeWord32BE 0
+binaryFloat4Decoder :: PinnedByteArray -> Either String Float
+binaryFloat4Decoder = fmap castWord32ToFloat . PBA.decodeWord32BE 0
 
-binaryFloat8Decoder :: PinnedByteArray -> Double
-binaryFloat8Decoder = castWord64ToDouble . either error id . PBA.decodeWord64BE 0
+binaryFloat8Decoder :: PinnedByteArray -> Either String Double
+binaryFloat8Decoder = fmap castWord64ToDouble . PBA.decodeWord64BE 0
 
 -- | The OID of the base type for a field. For most types this is just the OID of
 -- the type of the field itself, but for Domain types this is the first non-Domain
@@ -1048,7 +1048,7 @@ instance FromPgField Oid where
 floatFieldDecoder :: FieldDecoder Float
 floatFieldDecoder = parsePgType "Float" [float4Oid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell Float type. Use a `Maybe Float`"
-  Just bs -> Right $ binaryFloat4Decoder (PBA.fromByteString bs)
+  Just bs -> binaryFloat4Decoder (PBA.fromByteString bs)
 
 instance FromPgField Float where
   {-# INLINE fieldDecoder #-}
@@ -1067,10 +1067,10 @@ doubleFieldDecoder :: FieldDecoder Double
 doubleFieldDecoder = parsePgType "Double" [float8Oid, float4Oid] $ \finfo ->
   let !decoder
         | rootBaseTypeOf finfo == float8Oid = binaryFloat8Decoder
-        | otherwise = float2Double . binaryFloat4Decoder
+        | otherwise = fmap float2Double . binaryFloat4Decoder
    in \case
         Nothing -> Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`"
-        Just bs -> Right $ decoder (PBA.fromByteString bs)
+        Just bs -> decoder (PBA.fromByteString bs)
 
 {-# INLINE doubleRowDecoder #-}
 doubleRowDecoder :: Parser.Parser (Maybe Double)
