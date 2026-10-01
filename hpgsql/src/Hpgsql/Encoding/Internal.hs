@@ -39,6 +39,7 @@ module Hpgsql.Encoding.Internal
     -- * Others
     parsePgType,
     rawBytesFieldDecoder,
+    rootBaseTypeOf,
     untypedFieldEncoder,
     toPgVectorField,
     arrayField,
@@ -799,27 +800,46 @@ binaryIntEncoder
   | haskellIntOid == int4Oid = NotNull . PBA.encodeInt32BE . fromIntegral
   | otherwise = NotNull . PBA.encodeInt16BE . fromIntegral
 
--- | Big-Endian binary decoder for Haskell's various IntXX types.
-binaryIntDecoder :: forall a. (Integral a, Bounded a) => Oid -> PinnedByteArray -> Either String a
-binaryIntDecoder typOid = \bs ->
-  if doesFit
-    then intDecoder bs
-    else Left $ "Chosen integral type does not fit every value for PG type with OID " ++ show typOid
+-- | Big-Endian binary decoder for Haskell's various IntXX types and domain types derived from those.
+binaryIntDecoder :: forall a. (Integral a, Bounded a) => FieldInfo -> PinnedByteArray -> Either String a
+binaryIntDecoder finfo =
+  let typOid = rootBaseTypeOf finfo
+   in case maxBoundAndDecoder typOid of
+        Right intDecoder ->
+          intDecoder
+        Left err ->
+          const $ Left err
   where
-    maxBoundPgType :: Integer
-    intDecoder :: PinnedByteArray -> Either String a
-    (maxBoundPgType, intDecoder)
-      | typOid == int8Oid = (fromIntegral $ maxBound @Int64, fmap fromIntegral . PBA.decodeInt64BE 0)
-      | typOid == int4Oid = (fromIntegral $ maxBound @Int32, fmap fromIntegral . PBA.decodeInt32BE 0)
-      | typOid == int2Oid = (fromIntegral $ maxBound @Int16, fmap fromIntegral . PBA.decodeInt16BE 0)
-      | otherwise = error "Bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8"
-    doesFit = maxBoundPgType <= fromIntegral (maxBound @a)
+    maxBoundAndDecoder :: Oid -> Either String (PinnedByteArray -> Either String a)
+    maxBoundAndDecoder typOid
+      | typOid == int8Oid = if fits (Proxy @Int64) then Right (fmap fromIntegral . PBA.decodeInt64BE 0) else Left "Postgres int8 does not fit into target numeric Haskell type"
+      | typOid == int4Oid = if fits (Proxy @Int32) then Right (fmap fromIntegral . PBA.decodeInt32BE 0) else Left "Postgres int4 does not fit into target numeric Haskell type"
+      | typOid == int2Oid = if fits (Proxy @Int16) then Right (fmap fromIntegral . PBA.decodeInt16BE 0) else Left "Postgres int2 does not fit into target numeric Haskell type"
+      | otherwise = Left "Probable bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8, nor a domain type derived from those"
+    fits :: forall b. (Integral b, Bounded b) => Proxy b -> Bool
+    fits _ = fromIntegral @b @Integer (maxBound @b) <= fromIntegral (maxBound @a)
 
 binaryFloat4Decoder :: PinnedByteArray -> Float
 binaryFloat4Decoder = castWord32ToFloat . either error id . PBA.decodeWord32BE 0
 
 binaryFloat8Decoder :: PinnedByteArray -> Double
 binaryFloat8Decoder = castWord64ToDouble . either error id . PBA.decodeWord64BE 0
+
+-- | The OID of the base type for a field. For most types this is just the OID of
+-- the type of the field itself, but for Domain types this is the first non-Domain
+-- type from which the field's type is ultimately derived.
+-- This allows us to support decoding of domain types inside arrays and composite types
+-- because it returns the OID that determines how values are encoded.
+rootBaseTypeOf :: FieldInfo -> Oid
+rootBaseTypeOf finfo = go finfo.fieldTypeOid
+  where
+    tyCache = finfo.encodingContext.typeInfoCache
+    go toid =
+      case lookupTypeByOid toid tyCache of
+        Nothing -> toid
+        Just tinfo -> case tinfo.typeDetails of
+          DomainType (DomainTypeDetails baseTypeOid) -> go baseTypeOid
+          _ -> toid
 
 {-# INLINE parsePgType #-}
 parsePgType :: String -> [Oid] -> (FieldInfo -> Maybe ByteString -> Either String a) -> FieldDecoder a
@@ -828,16 +848,7 @@ parsePgType !_typeName !requiredTypeOids !fieldValueDecoder = parsePgTypeFull is
     -- \| Domain types of the supplied "allowedPgTypes" types are always allowed, as they're
     -- strictly a subset of their base types.
     isSuppliedTypeOrADomain :: FieldInfo -> Bool
-    isSuppliedTypeOrADomain finfo = go finfo.fieldTypeOid
-      where
-        tyCache = finfo.encodingContext.typeInfoCache
-        go toid =
-          toid `elem` requiredTypeOids
-            || case lookupTypeByOid toid tyCache of
-              Nothing -> False
-              Just tinfo -> case tinfo.typeDetails of
-                DomainType (DomainTypeDetails baseTypeOid) -> go baseTypeOid
-                _ -> False
+    isSuppliedTypeOrADomain finfo = rootBaseTypeOf finfo `elem` requiredTypeOids
 
 {-# INLINE parsePgTypeFull #-}
 parsePgTypeFull :: (FieldInfo -> Bool) -> (FieldInfo -> Maybe ByteString -> Either String a) -> FieldDecoder a
@@ -864,8 +875,8 @@ instance FromPgField () where
 
 {-# NOINLINE intFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 intFieldDecoder :: FieldDecoder Int
-intFieldDecoder = parsePgType "Int" haskellIntOids $ \FieldInfo {fieldTypeOid} ->
-  let !decode = binaryIntDecoder fieldTypeOid
+intFieldDecoder = parsePgType "Int" haskellIntOids $ \finfo ->
+  let !decode = binaryIntDecoder finfo
    in \case
         Nothing -> Left "Cannot decode SQL null as the Haskell Int type. Use a `Maybe Int`"
         Just bs -> decode (PBA.fromByteString bs)
@@ -878,12 +889,13 @@ instance FromPgField Int where
   -- faster than the constFieldDecoder
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder = \finfo ->
-    if finfo.fieldTypeOid == int4Oid
-      then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
-      else
-        if finfo.fieldTypeOid == int8Oid
-          then fmap fromIntegral <$> Parser.takeInt64BEWithFieldLength
-          else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
+    let rootTypeOid = rootBaseTypeOf finfo
+     in if rootTypeOid == int4Oid
+          then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
+          else
+            if rootTypeOid == int8Oid
+              then fmap fromIntegral <$> Parser.takeInt64BEWithFieldLength
+              else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
 
 {-# RULES
 "singleField int16FieldDecoder" singleField int16FieldDecoder = fieldRowDecoder
@@ -893,12 +905,11 @@ instance FromPgField Int where
 {-# NOINLINE int16FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int16FieldDecoder :: FieldDecoder Int16
 int16FieldDecoder =
-  parsePgType "Int16" [int2Oid] $
-    const $
-      let !decode = binaryIntDecoder int2Oid
-       in \case
-            Nothing -> Left "Cannot decode SQL null as the Haskell Int16 type. Use a `Maybe Int16`"
-            Just bs -> decode (PBA.fromByteString bs)
+  parsePgType "Int16" [int2Oid] $ \finfo ->
+    let !decode = binaryIntDecoder finfo
+     in \case
+          Nothing -> Left "Cannot decode SQL null as the Haskell Int16 type. Use a `Maybe Int16`"
+          Just bs -> decode (PBA.fromByteString bs)
 
 instance FromPgField Int16 where
   {-# INLINE fieldDecoder #-}
@@ -913,8 +924,8 @@ instance FromPgField Int16 where
 
 {-# NOINLINE int32FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int32FieldDecoder :: FieldDecoder Int32
-int32FieldDecoder = parsePgType "Int32" [int2Oid, int4Oid] $ \FieldInfo {fieldTypeOid = oid} ->
-  let !decode = binaryIntDecoder oid
+int32FieldDecoder = parsePgType "Int32" [int2Oid, int4Oid] $ \finfo ->
+  let !decode = binaryIntDecoder finfo
    in \case
         Nothing -> Left "Cannot decode SQL null as the Haskell Int32 type. Use a `Maybe Int32`"
         Just bs -> decode (PBA.fromByteString bs)
@@ -938,8 +949,8 @@ instance FromPgField Int32 where
 
 {-# NOINLINE int64FieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 int64FieldDecoder :: FieldDecoder Int64
-int64FieldDecoder = parsePgType "Int64" [int2Oid, int4Oid, int8Oid] $ \FieldInfo {fieldTypeOid = oid} ->
-  let !decode = binaryIntDecoder oid
+int64FieldDecoder = parsePgType "Int64" [int2Oid, int4Oid, int8Oid] $ \finfo ->
+  let !decode = binaryIntDecoder finfo
    in \case
         Nothing -> Left "Cannot decode SQL null as the Haskell Int64 type. Use a `Maybe Int64`"
         Just bs -> decode (PBA.fromByteString bs)
@@ -948,10 +959,11 @@ int64FieldDecoder = parsePgType "Int64" [int2Oid, int4Oid, int8Oid] $ \FieldInfo
 {-# INLINE int64ConstFieldDecoder #-}
 int64ConstFieldDecoder :: FieldInfo -> Parser.Parser (Maybe Int64)
 int64ConstFieldDecoder finfo = do
-  if finfo.fieldTypeOid == int4Oid
+  let rootTypeOid = rootBaseTypeOf finfo
+  if rootTypeOid == int4Oid
     then fmap fromIntegral <$> Parser.takeInt32BEWithFieldLength
     else
-      if finfo.fieldTypeOid == int8Oid
+      if rootTypeOid == int8Oid
         then Parser.takeInt64BEWithFieldLength
         else fmap fromIntegral <$> Parser.takeInt16BEWithFieldLength
 
@@ -969,13 +981,14 @@ instance FromPgField Int64 where
 
 {-# NOINLINE integerFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 integerFieldDecoder :: FieldDecoder Integer
-integerFieldDecoder = parsePgType "Integer" [int8Oid, numericOid, int4Oid, int2Oid] $ \FieldInfo {fieldTypeOid} ->
-  let !decodeInt = binaryIntDecoder @Int64 fieldTypeOid
+integerFieldDecoder = parsePgType "Integer" [int8Oid, numericOid, int4Oid, int2Oid] $ \finfo ->
+  let !decodeInt = binaryIntDecoder @Int64 finfo
+      !rootTypeOid = rootBaseTypeOf finfo
    in \case
         Nothing -> Left "Cannot decode SQL null as the Haskell Integer type. Use a `Maybe Integer`"
         Just bs ->
           let !pbaBs = PBA.fromByteString bs
-           in if fieldTypeOid /= numericOid
+           in if rootTypeOid /= numericOid
                 then fromIntegral <$> decodeInt pbaBs
                 else case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
                   Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
@@ -989,13 +1002,14 @@ instance FromPgField Integer where
 
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder = \finfo -> do
-    let !decodeInt = binaryIntDecoder @Int64 finfo.fieldTypeOid
+    let !decodeInt = binaryIntDecoder @Int64 finfo
+        !rootTypeOid = rootBaseTypeOf finfo
     len <- fromIntegral <$> Parser.takeInt32BE
     case len of
       (-1) -> pure Nothing
       _ -> do
         pbaBs <- Parser.take len
-        if finfo.fieldTypeOid == numericOid
+        if rootTypeOid == numericOid
           then case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
             Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
               Right i -> pure $ Just i
@@ -1016,7 +1030,7 @@ oidFieldDecoder :: FieldDecoder Oid
 oidFieldDecoder = parsePgType "Oid" [oidOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell Oid type. Use a `Maybe Oid`"
   -- Oids are just int4
-  Just bs -> Oid <$> binaryIntDecoder int4Oid (PBA.fromByteString bs)
+  Just bs -> Oid <$> PBA.decodeInt32BE 0 (PBA.fromByteString bs)
 
 instance FromPgField Oid where
   {-# INLINE fieldDecoder #-}
@@ -1050,9 +1064,9 @@ instance FromPgField Float where
 
 {-# NOINLINE doubleFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 doubleFieldDecoder :: FieldDecoder Double
-doubleFieldDecoder = parsePgType "Double" [float8Oid, float4Oid] $ \FieldInfo {fieldTypeOid = oid} ->
+doubleFieldDecoder = parsePgType "Double" [float8Oid, float4Oid] $ \finfo ->
   let !decoder
-        | oid == float8Oid = binaryFloat8Decoder
+        | rootBaseTypeOf finfo == float8Oid = binaryFloat8Decoder
         | otherwise = float2Double . binaryFloat4Decoder
    in \case
         Nothing -> Left "Cannot decode SQL null as the Haskell Double type. Use a `Maybe Double`"
@@ -1130,19 +1144,21 @@ numericRowParser = do
 
 {-# NOINLINE scientificFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 scientificFieldDecoder :: FieldDecoder Scientific
-scientificFieldDecoder = parsePgType "Scientific" [numericOid, int2Oid, int4Oid, int8Oid] $ \FieldInfo {fieldTypeOid} ->
-  \case
-    Nothing -> Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`"
-    Just bs ->
-      let !pbaBs = PBA.fromByteString bs
-       in if fieldTypeOid /= numericOid
-            then let intdec = binaryIntDecoder @Int64 fieldTypeOid in flip scientific 0 . fromIntegral <$> intdec pbaBs
-            else
-              -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
-              -- float4Oid and float8Oid here?
-              case Parser.parseOnly (scientificDecoder False <* Parser.endOfInput) pbaBs of
-                Parser.ParseOk sci -> Right sci
-                Parser.ParseFail err -> Left err
+scientificFieldDecoder = parsePgType "Scientific" [numericOid, int2Oid, int4Oid, int8Oid] $ \finfo ->
+  let !rootTypeOid = rootBaseTypeOf finfo
+      !intdec = binaryIntDecoder @Int64 finfo
+   in \case
+        Nothing -> Left "Cannot decode SQL null as the Haskell Scientific type. Use a `Maybe Scientific`"
+        Just bs ->
+          let !pbaBs = PBA.fromByteString bs
+           in if rootTypeOid /= numericOid
+                then flip scientific 0 . fromIntegral <$> intdec pbaBs
+                else
+                  -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
+                  -- float4Oid and float8Oid here?
+                  case Parser.parseOnly (scientificDecoder False <* Parser.endOfInput) pbaBs of
+                    Parser.ParseOk sci -> Right sci
+                    Parser.ParseFail err -> Left err
 
 instance FromPgField Scientific where
   -- See https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/numeric.c#L1163
@@ -1151,7 +1167,7 @@ instance FromPgField Scientific where
 
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder singleColInfo =
-    if singleColInfo.fieldTypeOid == numericOid
+    if rootBaseTypeOf singleColInfo == numericOid
       then numericRowParser
       else fmap (flip scientific 0 . fromIntegral) <$> int64ConstFieldDecoder singleColInfo
 
@@ -1203,11 +1219,11 @@ instance FromPgField Bool where
 
 {-# NOINLINE charFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 charFieldDecoder :: FieldDecoder Char
-charFieldDecoder = parsePgType "Char" [charOid, textOid, varcharOid, nameOid, bpcharOid] $ \finfo@FieldInfo {fieldTypeOid} ->
+charFieldDecoder = parsePgType "Char" [charOid, textOid, varcharOid, nameOid, bpcharOid] $ \finfo ->
   -- The Postgres "char" type is just a byte, so we should consider
   -- not decoding it into `Char`, but rather just into Word8.
   -- This would be a breaking change, however.
-  if fieldTypeOid == charOid
+  if rootBaseTypeOf finfo == charOid
     then \case
       Nothing -> Left "Cannot decode SQL null as the Haskell Char type. Use a `Maybe Char`"
       Just bs -> Right $ chr (fromIntegral (BS.head bs))
@@ -1226,7 +1242,7 @@ instance FromPgField Char where
 
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder finfo =
-    if finfo.fieldTypeOid == charOid
+    if rootBaseTypeOf finfo == charOid
       then fmap (chr . fromIntegral) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
       else do
         mt <- specializedFieldDecoder @Text finfo
@@ -1716,10 +1732,10 @@ instance FromPgField UUID where
 
 {-# NOINLINE aesonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 aesonFieldDecoder :: FieldDecoder Aeson.Value
-aesonFieldDecoder = parsePgType "Aeson.Value" [jsonOid, jsonbOid] $ \FieldInfo {fieldTypeOid} ->
+aesonFieldDecoder = parsePgType "Aeson.Value" [jsonOid, jsonbOid] $ \finfo ->
   let
     -- jsonb has a byte prepended to the contents and json does not
-    !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+    !fixJsonb = if rootBaseTypeOf finfo == jsonbOid then BS.drop 1 else Prelude.id
    in
     \case
       Nothing -> Left "Cannot decode SQL null as the Haskell Aeson.Value type. Use a `Maybe Aeson.Value` if you want SQL nulls"
@@ -1738,7 +1754,7 @@ instance FromPgField Aeson.Value where
       else do
         bs <-
           PBA.toByteString
-            <$> if finfo.fieldTypeOid == jsonbOid
+            <$> if rootBaseTypeOf finfo == jsonbOid
               then Parser.skip 1 >> Parser.take (len - 1)
               else Parser.take len
         case Aeson.decodeStrict bs of

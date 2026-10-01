@@ -19,7 +19,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Tuple.Only (Only (..))
 import Data.Typeable (Proxy (..))
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding.Internal (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayFieldRowDec, nullableField, parsePgType, singleField, toPgVectorField)
+import Hpgsql.Encoding.Internal (FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), RowEncoder (..), ToPgField (..), ToPgRow (..), arrayFieldRowDec, nullableField, parsePgType, rootBaseTypeOf, singleField, toPgVectorField)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import qualified Hpgsql.SimpleParser as Parser
 import Hpgsql.TypeInfo (EncodingContext (..), TypeInfo (..), jsonOid, jsonbOid, lookupTypeByOid)
@@ -107,10 +107,10 @@ pgJsonByteString (PgJson bs) = bs
 
 {-# NOINLINE pgJsonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 pgJsonFieldDecoder :: FieldDecoder PgJson
-pgJsonFieldDecoder = parsePgType "PgJson" [jsonOid, jsonbOid] $ \FieldInfo {fieldTypeOid} ->
+pgJsonFieldDecoder = parsePgType "PgJson" [jsonOid, jsonbOid] $ \finfo ->
   let
     -- jsonb has a byte prepended to the contents and json does not
-    !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+    !fixJsonb = if rootBaseTypeOf finfo == jsonbOid then BS.drop 1 else Prelude.id
    in
     \case
       Nothing -> Left "Cannot decode SQL null as the Haskell PgJson type. Use a `Maybe PgJson` if you want SQL nulls"
@@ -145,10 +145,10 @@ newtype Aeson a = Aeson {getAeson :: a}
 
 {-# NOINLINE aesonFieldDecoder #-} -- See Note [singleField fieldDecoder rewrite rules]
 aesonFieldDecoder :: (FromJSON a) => FieldDecoder (Aeson a)
-aesonFieldDecoder = parsePgType "(Aeson a)" [jsonOid, jsonbOid] $ \FieldInfo {fieldTypeOid} ->
+aesonFieldDecoder = parsePgType "(Aeson a)" [jsonOid, jsonbOid] $ \finfo ->
   let
     -- jsonb has a byte prepended to the contents and json does not
-    !fixJsonb = if fieldTypeOid == jsonbOid then BS.drop 1 else Prelude.id
+    !fixJsonb = if rootBaseTypeOf finfo == jsonbOid then BS.drop 1 else Prelude.id
    in
     \case
       Nothing -> Left "Cannot decode SQL null as a Haskell (Aeson a) type. Use a `Maybe (Aeson a)` if you want SQL nulls"

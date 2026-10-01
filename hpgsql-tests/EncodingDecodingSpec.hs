@@ -1356,19 +1356,22 @@ domainTypesDecodeIntoLargerHaskellTypes conn = withRollback conn $ do
     conn
     [sql|CREATE DOMAIN text_100 AS TEXT CHECK (LENGTH(VALUE) <= 100);
          CREATE DOMAIN text_50 AS text_100 CHECK (LENGTH(VALUE) <= 50);
-         CREATE TYPE mixed_text AS (t1 TEXT, t2 text_100, arrt3 text_50[])|]
+         CREATE DOMAIN int_positive AS int8 CHECK (VALUE > 0);
+         CREATE TYPE mixed_text AS (t1 TEXT, t2 text_100, arrt3 text_50[], arr4 int_positive[])|]
   -- Postgres returns the OIDs of base types, not custom types, for scalar values of that type.
   -- When in arrays, however, postgres returns the right OID.
   -- Discussion about why it works like that: https://www.postgresql.org/message-id/22643.1546632887%40sss.pgh.pa.us
-  query1 conn "SELECT 'some_val'::text_100, 'some_val2'::text_50, 'other_val'::text" `shouldReturn` ("some_val" :: String, "some_val2" :: Text, "other_val" :: Text)
+  query1 conn "SELECT 'some_val'::text_100, 'some_val2'::text_50, 'other_val'::text, 4::int_positive" `shouldReturn` ("some_val" :: String, "some_val2" :: Text, "other_val" :: Text, 4 :: Int)
   query1 @(Only (Vector Text)) conn "SELECT ARRAY['v1', 'v2', 'v3']::text_100[]" `shouldThrow` irrecoverableErrorWithMsg "Array contains elements of type OID"
   query1 @(Only (Vector Text)) conn "SELECT ARRAY['v1', 'v2', 'v3']::text_50[]" `shouldThrow` irrecoverableErrorWithMsg "Array contains elements of type OID"
-  query1With (singleField $ compositeTypeDecoder $ rowDecoder @(Text, String, PGArray Text)) conn "SELECT ROW('abc', 'def', '{ghc,xyz,qwerty}')::mixed_text" `shouldThrow` irrecoverableErrorWithMsg "Parser for composite type found type OIDs"
+  query1 @(Only (Vector Text)) conn "SELECT ARRAY[1, 2, 3]::int_positive[]" `shouldThrow` irrecoverableErrorWithMsg "Array contains elements of type OID"
+  query1With (singleField $ compositeTypeDecoder $ rowDecoder @(Text, String, PGArray Text, PGArray Int64)) conn "SELECT ROW('abc', 'def', '{ghc,xyz,qwerty}', '{9,8,7}')::mixed_text" `shouldThrow` irrecoverableErrorWithMsg "Parser for composite type found type OIDs"
   join $ runPipeline conn $ refreshTypeInfoCache conn
-  query1 conn "SELECT 'some_val'::text_100, 'some_val2'::text_50, 'other_val'::text" `shouldReturn` ("some_val" :: String, "some_val2" :: Text, "other_val" :: Text)
+  query1 conn "SELECT 'some_val'::text_100, 'some_val2'::text_50, 'other_val'::text, 4::int_positive" `shouldReturn` ("some_val" :: String, "some_val2" :: Text, "other_val" :: Text, 4 :: Int64)
   query1 conn "SELECT ARRAY['v1', 'v2', 'v3']::text_100[]" `shouldReturn` Only (Vector.fromList ["v1" :: String, "v2", "v3"])
   query1 conn "SELECT ARRAY['v1', 'v2', 'v3']::text_50[]" `shouldReturn` Only (Vector.fromList ["v1" :: String, "v2", "v3"])
-  query1With (singleField $ compositeTypeDecoder $ rowDecoder @(Text, String, PGArray Text)) conn "SELECT ROW('abc', 'def', '{ghc,xyz,qwerty}')::mixed_text" `shouldReturn` ("abc", "def", PGArray ["ghc", "xyz", "qwerty"])
+  query1 conn "SELECT ARRAY[1, 2, 3]::int_positive[]" `shouldReturn` Only (Vector.fromList [1 :: Int, 2, 3])
+  query1With (singleField $ compositeTypeDecoder $ rowDecoder @(Text, String, PGArray Text, PGArray Int64)) conn "SELECT ROW('abc', 'def', '{ghc,xyz,qwerty}', '{9,8,7}')::mixed_text" `shouldReturn` ("abc", "def", PGArray ["ghc", "xyz", "qwerty"], PGArray [9, 8, 7])
 
 data Person = Person {name :: Text, born :: Day, heightMeters :: Double}
   deriving stock (Generic)
