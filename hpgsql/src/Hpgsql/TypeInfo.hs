@@ -9,6 +9,7 @@ module Hpgsql.TypeInfo
     TypeInfo (..),
     TypeDetails (..),
     ArrayTypeDetails (..),
+    DomainTypeDetails (..),
     builtinPgTypesMap,
     buildTypeInfoCache,
     lookupTypeByName,
@@ -120,7 +121,11 @@ newtype ArrayTypeDetails = ArrayTypeDetails
   { elemTypeOid :: Oid
   }
 
-data TypeDetails = BasicType | ArrayType !ArrayTypeDetails | CompositeType | DomainType | EnumType | PseudoType | RangeType | MultiRangeType
+newtype DomainTypeDetails = DomainTypeDetails
+  { baseTypeOid :: Oid
+  }
+
+data TypeDetails = BasicType | ArrayType !ArrayTypeDetails | CompositeType | DomainType !DomainTypeDetails | EnumType | PseudoType | RangeType | MultiRangeType
 
 data TypeInfoCache = TypeInfoCache !(Map Oid TypeInfo) !(Map Text TypeInfo)
 
@@ -148,7 +153,7 @@ newtype EncodingContext = EncodingContext
 -- The query to get all the code you find in this file starting from here is:
 -- 1. psql -X -t -d postgres -c "select typname || E'Oid :: Oid\n' || typname || 'Oid = Oid ' || oid from pg_catalog.pg_type order by oid" | sed 's|\+||g'
 --    for the many type bindings at the very bottom of the file
--- 2. psql -X -t -d postgres -c "select 'TypeInfo ' || typname || 'Oid ' || '\"' || typname || '\" ' || case WHEN typarray=0 THEN 'Nothing' else '(Just ' || typarray || ')' end || ' ' || case WHEN typcategory='A' THEN '(ArrayType (ArrayTypeDetails ' || typelem || '))' WHEN typtype='c' THEN 'CompositeType' WHEN typtype='d' THEN 'DomainType' WHEN typtype='e' THEN 'EnumType' WHEN typtype='p' THEN 'PseudoType' WHEN typtype='r' THEN 'RangeType' WHEN typtype='m' THEN 'MultiRangeType' else 'BasicType' end || ',' from pg_catalog.pg_type order by oid"
+-- 2. psql -X -t -d postgres -c "select 'TypeInfo ' || typname || 'Oid ' || '\"' || typname || '\" ' || case WHEN typarray=0 THEN 'Nothing' else '(Just ' || typarray || ')' end || ' ' || case WHEN typcategory='A' THEN '(ArrayType (ArrayTypeDetails ' || typelem || '))' WHEN typtype='c' THEN 'CompositeType' WHEN typtype='d' THEN '(DomainType (DomainTypeDetails ' || typbasetype || '))' WHEN typtype='e' THEN 'EnumType' WHEN typtype='p' THEN 'PseudoType' WHEN typtype='r' THEN 'RangeType' WHEN typtype='m' THEN 'MultiRangeType' else 'BasicType' end || ',' from pg_catalog.pg_type order by oid"
 --    for the Map
 
 -- | This contains every type that is builtin to PostgreSQL
@@ -624,17 +629,17 @@ builtinPgTypesMap =
       TypeInfo _pg_stat_subscription_statsOid "_pg_stat_subscription_stats" Nothing (ArrayType (ArrayTypeDetails 12342)),
       TypeInfo pg_stat_subscription_statsOid "pg_stat_subscription_stats" (Just 12341) CompositeType,
       TypeInfo _cardinal_numberOid "_cardinal_number" Nothing (ArrayType (ArrayTypeDetails 13292)),
-      TypeInfo cardinal_numberOid "cardinal_number" (Just 13291) DomainType,
+      TypeInfo cardinal_numberOid "cardinal_number" (Just 13291) (DomainType (DomainTypeDetails 23)),
       TypeInfo _character_dataOid "_character_data" Nothing (ArrayType (ArrayTypeDetails 13295)),
-      TypeInfo character_dataOid "character_data" (Just 13294) DomainType,
+      TypeInfo character_dataOid "character_data" (Just 13294) (DomainType (DomainTypeDetails 1043)),
       TypeInfo _sql_identifierOid "_sql_identifier" Nothing (ArrayType (ArrayTypeDetails 13297)),
-      TypeInfo sql_identifierOid "sql_identifier" (Just 13296) DomainType,
+      TypeInfo sql_identifierOid "sql_identifier" (Just 13296) (DomainType (DomainTypeDetails 19)),
       TypeInfo _information_schema_catalog_nameOid "_information_schema_catalog_name" Nothing (ArrayType (ArrayTypeDetails 13300)),
       TypeInfo information_schema_catalog_nameOid "information_schema_catalog_name" (Just 13299) CompositeType,
       TypeInfo _time_stampOid "_time_stamp" Nothing (ArrayType (ArrayTypeDetails 13303)),
-      TypeInfo time_stampOid "time_stamp" (Just 13302) DomainType,
+      TypeInfo time_stampOid "time_stamp" (Just 13302) (DomainType (DomainTypeDetails 1184)),
       TypeInfo _yes_or_noOid "_yes_or_no" Nothing (ArrayType (ArrayTypeDetails 13305)),
-      TypeInfo yes_or_noOid "yes_or_no" (Just 13304) DomainType,
+      TypeInfo yes_or_noOid "yes_or_no" (Just 13304) (DomainType (DomainTypeDetails 1043)),
       TypeInfo _applicable_rolesOid "_applicable_roles" Nothing (ArrayType (ArrayTypeDetails 13309)),
       TypeInfo applicable_rolesOid "applicable_roles" (Just 13308) CompositeType,
       TypeInfo _administrable_role_authorizationsOid "_administrable_role_authorizations" Nothing (ArrayType (ArrayTypeDetails 13314)),
