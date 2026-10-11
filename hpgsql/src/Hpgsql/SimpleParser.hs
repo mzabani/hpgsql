@@ -1,3 +1,6 @@
+{-# LANGUAGE MagicHash #-}
+{-# OPTIONS_GHC -ddump-simpl -ddump-to-file #-}
+
 -- |
 -- A minimal attoparsec-like parser that uses CPS to reduce allocations
 -- and perform better than attoparsec, at least the way we use it in
@@ -37,8 +40,9 @@ import Control.Applicative (Alternative (..))
 import Data.Int (Int16, Int32, Int64)
 import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
+import GHC.Base (Int (..), (+#))
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
-import Hpgsql.Internal.PinnedByteArray (ByteStringIdx (..), PinnedByteArray)
+import Hpgsql.Internal.PinnedByteArray (BoxedByteStringIdx (..), ByteStringIdx, PinnedByteArray)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Prelude hiding (take)
 
@@ -96,7 +100,7 @@ instance MonadFail Parser where
 -- using the strict 'ParseResult' type. Any unconsumed trailing input is
 -- discarded.
 parseOnly :: Parser a -> PinnedByteArray -> ParseResult a
-parseOnly p = parseOnlyOffset p 0
+parseOnly p = parseOnlyOffset p 0#
 {-# INLINE parseOnly #-}
 
 -- | Run a parser and return either an error message or the parsed value,
@@ -109,15 +113,15 @@ parseOnlyOffset (Parser p) idx bs = p idx bs ParseFail (\a _ _ -> ParseOk a)
 -- | Consume exactly `n` bytes of input, failing if fewer than `n` bytes
 -- remain.
 take :: Int -> Parser PinnedByteArray
-take n = Parser $ \idx sbs kf ks ->
-  let skip' = n + idx.idx
-   in if PBA.length sbs >= skip'
+take bn@(I# n) = Parser $ \idx sbs kf ks ->
+  let skip' = n +# idx
+   in if PBA.length sbs >= I# skip'
         -- TODO: dropAndTake in a single call
-        then case PBA.take n $ PBA.drop idx.idx sbs of
+        then case PBA.take bn $ PBA.drop (I# idx) sbs of
           -- Strict on the bytestring because we're pretty sure
           -- the field decoder will need to evaluate this anyway,
           -- so no need for an extra thunk
-          !h -> ks h (ByteStringIdx skip') sbs
+          !h -> ks h skip' sbs
         else kf "take: insufficient bytes"
 {-# INLINE take #-}
 
@@ -125,34 +129,34 @@ take n = Parser $ \idx sbs kf ks ->
 -- remain, and assumes those next `n` bytes are UTF8 text, so returns them
 -- as `Text`.
 takeUtf8Text :: Int -> Parser Text
-takeUtf8Text n = Parser $ \idx sbs kf ks ->
-  let skip' = n + idx.idx
-   in if PBA.length sbs >= skip'
-        then case PBA.unsafeToUtf8Text idx n sbs of
+takeUtf8Text bn@(I# n) = Parser $ \idx sbs kf ks ->
+  let skip' = n +# idx
+   in if PBA.length sbs >= I# skip'
+        then case PBA.unsafeToUtf8Text idx bn sbs of
           Left err -> kf err
-          Right t -> ks t (ByteStringIdx skip') sbs
-        else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (PBA.length sbs) <> " remain")
+          Right t -> ks t skip' sbs
+        else kf ("take: wanted " <> show (I# skip') <> " bytes but only " <> show (PBA.length sbs) <> " remain")
 {-# INLINE takeUtf8Text #-}
 
 -- | Consume exactly @n@ bytes of input, failing if fewer than @n@ bytes
 -- remain.
 skip :: Int -> Parser ()
-skip n = Parser $ \idx bs _ ks ->
-  ks () (ByteStringIdx $ idx.idx + n) bs
+skip (I# n) = Parser $ \idx bs _ ks ->
+  ks () (idx +# n) bs
 {-# INLINE skip #-}
 
 {-# INLINE takeInt16BE #-}
 takeInt16BE :: Parser Int16
 takeInt16BE = Parser $ \idx bs kf ks ->
   case PBA.decodeInt16BE idx bs of
-    Right v -> ks v (idx + 2) bs
+    Right v -> ks v (idx +# 2#) bs
     Left err -> kf err
 
 {-# INLINE takeInt32BE #-}
 takeInt32BE :: Parser Int32
 takeInt32BE = Parser $ \idx bs kf ks ->
   case PBA.decodeInt32BE idx bs of
-    Right v -> ks v (idx + 4) bs
+    Right v -> ks v (idx +# 4#) bs
     Left err -> kf err
 
 {-# INLINE peekInt32BE #-}
@@ -177,21 +181,21 @@ takeFloatBEWithFieldLength = do
 takeFloatBE :: Parser Float
 takeFloatBE = Parser $ \idx bs kf ks ->
   case PBA.decodeWord32BE idx bs of
-    Right v -> ks (castWord32ToFloat v) (idx + 4) bs
+    Right v -> ks (castWord32ToFloat v) (idx +# 4#) bs
     Left err -> kf err
 
 {-# INLINE takeDoubleBE #-}
 takeDoubleBE :: Parser Double
 takeDoubleBE = Parser $ \idx bs kf ks ->
   case PBA.decodeWord64BE idx bs of
-    Right v -> ks (castWord64ToDouble v) (idx + 8) bs
+    Right v -> ks (castWord64ToDouble v) (idx +# 8#) bs
     Left err -> kf err
 
 {-# INLINE takeWord8 #-}
 takeWord8 :: Parser Word8
 takeWord8 = Parser $ \idx bs kf ks ->
   case PBA.decodeWord8 idx bs of
-    Right v -> ks v (idx + 1) bs
+    Right v -> ks v (idx +# 1#) bs
     Left err -> kf err
 
 {-# INLINE takeWord8WithFieldLength #-}
@@ -239,40 +243,41 @@ takeInt64BEWithFieldLength = do
 takeInt64BE :: Parser Int64
 takeInt64BE = Parser $ \idx bs kf ks ->
   case PBA.decodeInt64BE idx bs of
-    Right v -> ks v (idx + 8) bs
+    Right v -> ks v (idx +# 8#) bs
     Left err -> kf err
 
 {-# INLINE takeWord32BE #-}
 takeWord32BE :: Parser Word32
 takeWord32BE = Parser $ \idx bs kf ks ->
   case PBA.decodeWord32BE idx bs of
-    Right v -> ks v (idx + 4) bs
+    Right v -> ks v (idx +# 4#) bs
     Left err -> kf err
 
 {-# INLINE takeWord64BE #-}
 takeWord64BE :: Parser Word64
 takeWord64BE = Parser $ \idx bs kf ks ->
   case PBA.decodeWord64BE idx bs of
-    Right v -> ks v (idx + 8) bs
+    Right v -> ks v (idx +# 8#) bs
     Left err -> kf err
 
 {-# INLINE takeDataRow #-}
 
 -- | A specialized parser to parse a postgres DataRow,
 -- returning the index of the byte after this DataRow's last.
-takeDataRow :: Parser ByteStringIdx
+takeDataRow :: Parser BoxedByteStringIdx
 takeDataRow = Parser $ \idx bs kf ks ->
   case PBA.decodeDataRow idx bs of
     Left err -> kf err
-    Right idxRest -> ks idxRest idxRest bs
+    Right idxRest@(BoxedByteStringIdx (I# idxRest#)) -> ks idxRest idxRest# bs
 
 -- | Parses as many PG rows as there are available, returns
 -- the index/offset of the first left-unparsed byte and the
 -- number of rows parsed.
-parseManyRows :: Parser (ByteStringIdx, Int)
-parseManyRows = Parser $ \idx' bs' _kf ks -> let (restIdx, nParsed) = go idx' bs' 0 in ks (restIdx, nParsed) restIdx bs'
+parseManyRows :: Parser (BoxedByteStringIdx, Int)
+parseManyRows = Parser $ \idx' bs' _kf ks -> case go (BoxedByteStringIdx $ I# idx') bs' 0 of
+  (!restIdx@(BoxedByteStringIdx (I# restIdx#)), !nParsed) -> ks (restIdx, nParsed) restIdx# bs'
   where
-    go idx bs !nParsedSoFar = case parseOnlyOffset takeDataRow idx bs of
+    go idx@(BoxedByteStringIdx (I# idx#)) bs !nParsedSoFar = case parseOnlyOffset takeDataRow idx# bs of
       ParseOk unconsumedIdx -> go unconsumedIdx bs (nParsedSoFar + 1)
       ParseFail _ -> (idx, nParsedSoFar)
 {-# INLINE parseManyRows #-}
@@ -280,5 +285,5 @@ parseManyRows = Parser $ \idx' bs' _kf ks -> let (restIdx, nParsed) = go idx' bs
 -- | Succeeds only when the input has been fully consumed.
 endOfInput :: Parser ()
 endOfInput = Parser $ \idx bs kf ks ->
-  if PBA.length bs <= idx.idx then ks () idx bs else kf "endOfInput: input remaining"
+  if PBA.length bs <= I# idx then ks () idx bs else kf "endOfInput: input remaining"
 {-# INLINE endOfInput #-}

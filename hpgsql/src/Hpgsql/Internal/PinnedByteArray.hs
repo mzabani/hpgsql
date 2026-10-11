@@ -63,7 +63,8 @@ module Hpgsql.Internal.PinnedByteArray
     unsafeToUtf8Text,
 
     -- * Binary (de)serializer
-    ByteStringIdx (..),
+    ByteStringIdx,
+    BoxedByteStringIdx (..),
     decodeInt16BE,
     decodeInt32BE,
     decodeInt64BE,
@@ -87,7 +88,7 @@ import Data.Int (Int16, Int32, Int64)
 import Foreign.C (CInt (..))
 import Foreign.Marshal.Utils (copyBytes)
 import Foreign.Ptr (plusPtr)
-import GHC.Base (Addr#, ByteArray#, Char (..), IO (..), Int (..), MutableByteArray#, RealWorld, byteArrayContents#, compareByteArrays#, indexWord8ArrayAsChar#, indexWord8ArrayAsWord32#, mutableByteArrayContents#, newPinnedByteArray#, unIO, unsafeFreezeByteArray#, (+#))
+import GHC.Base (Addr#, ByteArray#, Char (..), IO (..), Int (..), MutableByteArray#, RealWorld, byteArrayContents#, compareByteArrays#, indexWord8ArrayAsChar#, indexWord8ArrayAsWord32#, mutableByteArrayContents#, newPinnedByteArray#, unIO, unsafeFreezeByteArray#, (+#), (<#), (>=#))
 import GHC.Exts (indexWord8Array#, indexWord8ArrayAsWord16#, indexWord8ArrayAsWord64#)
 import GHC.Ptr (Ptr (..))
 import System.IO.Unsafe (unsafeDupablePerformIO)
@@ -106,6 +107,7 @@ import Data.Bits (Bits (unsafeShiftR))
 import Data.Coerce (coerce)
 import Data.Text.Internal (Text (..))
 import Foreign (Storable (..), withForeignPtr, (.&.))
+import GHC.Base (Int#)
 import GHC.Float (castDoubleToWord64, castFloatToWord32)
 import GHC.Word (Word16 (..), Word32 (..), Word64 (..), Word8 (..))
 
@@ -164,7 +166,7 @@ toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ Internal
 -- | Assuming the pinned byte array contains valid UTF8 text, creates
 -- returns an instance of `Text` with the same contents (but does make a copy).
 unsafeToUtf8Text :: ByteStringIdx -> Int -> PinnedByteArray -> Either String Text
-unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray {}) = let !(PinnedByteArray start arrLen arr#) = copyStrictSlice idx.idx desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
+unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray {}) = let !(PinnedByteArray start arrLen arr#) = copyStrictSlice (I# idx) desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
 
 takePgMessageIdentAndLen :: LazyPinnedByteArray -> Maybe (Char, Int32)
 takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =
@@ -262,12 +264,20 @@ data WordDecodingAll a where
 
 {-# INLINE decodeWord #-}
 decodeWord :: WordDecodingAll a -> ByteStringIdx -> PinnedByteArray -> (a -> a) -> Either String a
-decodeWord wdec (ByteStringIdx boxedIdx@(I# idx)) (PinnedByteArray (I# start) len byArrSharp) endianConvert =
+decodeWord wdec idx (PinnedByteArray (I# start) (I# len) byArrSharp) endianConvert =
   case wdec of
-    CWord8 -> if len < 1 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W8# (indexWord8Array# byArrSharp (idx +# start))
-    CWord16 -> if len < 2 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W16# (indexWord8ArrayAsWord16# byArrSharp (idx +# start))
-    CWord32 -> if len < 4 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W32# (indexWord8ArrayAsWord32# byArrSharp (idx +# start))
-    CWord64 -> if len < 8 + boxedIdx then Left "Less than enough bytes to decode" else Right $ endianConvert $ W64# (indexWord8ArrayAsWord64# byArrSharp (idx +# start))
+    CWord8 -> case len <# 1# +# idx of
+      1# -> Left "Less than enough bytes to decode"
+      _ -> Right $ endianConvert $ W8# (indexWord8Array# byArrSharp (idx +# start))
+    CWord16 -> case len <# 2# +# idx of
+      1# -> Left "Less than enough bytes to decode"
+      _ -> Right $ endianConvert $ W16# (indexWord8ArrayAsWord16# byArrSharp (idx +# start))
+    CWord32 -> case len <# 4# +# idx of
+      1# -> Left "Less than enough bytes to decode"
+      _ -> Right $ endianConvert $ W32# (indexWord8ArrayAsWord32# byArrSharp (idx +# start))
+    CWord64 -> case len <# 8# +# idx of
+      1# -> Left "Less than enough bytes to decode"
+      _ -> Right $ endianConvert $ W64# (indexWord8ArrayAsWord64# byArrSharp (idx +# start))
 
 {-# INLINE unsafeEncodeWord #-}
 unsafeEncodeWord :: (Storable a) => a -> (a -> a) -> Int -> ByteString
@@ -275,7 +285,9 @@ unsafeEncodeWord n endianConvert len =
   InternalBS.unsafeCreate len $ \bufferPtr ->
     poke (coerce bufferPtr) $ endianConvert n
 
-newtype ByteStringIdx = ByteStringIdx {idx :: Int}
+type ByteStringIdx = Int#
+
+newtype BoxedByteStringIdx = BoxedByteStringIdx {idx :: Int}
   deriving newtype (Eq, Num, Show)
 
 {-# INLINE decodeInt16BE #-}
@@ -333,8 +345,8 @@ encodePgBoolean v = if v then "\SOH" else "\NUL"
 -- | A super specialized decoder to decode a postgres DataRow message
 -- more quickly than a naive implementation.
 -- Returns the index into the left-unparsed contents of the supplied bytestring.
-decodeDataRow :: ByteStringIdx -> PinnedByteArray -> Either String ByteStringIdx
-decodeDataRow idx sbs@(PinnedByteArray _ len _) =
+decodeDataRow :: ByteStringIdx -> PinnedByteArray -> Either String BoxedByteStringIdx
+decodeDataRow idx sbs@(PinnedByteArray _ (I# len) _) =
   -- We have a fast path when rows are at least 8 bytes long (should be the case
   -- for all but 0-column query results or bytestring chunks "cut in the middle of the message")
   -- by playing with bitwise operations.
@@ -355,15 +367,15 @@ decodeDataRow idx sbs@(PinnedByteArray _ len _) =
     Left _ ->
       -- It is possible the DataRow has length less than 8 bytes, so
       -- we still have to try to parse that.
-      if len >= 5 + idx.idx
-        then do
+      case len >=# 5# +# idx of
+        1# -> do
           msgIdentChar <- decodeWord8 idx sbs
-          lenFullMsg <- decodeInt32BE (1 + idx) sbs
+          lenFullMsg <- decodeInt32BE (1# +# idx) sbs
           if msgIdentChar == 68 -- Letter 'D'
             then toResult (fromIntegral lenFullMsg)
             else Left "Not a DataRow"
-        else Left "Less than enough bytes to decode a DataRow"
+        _ -> Left "Less than enough bytes to decode a DataRow"
   where
-    toResult lenFullMsg
-      | len >= 1 + lenFullMsg + idx.idx = Right $ ByteStringIdx $ 1 + lenFullMsg + idx.idx
-      | otherwise = Left "Less than enough bytes to decode a full DataRow"
+    toResult (I# lenFullMsg) = case len >=# 1# +# lenFullMsg +# idx of
+      1# -> Right $ BoxedByteStringIdx $ 1 + (I# lenFullMsg) + (I# idx)
+      _ -> Left "Less than enough bytes to decode a full DataRow"

@@ -1,3 +1,5 @@
+{-# LANGUAGE MagicHash #-}
+
 module PinnedByteArraySpec where
 
 import Control.Monad (when)
@@ -67,9 +69,9 @@ unsafeToUtf8TextIdentity = hedgehog $ do
   t :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 9999) Gen.unicode
   let bs = encodeUtf8 t
   let pba = PBA.fromByteString bs
-  PBA.unsafeToUtf8Text 0 (PBA.length pba) pba === Right t
+  PBA.unsafeToUtf8Text 0# (PBA.length pba) pba === Right t
   -- Out-of-bounds correctly detected
-  PBA.unsafeToUtf8Text 0 (PBA.length pba + 1) pba === Left "Insufficient bytes in buffer in unsafeToUtf8Text"
+  PBA.unsafeToUtf8Text 0# (PBA.length pba + 1) pba === Left "Insufficient bytes in buffer in unsafeToUtf8Text"
 
 genPba :: Gen PinnedByteArray
 genPba = PBA.fromByteString <$> Gen.bytes (Gen.linear 0 9999)

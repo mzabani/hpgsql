@@ -1,3 +1,5 @@
+{-# LANGUAGE MagicHash #-}
+
 module EncodingDecodingSpec where
 
 import Control.Monad (join, void, when)
@@ -40,6 +42,7 @@ import DbUtils
     withRollback,
   )
 import Debug.Trace
+import GHC.Base (Int (..))
 import GHC.Float (float2Double)
 import GHC.Generics (Generic)
 import Hedgehog (PropertyT, annotateShow, (===))
