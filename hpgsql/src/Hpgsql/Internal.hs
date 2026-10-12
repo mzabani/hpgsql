@@ -1,3 +1,6 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
+
 module Hpgsql.Internal
   ( -- * Connection
     connect,
@@ -131,6 +134,7 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
+import GHC.Base (Int (..), (>#))
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
@@ -584,11 +588,14 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
         ReceiveDataRows ->
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
           let strictNowBuf = PBA.toStrict nowBuf
-           in case Parser.parseOnly Parser.parseManyRows strictNowBuf of
-                Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) | nRowsParsed > 0 -> do
-                  let (msgs, unconsumedBuffer) = PBA.splitAt unconsumedBufferBegin.idx strictNowBuf
-                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show msgs.len
-                  pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
+           in case Parser.parseOnlyRows Parser.parseManyRows strictNowBuf of
+                Parser.ParseOkRows (# unconsumedBufferBegin, nRowsParsed #) ->
+                  case nRowsParsed ># 0# of
+                    1# -> do
+                      let (msgs, unconsumedBuffer) = PBA.splitAt (I# unconsumedBufferBegin) strictNowBuf
+                      debugPrint $ "Received " ++ show (I# nRowsParsed) ++ " messages with total length " ++ show msgs.len
+                      pure (PBA.fromStrict unconsumedBuffer, Just (msgs, (I# nRowsParsed)))
+                    _ -> handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
                 _ -> handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar fullMsg parser of

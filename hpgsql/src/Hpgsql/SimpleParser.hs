@@ -1,4 +1,6 @@
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE UnboxedTuples #-}
 {-# OPTIONS_GHC -ddump-simpl -ddump-to-file #-}
 
 -- |
@@ -13,9 +15,12 @@
 -- and performance was improved by another ~14.3%, with total memory
 -- allocations reduced by ~6%.
 module Hpgsql.SimpleParser
-  ( Parser (..),
+  ( Parser,
+    ParserPol (..),
     ParseResult (..),
+    ParseResultRows (..),
     parseOnly,
+    parseOnlyRows,
     take,
     endOfInput,
     takeInt16BE,
@@ -40,8 +45,7 @@ import Control.Applicative (Alternative (..))
 import Data.Int (Int16, Int32, Int64)
 import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
-import GHC.Base (Int (..), (+#))
-import GHC.Base (Int (..), (+#), (<=#), (>=#))
+import GHC.Base (Int (..), Int#, LiftedRep, RuntimeRep (..), TYPE, (+#), (<=#), (>=#))
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.Internal.PinnedByteArray (BoxedByteStringIdx (..), ByteStringIdx, PinnedByteArray)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
@@ -52,8 +56,22 @@ data ParseResult a
   | ParseOk !a
   deriving stock (Show)
 
+-- data ParseResultPol (rep :: RuntimeRep) (a :: TYPE rep)
+--   = ParseFailPol !String
+--   | ParseOkPol a
+--   deriving stock (Show)
+
+data ParseResultInt#
+  = ParseFailInt# !String
+  | ParseOkInt# {-# UNPACK #-} !Int#
+  deriving stock (Show)
+
+data ParseResultRows
+  = ParseFailRows !String
+  | ParseOkRows !(# ByteStringIdx, Int# #)
+
 -- | A parser that consumes a strict 'PinnedByteArray'.
-newtype Parser a = Parser
+newtype ParserPol (rep :: RuntimeRep) (a :: TYPE rep) = Parser
   { unParser ::
       forall r.
       ByteStringIdx ->
@@ -64,6 +82,8 @@ newtype Parser a = Parser
       -- \^ success continuation, taking original or new PinnedByteArray, the index into the original/new bytestring of the first yet-unparsed byte, and parsed value
       r
   }
+
+type Parser = ParserPol LiftedRep
 
 instance Functor Parser where
   fmap f (Parser p) = Parser $ \idx bs kf ks ->
@@ -107,9 +127,30 @@ parseOnly p = parseOnlyOffset p 0#
 -- | Run a parser and return either an error message or the parsed value,
 -- using the strict 'ParseResult' type. Any unconsumed trailing input is
 -- discarded.
+parseOnlyRows :: ParserPol ('TupleRep [IntRep, IntRep]) (# ByteStringIdx, Int# #) -> PinnedByteArray -> ParseResultRows
+parseOnlyRows p = parseOnlyOffsetRows p 0#
+{-# INLINE parseOnlyRows #-}
+
+-- | Run a parser and return either an error message or the parsed value,
+-- using the strict 'ParseResult' type. Any unconsumed trailing input is
+-- discarded.
 parseOnlyOffset :: Parser a -> ByteStringIdx -> PinnedByteArray -> ParseResult a
 parseOnlyOffset (Parser p) idx bs = p idx bs ParseFail (\a _ _ -> ParseOk a)
 {-# INLINE parseOnlyOffset #-}
+
+-- | Run a parser and return either an error message or the parsed value,
+-- using the strict 'ParseResult' type. Any unconsumed trailing input is
+-- discarded.
+parseOnlyOffsetInt# :: ParserPol 'IntRep Int# -> ByteStringIdx -> PinnedByteArray -> ParseResultInt#
+parseOnlyOffsetInt# (Parser p) idx bs = p idx bs ParseFailInt# (\a _ _ -> ParseOkInt# a)
+{-# INLINE parseOnlyOffsetInt# #-}
+
+-- | Run a parser and return either an error message or the parsed value,
+-- using the strict 'ParseResult' type. Any unconsumed trailing input is
+-- discarded.
+parseOnlyOffsetRows :: ParserPol ('TupleRep [IntRep, IntRep]) (# ByteStringIdx, Int# #) -> ByteStringIdx -> PinnedByteArray -> ParseResultRows
+parseOnlyOffsetRows (Parser p) idx bs = p idx bs ParseFailRows (\a _ _ -> ParseOkRows a)
+{-# INLINE parseOnlyOffsetRows #-}
 
 -- | Consume exactly `n` bytes of input, failing if fewer than `n` bytes
 -- remain.
@@ -265,22 +306,22 @@ takeWord64BE = Parser $ \idx bs kf ks ->
 
 -- | A specialized parser to parse a postgres DataRow,
 -- returning the index of the byte after this DataRow's last.
-takeDataRow :: Parser BoxedByteStringIdx
+takeDataRow :: ParserPol 'IntRep ByteStringIdx
 takeDataRow = Parser $ \idx bs kf ks ->
   case PBA.decodeDataRow idx bs of
     Left err -> kf err
-    Right idxRest@(BoxedByteStringIdx (I# idxRest#)) -> ks idxRest idxRest# bs
+    Right (BoxedByteStringIdx (I# idxRest#)) -> ks idxRest# idxRest# bs
 
 -- | Parses as many PG rows as there are available, returns
 -- the index/offset of the first left-unparsed byte and the
 -- number of rows parsed.
-parseManyRows :: Parser (BoxedByteStringIdx, Int)
-parseManyRows = Parser $ \idx' bs' _kf ks -> case go (BoxedByteStringIdx $ I# idx') bs' 0 of
-  (!restIdx@(BoxedByteStringIdx (I# restIdx#)), !nParsed) -> ks (restIdx, nParsed) restIdx# bs'
+parseManyRows :: ParserPol ('TupleRep [IntRep, IntRep]) (# ByteStringIdx, Int# #)
+parseManyRows = Parser $ \idx' bs' _kf ks -> case go idx' bs' 0# of
+  (# restIdx#, nParsed #) -> ks (# restIdx#, nParsed #) restIdx# bs'
   where
-    go idx@(BoxedByteStringIdx (I# idx#)) bs !nParsedSoFar = case parseOnlyOffset takeDataRow idx# bs of
-      ParseOk unconsumedIdx -> go unconsumedIdx bs (nParsedSoFar + 1)
-      ParseFail _ -> (idx, nParsedSoFar)
+    go idx# bs !nParsedSoFar = case parseOnlyOffsetInt# takeDataRow idx# bs of
+      ParseOkInt# unconsumedIdx -> go unconsumedIdx bs (nParsedSoFar +# 1#)
+      ParseFailInt# _ -> (# idx#, nParsedSoFar #)
 {-# INLINE parseManyRows #-}
 
 -- | Succeeds only when the input has been fully consumed.
