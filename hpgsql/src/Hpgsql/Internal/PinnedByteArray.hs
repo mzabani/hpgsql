@@ -42,7 +42,7 @@
 -- as there's no concerns about scoping decoding, and our buffers are short-lived so heap
 -- fragmentation is not a concern.
 module Hpgsql.Internal.PinnedByteArray
-  ( PinnedByteArray,
+  ( PinnedByteArray (..),
     LazyPinnedByteArray,
     append,
     copyStrictSlice,
@@ -113,7 +113,7 @@ import GHC.Word (Word16 (..), Word32 (..), Word64 (..), Word8 (..))
 
 data PinnedByteArray = PinnedByteArray
   { _start :: !Int,
-    _len :: !Int,
+    len :: !Int,
     _array :: !ByteArray#
   }
 
@@ -131,11 +131,11 @@ data LazyPinnedByteArray
     LazyPinnedByteArray !Int ![PinnedByteArray]
 
 append :: LazyPinnedByteArray -> PinnedByteArray -> LazyPinnedByteArray
-append (LazyPinnedByteArray l1 pbs1) pba = LazyPinnedByteArray (l1 + length pba) (pba : pbs1 {- Reverse order -})
+append (LazyPinnedByteArray l1 pbs1) pba@PinnedByteArray {len} = LazyPinnedByteArray (l1 + len) (pba : pbs1 {- Reverse order -})
 
 fromChunks :: [PinnedByteArray] -> LazyPinnedByteArray
 fromChunks pbas =
-  let len = sum $ map length pbas
+  let len = sum $ map (.len) pbas
    in LazyPinnedByteArray len (reverse pbas)
 
 {-# NOINLINE emptyPBA #-}
@@ -220,8 +220,8 @@ copyStrictSlice (max 0 -> skip) (max 0 -> n') (LazyPinnedByteArray totalLen' (re
 splitAt :: Int -> PinnedByteArray -> (PinnedByteArray, PinnedByteArray)
 splitAt n pba = (take n pba, drop n pba)
 
-length :: PinnedByteArray -> Int
-length (PinnedByteArray _ len _) = len
+length :: PinnedByteArray -> Int#
+length (PinnedByteArray _ (I# len) _) = len
 
 lazyLength :: LazyPinnedByteArray -> Int
 lazyLength (LazyPinnedByteArray len _) = len

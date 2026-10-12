@@ -41,6 +41,7 @@ import Data.Int (Int16, Int32, Int64)
 import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
 import GHC.Base (Int (..), (+#))
+import GHC.Base (Int (..), (+#), (<=#), (>=#))
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.Internal.PinnedByteArray (BoxedByteStringIdx (..), ByteStringIdx, PinnedByteArray)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
@@ -115,14 +116,14 @@ parseOnlyOffset (Parser p) idx bs = p idx bs ParseFail (\a _ _ -> ParseOk a)
 take :: Int -> Parser PinnedByteArray
 take bn@(I# n) = Parser $ \idx sbs kf ks ->
   let skip' = n +# idx
-   in if PBA.length sbs >= I# skip'
+   in case PBA.length sbs >=# skip' of
         -- TODO: dropAndTake in a single call
-        then case PBA.take bn $ PBA.drop (I# idx) sbs of
+        1# -> case PBA.take bn $ PBA.drop (I# idx) sbs of
           -- Strict on the bytestring because we're pretty sure
           -- the field decoder will need to evaluate this anyway,
           -- so no need for an extra thunk
           !h -> ks h skip' sbs
-        else kf "take: insufficient bytes"
+        _ -> kf "take: insufficient bytes"
 {-# INLINE take #-}
 
 -- | Consume exactly `n` bytes of input, failing if fewer than `n` bytes
@@ -131,11 +132,11 @@ take bn@(I# n) = Parser $ \idx sbs kf ks ->
 takeUtf8Text :: Int -> Parser Text
 takeUtf8Text bn@(I# n) = Parser $ \idx sbs kf ks ->
   let skip' = n +# idx
-   in if PBA.length sbs >= I# skip'
-        then case PBA.unsafeToUtf8Text idx bn sbs of
+   in case PBA.length sbs >=# skip' of
+        1# -> case PBA.unsafeToUtf8Text idx bn sbs of
           Left err -> kf err
           Right t -> ks t skip' sbs
-        else kf ("take: wanted " <> show (I# skip') <> " bytes but only " <> show (PBA.length sbs) <> " remain")
+        _ -> kf ("take: wanted " <> show (I# skip') <> " bytes but only " <> show (I# $ PBA.length sbs) <> " remain")
 {-# INLINE takeUtf8Text #-}
 
 -- | Consume exactly @n@ bytes of input, failing if fewer than @n@ bytes
@@ -285,5 +286,7 @@ parseManyRows = Parser $ \idx' bs' _kf ks -> case go (BoxedByteStringIdx $ I# id
 -- | Succeeds only when the input has been fully consumed.
 endOfInput :: Parser ()
 endOfInput = Parser $ \idx bs kf ks ->
-  if PBA.length bs <= I# idx then ks () idx bs else kf "endOfInput: input remaining"
+  case PBA.length bs <=# idx of
+    1# -> ks () idx bs
+    _ -> kf "endOfInput: input remaining"
 {-# INLINE endOfInput #-}

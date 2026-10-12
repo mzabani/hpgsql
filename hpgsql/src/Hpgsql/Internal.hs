@@ -137,7 +137,7 @@ import qualified Hpgsql.Builder as Builder
 import Hpgsql.Encoding.Internal (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.Internal.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), ConnectionString (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResetConnectionOpts (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
-import Hpgsql.Internal.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray, takePgMessageIdentAndLen)
+import Hpgsql.Internal.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray (..), takePgMessageIdentAndLen)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
@@ -551,7 +551,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
     go msgIdentChar fullMsgPBA nowBuf nowBufLen = mask_ $ modifyIORefIO recvBuffer $ do
-      let bufferWithoutMsg = PBA.fromStrict $ PBA.copyStrictSlice (PBA.length fullMsgPBA) (nowBufLen - PBA.length fullMsgPBA) nowBuf
+      let bufferWithoutMsg = PBA.fromStrict $ PBA.copyStrictSlice fullMsgPBA.len (nowBufLen - fullMsgPBA.len) nowBuf
           fullMsg = LBS.fromStrict $ PBA.toByteString fullMsgPBA
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
@@ -587,7 +587,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
            in case Parser.parseOnly Parser.parseManyRows strictNowBuf of
                 Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) | nRowsParsed > 0 -> do
                   let (msgs, unconsumedBuffer) = PBA.splitAt unconsumedBufferBegin.idx strictNowBuf
-                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (PBA.length msgs)
+                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show msgs.len
                   pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
                 _ -> handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
