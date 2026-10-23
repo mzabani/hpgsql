@@ -97,7 +97,7 @@ library
       TemplateHaskell
       ViewPatterns
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path
+  ghc-options: -Wall -Wincomplete-uni-patterns -Wunused-packages -Wpartial-fields -optP-Wno-nonportable-include-path -finfo-table-map -fdistinct-constructor-tables
   build-depends:
     Only >= 0.1 && < 0.2,
     aeson >= 2.2 && < 2.3,
