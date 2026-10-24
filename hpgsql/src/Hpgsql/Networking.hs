@@ -26,7 +26,7 @@ import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.Int (Int64)
 import Foreign (Ptr, Storable (..), Word8, allocaArray, castPtr, nullPtr, plusPtr)
 import Foreign.C (CInt (..), CSize (..), eAGAIN, eWOULDBLOCK, getErrno)
-import GHC.Base (Addr#)
+import GHC.Base (Addr#, Int (..))
 import Hpgsql.Internal.PinnedByteArray (PinnedByteArray, createPinnedByteArray)
 import Network.Socket (Socket, withFdSocket)
 import System.Posix.Types (CSsize (..))
@@ -38,7 +38,7 @@ socketWaitWrite :: Socket -> IO ()
 socketWaitWrite socket = withFdSocket socket (threadWaitWrite . fromIntegral)
 
 recvNonBlocking :: Socket -> Int -> IO PinnedByteArray
-recvNonBlocking s nbytes = withFdSocket s $ \fd -> createPinnedByteArray nbytes $ \buffer -> do
+recvNonBlocking s nbytes@(I# nbytes#) = withFdSocket s $ \fd -> createPinnedByteArray nbytes# $ \buffer -> do
   -- Largely copied from https://hackage-content.haskell.org/package/network-3.2.8.0/docs/src/Network.Socket.Buffer.html#recvBufNoWait and other functions from the network library,
   -- but then modified to our needs.
   r <- c_recv fd buffer (fromIntegral nbytes) 0 {-flags-}

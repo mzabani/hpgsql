@@ -88,7 +88,7 @@ import Data.Int (Int16, Int32, Int64)
 import Foreign.C (CInt (..))
 import Foreign.Marshal.Utils (copyBytes)
 import Foreign.Ptr (plusPtr)
-import GHC.Base (Addr#, ByteArray#, Char (..), IO (..), Int (..), MutableByteArray#, RealWorld, byteArrayContents#, compareByteArrays#, indexWord8ArrayAsChar#, indexWord8ArrayAsWord32#, mutableByteArrayContents#, newPinnedByteArray#, unIO, unsafeFreezeByteArray#, (+#), (<#), (>=#))
+import GHC.Base (Addr#, ByteArray#, Char (..), IO (..), Int (..), MutableByteArray#, RealWorld, byteArrayContents#, compareByteArrays#, indexWord8ArrayAsChar#, indexWord8ArrayAsWord32#, mutableByteArrayContents#, newPinnedByteArray#, unIO, unsafeFreezeByteArray#, (+#), (-#), (<#), (>#), (>=#))
 import GHC.Exts (indexWord8Array#, indexWord8ArrayAsWord16#, indexWord8ArrayAsWord64#)
 import GHC.Ptr (Ptr (..))
 import System.IO.Unsafe (unsafeDupablePerformIO)
@@ -140,20 +140,20 @@ fromChunks pbas =
 
 {-# NOINLINE emptyPBA #-}
 emptyPBA :: PinnedByteArray
-emptyPBA = unsafeDupablePerformIO $ createPinnedByteArray 0 (\_ -> pure 0)
+emptyPBA = unsafeDupablePerformIO $ createPinnedByteArray 0# (\_ -> pure 0)
 
 emptyLazyPBA :: LazyPinnedByteArray
 emptyLazyPBA = fromStrict emptyPBA
 
-createPinnedByteArray :: Int -> (Addr# -> IO CInt) -> IO PinnedByteArray
-createPinnedByteArray (I# size#) f = IO $ \s0 ->
+createPinnedByteArray :: Int# -> (Addr# -> IO CInt) -> IO PinnedByteArray
+createPinnedByteArray size# f = IO $ \s0 ->
   let !(# newRW, mutArr# :: MutableByteArray# RealWorld #) = newPinnedByteArray# size# s0
       !(# newRW', lenCopied #) = unIO (f (mutableByteArrayContents# mutArr#)) newRW
       !(# finalRW, frozenArr# #) = unsafeFreezeByteArray# mutArr# newRW'
    in (# finalRW, PinnedByteArray 0 (fromIntegral lenCopied) frozenArr# #)
 
 fromByteString :: ByteString -> PinnedByteArray
-fromByteString (BS fptr len) = unsafeDupablePerformIO $ createPinnedByteArray len $ \dst -> withForeignPtr fptr $ \src -> do
+fromByteString (BS fptr len@(I# len#)) = unsafeDupablePerformIO $ createPinnedByteArray len# $ \dst -> withForeignPtr fptr $ \src -> do
   copyBytes (Ptr dst) src len
   pure $ fromIntegral len
 
@@ -166,13 +166,13 @@ toByteString (PinnedByteArray start len src) = unsafeDupablePerformIO $ Internal
 -- | Assuming the pinned byte array contains valid UTF8 text, creates
 -- returns an instance of `Text` with the same contents (but does make a copy).
 unsafeToUtf8Text :: ByteStringIdx -> Int -> PinnedByteArray -> Either String Text
-unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray {}) = let !(PinnedByteArray start arrLen arr#) = copyStrictSlice (I# idx) desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
+unsafeToUtf8Text idx desiredLen pba@(PinnedByteArray {}) = let !(PinnedByteArray start arrLen arr#) = copyStrictSlice idx desiredLen (fromStrict pba) in if arrLen /= desiredLen then Left "Insufficient bytes in buffer in unsafeToUtf8Text" else Right $ Text (ByteArray arr#) start arrLen
 
 takePgMessageIdentAndLen :: LazyPinnedByteArray -> Maybe (Char, Int32)
 takePgMessageIdentAndLen lpba@(LazyPinnedByteArray len _) =
   if len >= 5
     then
-      let !(PinnedByteArray (I# start) _ arr#) = copyStrictSlice 0 5 lpba
+      let !(PinnedByteArray (I# start) _ arr#) = copyStrictSlice 0# 5 lpba
        in Just (C# (indexWord8ArrayAsChar# arr# start), fromIntegral $ fromBigEndian32 $ W32# (indexWord8ArrayAsWord32# arr# (start +# 1#)))
     else Nothing
 
@@ -196,26 +196,45 @@ fromStrict pba@(PinnedByteArray _ len _) = LazyPinnedByteArray len [pba]
 -- when there's already just a single chunk.
 toStrict :: LazyPinnedByteArray -> PinnedByteArray
 toStrict (LazyPinnedByteArray _ [pba]) = pba
-toStrict lpba@(LazyPinnedByteArray totalLen _) = copyStrictSlice 0 totalLen lpba
+toStrict lpba@(LazyPinnedByteArray totalLen _) = copyStrictSlice 0# totalLen lpba
 
 -- | Creates a strict PBA from a Lazy one, but just with the first `n`
 -- bytes after the first `skip` (or less if they're not all there).
 -- The returned `PinnedByteArray` is _always_ pointing to a new copy of
 -- the bytes in the supplied `LazyPinnedByteArray` - no reference is kept
 -- to the supplied bytes.
-copyStrictSlice :: Int -> Int -> LazyPinnedByteArray -> PinnedByteArray
-copyStrictSlice (max 0 -> skip) (max 0 -> n') (LazyPinnedByteArray totalLen' (reverse -> chunks)) =
-  let n = min n' totalLen'
+copyStrictSlice :: Int# -> Int -> LazyPinnedByteArray -> PinnedByteArray
+copyStrictSlice skip' (max 0 -> (I# n')) (LazyPinnedByteArray (I# totalLen') (reverse -> chunks)) =
+  let n = min# n' totalLen'
+      skip = max# 0# skip'
    in unsafeDupablePerformIO $ createPinnedByteArray n $ \dst -> do
-        let go !copied !_ !_ [] = pure copied
-            go !copied !_ 0 !_ = pure copied
-            go !offset !skipLeft !nLeft (PinnedByteArray start l arr# : rest) = do
-              let toSkipSrc = min l skipLeft
-                  toCopy = min nLeft (l - toSkipSrc)
-              when (toCopy > 0 && toSkipSrc < l) $ copyBytes (Ptr dst `plusPtr` offset) (Ptr (byteArrayContents# arr#) `plusPtr` (start + toSkipSrc)) toCopy
-              when (toCopy < 0) $ error "toCopy < 0 should be impossible"
-              go (offset + toCopy) (skipLeft - toSkipSrc) (nLeft - toCopy) rest
-        fromIntegral <$> go 0 skip n chunks
+        let go :: Int# -> Int# -> Int# -> [PinnedByteArray] -> IO Int
+            go copied _ _ [] = pure (I# copied)
+            go copied _ 0# _ = pure (I# copied)
+            go offset skipLeft nLeft (PinnedByteArray start (I# l) arr# : rest) = do
+              let toSkipSrc = min# l skipLeft
+                  toCopy# = min# nLeft (l -# toSkipSrc)
+              when (gt0 toCopy# && lt0 (toSkipSrc -# l)) $ copyBytes (Ptr dst `plusPtr` I# offset) (Ptr (byteArrayContents# arr#) `plusPtr` (start + I# toSkipSrc)) (I# toCopy#)
+              when (lt0 toCopy#) $ error "toCopy < 0 should be impossible"
+              go (offset +# toCopy#) (skipLeft -# toSkipSrc) (nLeft -# toCopy#) rest
+        fromIntegral <$> go 0# skip n chunks
+  where
+    lt0 :: Int# -> Bool
+    lt0 a = case a <# 0# of
+      1# -> True
+      _ -> False
+    gt0 :: Int# -> Bool
+    gt0 a = case a ># 0# of
+      1# -> True
+      _ -> False
+    max# :: Int# -> Int# -> Int#
+    max# a b = case a ># b of
+      1# -> a
+      _ -> b
+    min# :: Int# -> Int# -> Int#
+    min# a b = case a ># b of
+      1# -> b
+      _ -> a
 
 splitAt :: Int -> PinnedByteArray -> (PinnedByteArray, PinnedByteArray)
 splitAt n pba = (take n pba, drop n pba)

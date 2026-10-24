@@ -14,6 +14,7 @@ import Hedgehog (Gen, PropertyT, annotateShow, (===))
 import qualified Hedgehog as Gen
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Gen
+import GHC.Exts (Int (..))
 import Hpgsql.Internal.PinnedByteArray (PinnedByteArray)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Test.Hspec
@@ -42,7 +43,7 @@ slicingStrictAndLazyPBAs = hedgehog $ do
       lazyPba = PBA.fromChunks (map PBA.fromByteString bss)
       bs = LBS.toStrict lazyBs
       pba = PBA.fromByteString bs
-      len = PBA.length pba
+      len = I# (PBA.length pba)
 
   -- `toStrict` here will just match on a singleton list.. but
   -- let's test it anyway
@@ -57,21 +58,22 @@ slicingStrictAndLazyPBAs = hedgehog $ do
   n <- Gen.forAll $ Gen.int (Gen.linear 0 (len + 10))
   let slicedBs = BS.take n (BS.drop skip bs)
       slicedPba = PBA.take n (PBA.drop skip pba)
-      slicedLazyPba = PBA.copyStrictSlice skip n lazyPba
+      !(I# skip#) = skip
+      slicedLazyPba = PBA.copyStrictSlice skip# n lazyPba
   PBA.toByteString slicedPba === slicedBs
   slicedPba === PBA.fromByteString slicedBs
-  PBA.length slicedPba === BS.length slicedBs
+  I# (PBA.length slicedPba) === BS.length slicedBs
   PBA.toByteString slicedLazyPba === slicedBs
-  PBA.length slicedLazyPba === BS.length slicedBs
+  I# (PBA.length slicedLazyPba) === BS.length slicedBs
 
 unsafeToUtf8TextIdentity :: PropertyT IO ()
 unsafeToUtf8TextIdentity = hedgehog $ do
   t :: Text <- Gen.forAll $ Gen.text (Gen.linear 0 9999) Gen.unicode
   let bs = encodeUtf8 t
   let pba = PBA.fromByteString bs
-  PBA.unsafeToUtf8Text 0# (PBA.length pba) pba === Right t
+  PBA.unsafeToUtf8Text 0# (I# (PBA.length pba)) pba === Right t
   -- Out-of-bounds correctly detected
-  PBA.unsafeToUtf8Text 0# (PBA.length pba + 1) pba === Left "Insufficient bytes in buffer in unsafeToUtf8Text"
+  PBA.unsafeToUtf8Text 0# (I# (PBA.length pba) + 1) pba === Left "Insufficient bytes in buffer in unsafeToUtf8Text"
 
 genPba :: Gen PinnedByteArray
 genPba = PBA.fromByteString <$> Gen.bytes (Gen.linear 0 9999)

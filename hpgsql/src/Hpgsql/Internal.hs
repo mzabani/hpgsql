@@ -540,7 +540,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   let lenLeftToFetch :: Int = fromIntegral $ lenPlus4 - 4
       fullMessageLen = 5 + lenLeftToFetch
   (nowBuf, nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
-  let fullMsg = PBA.copyStrictSlice 0 fullMessageLen nowBuf
+  let fullMsg = PBA.copyStrictSlice 0# fullMessageLen nowBuf
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg nowBuf nowBufLen
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
@@ -555,7 +555,8 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
     go msgIdentChar fullMsgPBA nowBuf nowBufLen = mask_ $ modifyIORefIO recvBuffer $ do
-      let bufferWithoutMsg = PBA.fromStrict $ PBA.copyStrictSlice fullMsgPBA.len (nowBufLen - fullMsgPBA.len) nowBuf
+      let !(I# fullMsgLen#) = fullMsgPBA.len
+          bufferWithoutMsg = PBA.fromStrict $ PBA.copyStrictSlice fullMsgLen# (nowBufLen - fullMsgPBA.len) nowBuf
           fullMsg = LBS.fromStrict $ PBA.toByteString fullMsgPBA
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
@@ -1764,7 +1765,7 @@ _globalDebugLock = unsafePerformIO $ newMVar True
 debugPrint :: String -> IO ()
 debugPrint _ = pure ()
 
--- debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
+-- debugPrint _ = pure ()
 
 {-# INLINE timeDebugNonBlockingOperation #-}
 timeDebugNonBlockingOperation :: String -> IO a -> IO a
