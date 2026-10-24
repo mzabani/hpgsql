@@ -64,7 +64,9 @@ module Hpgsql.Internal.PinnedByteArray
 
     -- * Binary (de)serializer
     ByteStringIdx,
-    BoxedByteStringIdx (..),
+    EitherByteStringIdx (..),
+    EitherSpecialDecoder (..),
+    SpecialDecoderResult (..),
     decodeInt16BE,
     decodeInt32BE,
     decodeInt64BE,
@@ -306,8 +308,14 @@ unsafeEncodeWord n endianConvert len =
 
 type ByteStringIdx = Int#
 
-newtype BoxedByteStringIdx = BoxedByteStringIdx {idx :: Int}
-  deriving newtype (Eq, Num, Show)
+data EitherByteStringIdx = LeftB !String | RightB !ByteStringIdx
+
+data SpecialDecoderResult a = SpecialDecoderResult
+  { maybeVal :: !(Maybe a),
+    specialIdx :: !ByteStringIdx
+  }
+
+data EitherSpecialDecoder a = LeftSD !String | RightSD !(SpecialDecoderResult a)
 
 {-# INLINE decodeInt16BE #-}
 decodeInt16BE :: ByteStringIdx -> PinnedByteArray -> Either String Int16
@@ -364,10 +372,10 @@ encodePgBoolean v = if v then "\SOH" else "\NUL"
 -- | A super specialized decoder to decode a postgres DataRow message
 -- more quickly than a naive implementation.
 -- Returns the index into the left-unparsed contents of the supplied bytestring.
-decodeDataRow :: ByteStringIdx -> PinnedByteArray -> Either String BoxedByteStringIdx
+decodeDataRow :: ByteStringIdx -> PinnedByteArray -> EitherByteStringIdx
 decodeDataRow idx sbs@(PinnedByteArray _ (I# len) _) =
   -- We have a fast path when rows are at least 8 bytes long (should be the case
-  -- for all but 0-column query results or bytestring chunks "cut in the middle of the message")
+  -- for all but 1-column query results or bytestring chunks "cut in the middle of the message")
   -- by playing with bitwise operations.
   -- Whether this is worth keeping is sort of questionable. It's complex
   -- (even if I think it's safe and well tested) and reduces runtime of one of
@@ -382,19 +390,20 @@ decodeDataRow idx sbs@(PinnedByteArray _ (I# len) _) =
        in if msgIdentByte64 == letterD
             then
               toResult (fromIntegral lenFullMsg)
-            else Left "Not a DataRow (Word64 bits decoding path)"
+            else LeftB "Not a DataRow (Word64 bits decoding path)"
     Left _ ->
       -- It is possible the DataRow has length less than 8 bytes, so
       -- we still have to try to parse that.
       case len >=# 5# +# idx of
         1# -> do
-          msgIdentChar <- decodeWord8 idx sbs
-          lenFullMsg <- decodeInt32BE (1# +# idx) sbs
-          if msgIdentChar == 68 -- Letter 'D'
-            then toResult (fromIntegral lenFullMsg)
-            else Left "Not a DataRow"
-        _ -> Left "Less than enough bytes to decode a DataRow"
+          case (,) <$> decodeWord8 idx sbs <*> decodeInt32BE (1# +# idx) sbs of
+            Left err -> LeftB err
+            Right (msgIdentChar, lenFullMsg) ->
+              if msgIdentChar == 68 -- Letter 'D'
+                then toResult (fromIntegral lenFullMsg)
+                else LeftB "Not a DataRow"
+        _ -> LeftB "Less than enough bytes to decode a DataRow"
   where
     toResult (I# lenFullMsg) = case len >=# 1# +# lenFullMsg +# idx of
-      1# -> Right $ BoxedByteStringIdx $ 1 + (I# lenFullMsg) + (I# idx)
-      _ -> Left "Less than enough bytes to decode a full DataRow"
+      1# -> RightB (1# +# lenFullMsg +# idx)
+      _ -> LeftB "Less than enough bytes to decode a full DataRow"

@@ -47,7 +47,7 @@ import Data.Text (Text)
 import Data.Word (Word32, Word64, Word8)
 import GHC.Base (Int (..), Int#, LiftedRep, RuntimeRep (..), TYPE, (+#), (<=#), (>=#))
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
-import Hpgsql.Internal.PinnedByteArray (BoxedByteStringIdx (..), ByteStringIdx, PinnedByteArray)
+import Hpgsql.Internal.PinnedByteArray (ByteStringIdx, EitherByteStringIdx (..), EitherSpecialDecoder (..), PinnedByteArray, SpecialDecoderResult (..))
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Prelude hiding (take)
 
@@ -68,7 +68,7 @@ data ParseResultInt#
 
 data ParseResultRows
   = ParseFailRows !String
-  | ParseOkRows !(# ByteStringIdx, Int# #)
+  | ParseOkRows {-# UNPACK #-} !(# ByteStringIdx, Int# #)
 
 -- | A parser that consumes a strict 'PinnedByteArray'.
 newtype ParserPol (rep :: RuntimeRep) (a :: TYPE rep) = Parser
@@ -309,8 +309,8 @@ takeWord64BE = Parser $ \idx bs kf ks ->
 takeDataRow :: ParserPol 'IntRep ByteStringIdx
 takeDataRow = Parser $ \idx bs kf ks ->
   case PBA.decodeDataRow idx bs of
-    Left err -> kf err
-    Right (BoxedByteStringIdx (I# idxRest#)) -> ks idxRest# idxRest# bs
+    LeftB err -> kf err
+    RightB idxRest# -> ks idxRest# idxRest# bs
 
 -- | Parses as many PG rows as there are available, returns
 -- the index/offset of the first left-unparsed byte and the
