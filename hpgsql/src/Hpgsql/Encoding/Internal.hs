@@ -2,7 +2,7 @@
 -- For the disabled warning, see Note [singleField fieldDecoder rewrite rules]
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-inline-rule-shadowing #-}
-{-# OPTIONS_GHC -ddump-simpl -ddump-to-file #-}
+{-# OPTIONS_GHC -ddump-simpl -dsuppress-coercions -dsuppress-module-prefixes -dsuppress-type-applications -ddump-to-file #-}
 
 module Hpgsql.Encoding.Internal
   ( -- * Decoding

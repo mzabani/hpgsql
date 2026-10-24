@@ -1,7 +1,7 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE UnboxedTuples #-}
-{-# OPTIONS_GHC -ddump-simpl -ddump-to-file #-}
+{-# OPTIONS_GHC -ddump-simpl -dsuppress-coercions -dsuppress-module-prefixes -dsuppress-type-applications -ddump-to-file #-}
 
 -- |
 -- A minimal attoparsec-like parser that uses CPS to reduce allocations

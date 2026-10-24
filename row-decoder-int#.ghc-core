@@ -1,0 +1,234 @@
+-- RHS size: {terms: 223, types: 348, coercions: 34, joins: 0/8}
+$fFromPgRowBestCaseScenarioRecord_$crowDecoder
+  :: RowDecoder BestCaseScenarioRecord
+[GblId]
+$fFromPgRowBestCaseScenarioRecord_$crowDecoder
+  = case $fFromPgFieldInt_$cfieldRowDecoder of
+    { RowDecoder ww_i8Oh ww1_i8Oi ww2_i8Oj ->
+    case $fFromPgFieldDay_$cfieldRowDecoder of
+    { RowDecoder p2_i7zD tc2_i7zE bx1_i7zF ->
+    case textFieldDecoder of { FieldDecoder ds1_i8Q1 ds2_i8Q2 ->
+    case ds2_i8Q2 of typeCheck_i8DY { __DEFAULT ->
+    let {
+      unbx_s8LZ :: Int#
+      [LclId]
+      unbx_s8LZ = +# ww2_i8Oj bx1_i7zF } in
+    RowDecoder
+      (\ (colTypes_i7zB :: [FieldInfo]) ->
+         let {
+           ds4_s8Mn [Dmd=LP(ML,ML)] :: ([FieldInfo], [FieldInfo])
+           [LclId]
+           ds4_s8Mn
+             = case <=# unbx_s8LZ 0# of {
+                 __DEFAULT ->
+                   case splitAt_$s$wsplitAt' unbx_s8LZ colTypes_i7zB of
+                   { (# ww4_i8OK, ww5_i8OL #) ->
+                   (ww4_i8OK, ww5_i8OL)
+                   };
+                 1# -> ([], colTypes_i7zB)
+               } } in
+         let {
+           ds5_s8Mp [Dmd=LP(ML,ML)] :: ([FieldInfo], [FieldInfo])
+           [LclId]
+           ds5_s8Mp
+             = case <=# ww2_i8Oj 0# of {
+                 __DEFAULT ->
+                   case ds4_s8Mn of { (cols1_i7zP, cols2_i7zQ) ->
+                   case splitAt_$s$wsplitAt' ww2_i8Oj cols1_i7zP of
+                   { (# ww4_i8OK, ww5_i8OL #) ->
+                   (ww4_i8OK, ww5_i8OL)
+                   }
+                   };
+                 1# ->
+                   ([], case ds4_s8Mn of { (cols1_i7zP, cols2_i7zQ) -> cols1_i7zP })
+               } } in
+         let {
+           ds_i8Ox [Dmd=LC(S,C(1,C(1,C(1,L))))] :: ParserPol LiftedRep Int
+           [LclId]
+           ds_i8Ox
+             = ww_i8Oh
+                 (case ds5_s8Mp of { (cols1_i7zP, cols2_i7zQ) -> cols1_i7zP }) } in
+         let {
+           ds6_s8Mt [Dmd=LC(S,C(1,C(1,C(1,L))))] :: ParserPol LiftedRep Day
+           [LclId]
+           ds6_s8Mt
+             = p2_i7zD
+                 (case ds5_s8Mp of { (cols1_i7zU, cols2_i7zV) -> cols2_i7zV }) } in
+         let {
+           ds7_s8MN [Dmd=LC(S,C(1,C(1,C(1,L))))] :: ParserPol LiftedRep (Maybe Text)
+           [LclId]
+           ds7_s8MN
+             = case ds4_s8Mn of { (cols1_i7zU, cols2_i7zV) ->
+               case cols2_i7zV of {
+                 [] ->
+                   lvl_r8Rg
+                   `cast` <Co:5> :: (forall r.
+                                     ByteStringIdx
+                                     -> PinnedByteArray
+                                     -> (String -> r)
+                                     -> (Maybe Text -> ByteStringIdx -> PinnedByteArray -> r)
+                                     -> r)
+                                    ~R# ParserPol LiftedRep (Maybe Text);
+                 : singleColInfo_i8Eb ds3_i8Ec ->
+                   case ds3_i8Ec of {
+                     [] ->
+                       case lvl12_r8Rt of { FieldDecoder ds8_i8El ds9_i8Em ->
+                       case ds8_i8El singleColInfo_i8Eb Nothing of {
+                         Left err6_i8EE ->
+                           ($j19_r8Rr
+                              (\ (@r_i8EG)
+                                 _ [Occ=Dead]
+                                 _ [Occ=Dead]
+                                 (kf_i8EJ :: String -> r_i8EG)
+                                 _ [Occ=Dead] ->
+                                 kf_i8EJ err6_i8EE))
+                           `cast` <Co:5> :: (forall r.
+                                             ByteStringIdx
+                                             -> PinnedByteArray
+                                             -> (String -> r)
+                                             -> (Maybe Text
+                                                 -> ByteStringIdx -> PinnedByteArray -> r)
+                                             -> r)
+                                            ~R# ParserPol LiftedRep (Maybe Text);
+                         Right v_i8EL ->
+                           ($j19_r8Rr
+                              (\ (@r_i8EN)
+                                 (idx_i8EO :: ByteStringIdx)
+                                 (bs_i8EP :: PinnedByteArray)
+                                 _ [Occ=Dead]
+                                 (ks_i8ER
+                                    :: Maybe Text -> ByteStringIdx -> PinnedByteArray -> r_i8EN) ->
+                                 ks_i8ER v_i8EL idx_i8EO bs_i8EP))
+                           `cast` <Co:5> :: (forall r.
+                                             ByteStringIdx
+                                             -> PinnedByteArray
+                                             -> (String -> r)
+                                             -> (Maybe Text
+                                                 -> ByteStringIdx -> PinnedByteArray -> r)
+                                             -> r)
+                                            ~R# ParserPol LiftedRep (Maybe Text)
+                       }
+                       };
+                     : ipv_i8ES ipv1_i8ET ->
+                       lvl_r8Rg
+                       `cast` <Co:5> :: (forall r.
+                                         ByteStringIdx
+                                         -> PinnedByteArray
+                                         -> (String -> r)
+                                         -> (Maybe Text -> ByteStringIdx -> PinnedByteArray -> r)
+                                         -> r)
+                                        ~R# ParserPol LiftedRep (Maybe Text)
+                   }
+               }
+               } } in
+         (\ (@r_X8)
+            (idx_X9 :: ByteStringIdx)
+            (bs_Xa :: PinnedByteArray)
+            (kf_Xb :: String -> r_X8)
+            (ks_Xc
+               :: BestCaseScenarioRecord
+                  -> ByteStringIdx -> PinnedByteArray -> r_X8) ->
+            (ds_i8Ox
+             `cast` <Co:3> :: ParserPol LiftedRep Int
+                              ~R# (forall r.
+                                   ByteStringIdx
+                                   -> PinnedByteArray
+                                   -> (String -> r)
+                                   -> (Int -> ByteStringIdx -> PinnedByteArray -> r)
+                                   -> r))
+              idx_X9
+              bs_Xa
+              kf_Xb
+              (\ (a1_i8OD :: Int)
+                 (bs'_i8OE :: ByteStringIdx)
+                 (idx'_i7CJ :: PinnedByteArray) ->
+                 (ds6_s8Mt
+                  `cast` <Co:3> :: ParserPol LiftedRep Day
+                                   ~R# (forall r.
+                                        ByteStringIdx
+                                        -> PinnedByteArray
+                                        -> (String -> r)
+                                        -> (Day -> ByteStringIdx -> PinnedByteArray -> r)
+                                        -> r))
+                   bs'_i8OE
+                   idx'_i7CJ
+                   kf_Xb
+                   (\ (a2_i7CK :: Day)
+                      (bs''_i7CL :: ByteStringIdx)
+                      (idx''_i7CM :: PinnedByteArray) ->
+                      (ds7_s8MN
+                       `cast` <Co:4> :: ParserPol LiftedRep (Maybe Text)
+                                        ~R# (forall r.
+                                             ByteStringIdx
+                                             -> PinnedByteArray
+                                             -> (String -> r)
+                                             -> (Maybe Text
+                                                 -> ByteStringIdx -> PinnedByteArray -> r)
+                                             -> r))
+                        bs''_i7CL
+                        idx''_i7CM
+                        kf_Xb
+                        (\ (a3_Xe :: Maybe Text)
+                           (bs''1_Xf :: ByteStringIdx)
+                           (idx''1_Xg :: PinnedByteArray) ->
+                           ks_Xc
+                             ($WBestCaseScenarioRecord a1_i8OD a2_i7CK a3_Xe)
+                             bs''1_Xf
+                             idx''1_Xg))))
+         `cast` <Co:4> :: (forall r.
+                           ByteStringIdx
+                           -> PinnedByteArray
+                           -> (String -> r)
+                           -> (BestCaseScenarioRecord
+                               -> ByteStringIdx -> PinnedByteArray -> r)
+                           -> r)
+                          ~R# ParserPol LiftedRep BestCaseScenarioRecord)
+      (\ (colTypes_i7CN :: [FieldInfo]) ->
+         let {
+           ds4_s8MR [Dmd=LP(ML,ML)] :: ([FieldInfo], [FieldInfo])
+           [LclId]
+           ds4_s8MR
+             = case <=# unbx_s8LZ 0# of {
+                 __DEFAULT ->
+                   case splitAt_$s$wsplitAt' unbx_s8LZ colTypes_i7CN of
+                   { (# ww4_i8OK, ww5_i8OL #) ->
+                   (ww4_i8OK, ww5_i8OL)
+                   };
+                 1# -> ([], colTypes_i7CN)
+               } } in
+         let {
+           ds5_s8MT [Dmd=LP(ML,ML)] :: ([FieldInfo], [FieldInfo])
+           [LclId]
+           ds5_s8MT
+             = case <=# ww2_i8Oj 0# of {
+                 __DEFAULT ->
+                   case ds4_s8MR of { (cols1_i7CY, cols2_i7CZ) ->
+                   case splitAt_$s$wsplitAt' ww2_i8Oj cols1_i7CY of
+                   { (# ww4_i8OK, ww5_i8OL #) ->
+                   (ww4_i8OK, ww5_i8OL)
+                   }
+                   };
+                 1# ->
+                   ([], case ds4_s8MR of { (cols1_i7CY, cols2_i7CZ) -> cols1_i7CY })
+               } } in
+         ++
+           (ww1_i8Oi
+              (case ds5_s8MT of { (cols1_i7CY, cols2_i7CZ) -> cols1_i7CY }))
+           (++
+              (tc2_i7zE
+                 (case ds5_s8MT of { (cols1_i7D2, cols2_i7D3) -> cols2_i7D3 }))
+              (case ds4_s8MR of { (cols1_i7D2, cols2_i7D3) ->
+               case cols2_i7D3 of {
+                 [] -> lvl28_r8RK;
+                 : singleColInfo_i8F1 ds3_i8F2 ->
+                   case ds3_i8F2 of {
+                     [] -> : (singleColInfo_i8F1, typeCheck_i8DY singleColInfo_i8F1) [];
+                     : ipv_i8F9 ipv1_i8Fa -> lvl28_r8RK
+                   }
+               }
+               })))
+      (+# unbx_s8LZ 1#)
+    }
+    }
+    }
+    }
