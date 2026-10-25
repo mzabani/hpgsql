@@ -1203,13 +1203,10 @@ boolFieldDecoder = parsePgType "Bool" [boolOid] $ const $ \case
 
 {-# INLINE boolRowDecoder #-}
 boolRowDecoder :: Parser.Parser (Maybe Bool)
-boolRowDecoder = do
+boolRowDecoder =
   -- This is a bit faster than the specialized less-than-4-bytes
   -- decoder. It's not just measurement noise. I wonder if it's CPU cache related, as this is much smaller, but I don't know.
-  len <- Parser.takeInt32BE
-  case len of
-    (-1) -> pure Nothing
-    _ -> Just . (== 1) <$> Parser.takeWord8
+  fmap (== 1) <$> Parser.takeWord8WithFieldLength
 
 instance FromPgField Bool where
   {-# INLINE fieldDecoder #-}
@@ -1249,7 +1246,7 @@ instance FromPgField Char where
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder finfo =
     if rootBaseTypeOf finfo == charOid
-      then fmap (chr . fromIntegral) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
+      then fmap (chr . fromIntegral) <$> Parser.takeWord8WithFieldLength
       else do
         mt <- specializedFieldDecoder @Text finfo
         case mt of

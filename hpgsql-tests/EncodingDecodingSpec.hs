@@ -168,9 +168,6 @@ spec = parallel $ do
       it
         "Domain types decode into larger Haskell types"
         domainTypesDecodeIntoLargerHaskellTypes
-    it
-      "Especially optimized less-than-4-bytes long value decoders work"
-      smallerThan4BytesValuesAndNullsRoundtrip
   aroundConn $ describe "Custom types" $ do
     it "Composite type" queryCompositeType
     it
@@ -206,39 +203,6 @@ valuesRoundTrip :: HPgConnection -> IO ()
 valuesRoundTrip conn = do
   let row = ((-49) :: Int, False :: Bool, 2 :: Int16, 3 :: Int32, fromGregorian 1900 02 28, 42 :: Int64, UTCTime (fromGregorian 1999 12 31) 0, '意' :: Char, '&' :: Char, CalendarDiffTime 3 86403, Nothing :: Maybe Bool)
   queryWith rowDecoder conn (mkQuery "SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11" row) `shouldReturn` [row]
-
-smallerThan4BytesValuesAndNullsRoundtrip :: PropertyT IO ()
-smallerThan4BytesValuesAndNullsRoundtrip = hedgehog $ do
-  w8 :: Maybe Word8 <- Gen.forAll $ Gen.maybe Gen.enumBounded
-  w16 :: Maybe Word16 <- Gen.forAll $ Gen.maybe Gen.enumBounded
-  w32 :: Maybe Word32 <- Gen.forAll $ Gen.maybe Gen.enumBounded
-  precedingBytes <- Gen.forAll $ Gen.bytes (Gen.linear 0 30)
-  trailingBytes <- Gen.forAll $ Gen.bytes (Gen.linear 0 30)
-  let mkRow :: (a -> BSBuilder.Builder) -> Maybe a -> PBA.PinnedByteArray
-      mkRow toBytes w =
-        let field = Builder.toStrictByteString $ case w of
-              Nothing -> Builder.binaryField SqlNull
-              Just v -> Builder.binaryField (NotNull $ BS.toStrict $ BSBuilder.toLazyByteString $ toBytes v)
-         in PBA.fromByteString $ precedingBytes <> field <> trailingBytes
-
-  let offset = PBA.ByteStringIdx (BS.length precedingBytes)
-      w8Field = mkRow BSBuilder.word8 w8
-      w16Field = mkRow BSBuilder.word16BE w16
-      w32Field = mkRow BSBuilder.word32BE w32
-  PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize1 offset w8Field === Right (w8, offset + if isNothing w8 then 4 else 5)
-  PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize2 offset w16Field === Right (w16, offset + if isNothing w16 then 4 else 6)
-  PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize4 offset w32Field === Right (w32, offset + if isNothing w32 then 4 else 8)
-  when (isJust w8) $ do
-    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize2 offset w8Field === differentTypeLengthErr
-    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize4 offset w8Field === differentTypeLengthErr
-  when (isJust w16) $ do
-    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize1 offset w16Field === differentTypeLengthErr
-    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize4 offset w16Field === differentTypeLengthErr
-  when (isJust w32) $ do
-    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize1 offset w32Field === differentTypeLengthErr
-    PBA.decodePgFieldWithAtMost4Bytes PBA.TypeSize2 offset w32Field === differentTypeLengthErr
-  where
-    differentTypeLengthErr = Left "decodePgFieldWithAtMost4Bytes being used to decode field with different length than the one asked for"
 
 byteaValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 byteaValuesRoundTrip conn = hedgehog $ do

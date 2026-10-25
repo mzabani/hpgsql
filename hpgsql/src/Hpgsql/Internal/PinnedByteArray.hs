@@ -77,7 +77,6 @@ module Hpgsql.Internal.PinnedByteArray
     encodeInt16BE,
     encodePgBoolean,
     decodeDataRow,
-    decodePgFieldWithAtMost4Bytes,
     WordDecoding (..),
   )
 where
@@ -267,12 +266,6 @@ data WordDecoding a where
   TypeSize2 :: WordDecoding Word16
   TypeSize4 :: WordDecoding Word32
 
-fromWordDec :: WordDecoding a -> WordDecodingAll a
-fromWordDec = \case
-  TypeSize1 -> CWord8
-  TypeSize2 -> CWord16
-  TypeSize4 -> CWord32
-
 {-# INLINE decodeWord #-}
 decodeWord :: WordDecodingAll a -> ByteStringIdx -> PinnedByteArray -> (a -> a) -> Either String a
 decodeWord wdec (ByteStringIdx boxedIdx@(I# idx)) (PinnedByteArray (I# start) len byArrSharp) endianConvert =
@@ -380,53 +373,3 @@ decodeDataRow idx sbs@(PinnedByteArray _ len _) =
     toResult lenFullMsg
       | len >= 1 + lenFullMsg + idx.idx = Right $ ByteStringIdx $ 1 + lenFullMsg + idx.idx
       | otherwise = Left "Less than enough bytes to decode a full DataRow"
-
-{-# INLINE decodePgFieldWithAtMost4Bytes #-}
-
--- | A specialized decoder that decodes a row field's
--- contents, but only for PG fields at most 4 bytes long and
--- at least 1 byte long (so no text or void types, for example).
--- This includes essentially int32, int16, and booleans.
--- Pass in as type argument a Word8, Word16 or Word32 to indicate
--- the size of the PG type you're decoding.
--- Returns the index into the first yet-unparsed byte.
-decodePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => WordDecoding a -> ByteStringIdx -> PinnedByteArray -> Either String (Maybe a, ByteStringIdx)
-decodePgFieldWithAtMost4Bytes wdec =
-  let (pgTypeSize, endianSwap, valueMask :: Word64) = case wdec of
-        TypeSize1 -> (1, Prelude.id, 0b00000000_00000000_00000000_00000000_11111111_00000000_00000000_00000000)
-        TypeSize2 -> (2, fromBigEndian16, 0b00000000_00000000_00000000_00000000_11111111_11111111_00000000_00000000)
-        TypeSize4 -> (4, fromBigEndian32, 0b00000000_00000000_00000000_00000000_11111111_11111111_11111111_11111111)
-      valueShift :: Int = 8 * (4 - pgTypeSize)
-   in \idx bs ->
-        -- We try the most optimistic case first:
-        -- - Non-null 4 byte long types (like int32)
-        -- - Null int32 followed by at least one other field (not the last field in the row)
-        -- - Shorter types (int16, bool) followed by at least one other field (not the last field in the row)
-        -- In all the cases above, there are at least 8 bytes in the row, so our decoding into a Word64 will succeed.
-        case decodeWord CWord64 idx bs fromBigEndian64 of
-          Right (w64 :: Word64) ->
-            let fieldLenW64 :: Word64 = flip unsafeShiftR 32 $ w64 .&. 0b11111111_11111111_11111111_11111111_00000000_00000000_00000000_00000000
-                fieldIfNotNull :: a = fromIntegral $ unsafeShiftR (w64 .&. valueMask) valueShift
-             in if fieldLenW64 == 0xFFFFFFFF -- (-1) in two's-complement
-                  then
-                    Right (Nothing, idx + 4)
-                  else
-                    if fromIntegral fieldLenW64 == pgTypeSize
-                      then
-                        Right (Just fieldIfNotNull, idx + 4 + fromIntegral fieldLenW64)
-                      else Left "decodePgFieldWithAtMost4Bytes being used to decode field with different length than the one asked for"
-          Left _ -> do
-            -- This is the not-as-optimistic case, which includes:
-            -- - A NULL int32 as the last field in the row
-            -- - A bool/int8/int16 that is the last field in the row
-            lenField <- decodeInt32BE idx bs
-            if lenField == fromIntegral pgTypeSize
-              then do
-                -- peek after the next 4 bytes for @a
-                fieldValue <- decodeWord (fromWordDec wdec) (idx + 4) bs endianSwap
-                Right (Just fieldValue, idx + 4 + fromIntegral lenField)
-              else
-                if lenField == (-1)
-                  then
-                    Right (Nothing, idx + 4)
-                  else Left "decodePgFieldWithAtMost4Bytes being used to decode field with different length than the one asked for"
