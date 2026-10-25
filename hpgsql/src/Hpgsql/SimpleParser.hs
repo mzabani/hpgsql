@@ -1,14 +1,5 @@
 -- |
--- A minimal attoparsec-like parser that uses CPS to reduce allocations
--- and perform better than attoparsec, at least the way we use it in
--- hpgsql.
---
--- In benchmarks, this improved performance by 12-15% materializing
--- query results when it was introduced.
--- With the INLINE pragma in RowDecoder's Applicative's (<*>), GHC's
--- inliner was finally able to make full use of continuation passing,
--- and performance was improved by another ~14.3%, with total memory
--- allocations reduced by ~6%.
+-- An attoparsec-like parser for 'PinnedByteArray'.
 module Hpgsql.SimpleParser
   ( Parser (..),
     ParseResult (..),
@@ -47,49 +38,57 @@ data ParseResult a
   | ParseOk !a
   deriving stock (Show)
 
+-- | This looks a lot like `ParseResult`, but it's an internal type and it
+-- has parser state to thread through.
+data ParseState a = ParseStateFail !String | ParseStateSuccess !a !ByteStringIdx !PinnedByteArray
+
 -- | A parser that consumes a strict 'PinnedByteArray'.
 newtype Parser a = Parser
   { unParser ::
-      forall r.
       ByteStringIdx ->
       PinnedByteArray ->
-      (String -> r) ->
-      -- \^ failure continuation
-      (a -> ByteStringIdx -> PinnedByteArray -> r) ->
-      -- \^ success continuation, taking original or new PinnedByteArray, the index into the original/new bytestring of the first yet-unparsed byte, and parsed value
-      r
+      ParseState a
+      -- \^ either a failure message, or the parsed value along with the
+      -- index into the original/new bytestring of the first yet-unparsed
+      -- byte, and the original or new 'PinnedByteArray'
   }
 
 instance Functor Parser where
-  fmap f (Parser p) = Parser $ \idx bs kf ks ->
-    p idx bs kf (\a bs' -> ks (f a) bs')
+  fmap f (Parser p) = Parser $ \idx bs -> case p idx bs of
+    ParseStateFail err -> ParseStateFail err
+    ParseStateSuccess a idx' bs' -> ParseStateSuccess (f a) idx' bs'
   {-# INLINE fmap #-}
 
 instance Applicative Parser where
-  pure a = Parser $ \idx bs _ ks -> ks a idx bs
+  pure a = Parser $ \idx bs -> ParseStateSuccess a idx bs
   {-# INLINE pure #-}
 
-  Parser pf <*> Parser pa = Parser $ \idx bs kf ks ->
-    pf idx bs kf (\f bs' idx' -> pa bs' idx' kf (\a bs'' idx'' -> ks (f a) bs'' idx''))
+  Parser pf <*> Parser pa = Parser $ \idx bs -> case pf idx bs of
+    ParseStateFail err -> ParseStateFail err
+    ParseStateSuccess f idx' bs' -> case pa idx' bs' of
+      ParseStateFail err -> ParseStateFail err
+      ParseStateSuccess a idx'' bs'' -> ParseStateSuccess (f a) idx'' bs''
   {-# INLINE (<*>) #-}
 
 instance Alternative Parser where
   empty = fail "empty Alternative"
   {-# INLINE empty #-}
-  Parser p1 <|> Parser p2 = Parser $ \idx bs kf ks ->
-    p1 idx bs (\_ -> p2 idx bs kf ks) ks
+  Parser p1 <|> Parser p2 = Parser $ \idx bs -> case p1 idx bs of
+    ParseStateFail _ -> p2 idx bs
+    r -> r
   {-# INLINE (<|>) #-}
 
 instance Monad Parser where
   return = pure
   {-# INLINE return #-}
 
-  Parser p >>= k = Parser $ \idx bs kf ks ->
-    p idx bs kf (\a bs' idx' -> unParser (k a) bs' idx' kf ks)
+  Parser p >>= k = Parser $ \idx bs -> case p idx bs of
+    ParseStateFail err -> ParseStateFail err
+    ParseStateSuccess a idx' bs' -> unParser (k a) idx' bs'
   {-# INLINE (>>=) #-}
 
 instance MonadFail Parser where
-  fail msg = Parser $ \_ _ kf _ -> kf msg
+  fail msg = Parser $ \_ _ -> ParseStateFail msg
   {-# INLINE fail #-}
 
 -- | Run a parser and return either an error message or the parsed value,
@@ -103,13 +102,15 @@ parseOnly p = parseOnlyOffset p 0
 -- using the strict 'ParseResult' type. Any unconsumed trailing input is
 -- discarded.
 parseOnlyOffset :: Parser a -> ByteStringIdx -> PinnedByteArray -> ParseResult a
-parseOnlyOffset (Parser p) idx bs = p idx bs ParseFail (\a _ _ -> ParseOk a)
+parseOnlyOffset (Parser p) idx bs = case p idx bs of
+  ParseStateFail err -> ParseFail err
+  ParseStateSuccess a _ _ -> ParseOk a
 {-# INLINE parseOnlyOffset #-}
 
 -- | Consume exactly `n` bytes of input, failing if fewer than `n` bytes
 -- remain.
 take :: Int -> Parser PinnedByteArray
-take n = Parser $ \idx sbs kf ks ->
+take n = Parser $ \idx sbs ->
   let skip' = n + idx.idx
    in if PBA.length sbs >= skip'
         -- TODO: dropAndTake in a single call
@@ -117,50 +118,46 @@ take n = Parser $ \idx sbs kf ks ->
           -- Strict on the bytestring because we're pretty sure
           -- the field decoder will need to evaluate this anyway,
           -- so no need for an extra thunk
-          !h -> ks h (ByteStringIdx skip') sbs
-        else kf "take: insufficient bytes"
+          !h -> ParseStateSuccess h (ByteStringIdx skip') sbs
+        else ParseStateFail "take: insufficient bytes"
 {-# INLINE take #-}
 
 -- | Consume exactly `n` bytes of input, failing if fewer than `n` bytes
 -- remain, and assumes those next `n` bytes are UTF8 text, so returns them
 -- as `Text`.
 takeUtf8Text :: Int -> Parser Text
-takeUtf8Text n = Parser $ \idx sbs kf ks ->
+takeUtf8Text n = Parser $ \idx sbs ->
   let skip' = n + idx.idx
    in if PBA.length sbs >= skip'
         then case PBA.unsafeToUtf8Text idx n sbs of
-          Left err -> kf err
-          Right t -> ks t (ByteStringIdx skip') sbs
-        else kf ("take: wanted " <> show skip' <> " bytes but only " <> show (PBA.length sbs) <> " remain")
+          Left err -> ParseStateFail err
+          Right t -> ParseStateSuccess t (ByteStringIdx skip') sbs
+        else ParseStateFail ("take: wanted " <> show skip' <> " bytes but only " <> show (PBA.length sbs) <> " remain")
 {-# INLINE takeUtf8Text #-}
 
 -- | Consume exactly @n@ bytes of input, failing if fewer than @n@ bytes
 -- remain.
 skip :: Int -> Parser ()
-skip n = Parser $ \idx bs _ ks ->
-  ks () (ByteStringIdx $ idx.idx + n) bs
+skip n = Parser $ \idx bs -> ParseStateSuccess () (ByteStringIdx $ idx.idx + n) bs
 {-# INLINE skip #-}
 
 {-# INLINE takeInt16BE #-}
 takeInt16BE :: Parser Int16
-takeInt16BE = Parser $ \idx bs kf ks ->
-  case PBA.decodeInt16BE idx bs of
-    Right v -> ks v (idx + 2) bs
-    Left err -> kf err
+takeInt16BE = Parser $ \idx bs -> case PBA.decodeInt16BE idx bs of
+  Right v -> ParseStateSuccess v (idx + 2) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeInt32BE #-}
 takeInt32BE :: Parser Int32
-takeInt32BE = Parser $ \idx bs kf ks ->
-  case PBA.decodeInt32BE idx bs of
-    Right v -> ks v (idx + 4) bs
-    Left err -> kf err
+takeInt32BE = Parser $ \idx bs -> case PBA.decodeInt32BE idx bs of
+  Right v -> ParseStateSuccess v (idx + 4) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE peekInt32BE #-}
 peekInt32BE :: Parser Int32
-peekInt32BE = Parser $ \idx bs kf ks ->
-  case PBA.decodeInt32BE idx bs of
-    Right v -> ks v idx bs
-    Left err -> kf err
+peekInt32BE = Parser $ \idx bs -> case PBA.decodeInt32BE idx bs of
+  Right v -> ParseStateSuccess v idx bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeFloatBEWithFieldLength #-}
 
@@ -175,24 +172,21 @@ takeFloatBEWithFieldLength = do
 
 {-# INLINE takeFloatBE #-}
 takeFloatBE :: Parser Float
-takeFloatBE = Parser $ \idx bs kf ks ->
-  case PBA.decodeWord32BE idx bs of
-    Right v -> ks (castWord32ToFloat v) (idx + 4) bs
-    Left err -> kf err
+takeFloatBE = Parser $ \idx bs -> case PBA.decodeWord32BE idx bs of
+  Right v -> ParseStateSuccess (castWord32ToFloat v) (idx + 4) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeDoubleBE #-}
 takeDoubleBE :: Parser Double
-takeDoubleBE = Parser $ \idx bs kf ks ->
-  case PBA.decodeWord64BE idx bs of
-    Right v -> ks (castWord64ToDouble v) (idx + 8) bs
-    Left err -> kf err
+takeDoubleBE = Parser $ \idx bs -> case PBA.decodeWord64BE idx bs of
+  Right v -> ParseStateSuccess (castWord64ToDouble v) (idx + 8) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeWord8 #-}
 takeWord8 :: Parser Word8
-takeWord8 = Parser $ \idx bs kf ks ->
-  case PBA.decodeWord8 idx bs of
-    Right v -> ks v (idx + 1) bs
-    Left err -> kf err
+takeWord8 = Parser $ \idx bs -> case PBA.decodeWord8 idx bs of
+  Right v -> ParseStateSuccess v (idx + 1) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeWord8WithFieldLength #-}
 takeWord8WithFieldLength :: Parser (Maybe Word8)
@@ -237,40 +231,36 @@ takeInt64BEWithFieldLength = do
 
 {-# INLINE takeInt64BE #-}
 takeInt64BE :: Parser Int64
-takeInt64BE = Parser $ \idx bs kf ks ->
-  case PBA.decodeInt64BE idx bs of
-    Right v -> ks v (idx + 8) bs
-    Left err -> kf err
+takeInt64BE = Parser $ \idx bs -> case PBA.decodeInt64BE idx bs of
+  Right v -> ParseStateSuccess v (idx + 8) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeWord32BE #-}
 takeWord32BE :: Parser Word32
-takeWord32BE = Parser $ \idx bs kf ks ->
-  case PBA.decodeWord32BE idx bs of
-    Right v -> ks v (idx + 4) bs
-    Left err -> kf err
+takeWord32BE = Parser $ \idx bs -> case PBA.decodeWord32BE idx bs of
+  Right v -> ParseStateSuccess v (idx + 4) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeWord64BE #-}
 takeWord64BE :: Parser Word64
-takeWord64BE = Parser $ \idx bs kf ks ->
-  case PBA.decodeWord64BE idx bs of
-    Right v -> ks v (idx + 8) bs
-    Left err -> kf err
+takeWord64BE = Parser $ \idx bs -> case PBA.decodeWord64BE idx bs of
+  Right v -> ParseStateSuccess v (idx + 8) bs
+  Left err -> ParseStateFail err
 
 {-# INLINE takeDataRow #-}
 
 -- | A specialized parser to parse a postgres DataRow,
 -- returning the index of the byte after this DataRow's last.
 takeDataRow :: Parser ByteStringIdx
-takeDataRow = Parser $ \idx bs kf ks ->
-  case PBA.decodeDataRow idx bs of
-    Left err -> kf err
-    Right idxRest -> ks idxRest idxRest bs
+takeDataRow = Parser $ \idx bs -> case PBA.decodeDataRow idx bs of
+  Left err -> ParseStateFail err
+  Right idxRest -> ParseStateSuccess idxRest idxRest bs
 
 -- | Parses as many PG rows as there are available, returns
 -- the index/offset of the first left-unparsed byte and the
 -- number of rows parsed.
 parseManyRows :: Parser (ByteStringIdx, Int)
-parseManyRows = Parser $ \idx' bs' _kf ks -> let (restIdx, nParsed) = go idx' bs' 0 in ks (restIdx, nParsed) restIdx bs'
+parseManyRows = Parser $ \idx' bs' -> let (restIdx, nParsed) = go idx' bs' 0 in ParseStateSuccess (restIdx, nParsed) restIdx bs'
   where
     go idx bs !nParsedSoFar = case parseOnlyOffset takeDataRow idx bs of
       ParseOk unconsumedIdx -> go unconsumedIdx bs (nParsedSoFar + 1)
@@ -279,6 +269,6 @@ parseManyRows = Parser $ \idx' bs' _kf ks -> let (restIdx, nParsed) = go idx' bs
 
 -- | Succeeds only when the input has been fully consumed.
 endOfInput :: Parser ()
-endOfInput = Parser $ \idx bs kf ks ->
-  if PBA.length bs <= idx.idx then ks () idx bs else kf "endOfInput: input remaining"
+endOfInput = Parser $ \idx bs ->
+  if PBA.length bs <= idx.idx then ParseStateSuccess () idx bs else ParseStateFail "endOfInput: input remaining"
 {-# INLINE endOfInput #-}
