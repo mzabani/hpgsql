@@ -27,7 +27,7 @@ executable hpgsql-benchmarks
   main-is: Main.hs
   hs-source-dirs: src
   -- -optP-Wno-nonportable-include-path fixes macOS builds: https://github.com/haskell/cabal/issues/4739#issuecomment-359209133
-  ghc-options: -O1 -rtsopts -Wall -Wpartial-fields -optP-Wno-nonportable-include-path -finfo-table-map -fdistinct-constructor-tables
+  ghc-options: -O1 -rtsopts -Wall -Wpartial-fields -optP-Wno-nonportable-include-path
   if flag(threaded)
     ghc-options: -threaded "-with-rtsopts=-N -T -s"
   else
