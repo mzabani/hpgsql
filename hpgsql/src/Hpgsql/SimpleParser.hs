@@ -20,7 +20,6 @@ module Hpgsql.SimpleParser
     takeInt64BE,
     parseManyRows,
     skip,
-    parsePgFieldWithAtMost4Bytes,
     takeInt64BEWithFieldLength,
     takeInt32BEWithFieldLength,
     takeInt16BEWithFieldLength,
@@ -30,14 +29,14 @@ module Hpgsql.SimpleParser
     peekInt32BE,
     takeUtf8Text,
     takeWord64BE,
+    takeWord8WithFieldLength,
   )
 where
 
 import Control.Applicative (Alternative (..))
 import Data.Int (Int16, Int32, Int64)
 import Data.Text (Text)
-import Data.Word (Word64)
-import Foreign.Storable (Storable)
+import Data.Word (Word32, Word64, Word8)
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.Internal.PinnedByteArray (ByteStringIdx (..), PinnedByteArray)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
@@ -149,15 +148,6 @@ takeInt16BE = Parser $ \idx bs kf ks ->
     Right v -> ks v (idx + 2) bs
     Left err -> kf err
 
-{-# INLINE takeInt16BEWithFieldLength #-}
-
--- | Parses both a field length and the field itself, for
--- an Int16 in a row.
-takeInt16BEWithFieldLength :: Parser (Maybe Int16)
-takeInt16BEWithFieldLength = do
-  mi16 <- parsePgFieldWithAtMost4Bytes PBA.TypeSize2
-  pure $ fromIntegral <$> mi16
-
 {-# INLINE takeInt32BE #-}
 takeInt32BE :: Parser Int32
 takeInt32BE = Parser $ \idx bs kf ks ->
@@ -172,23 +162,16 @@ peekInt32BE = Parser $ \idx bs kf ks ->
     Right v -> ks v idx bs
     Left err -> kf err
 
-{-# INLINE takeInt32BEWithFieldLength #-}
-
--- | Parses both a field length and the field itself, for
--- an Int32 in a row.
-takeInt32BEWithFieldLength :: Parser (Maybe Int32)
-takeInt32BEWithFieldLength = do
-  mi32 <- parsePgFieldWithAtMost4Bytes PBA.TypeSize4
-  pure $ fromIntegral <$> mi32
-
 {-# INLINE takeFloatBEWithFieldLength #-}
 
 -- | Parses both a field length and the field itself, for
 -- a Float in a row.
 takeFloatBEWithFieldLength :: Parser (Maybe Float)
 takeFloatBEWithFieldLength = do
-  mf <- parsePgFieldWithAtMost4Bytes PBA.TypeSize4
-  pure $ castWord32ToFloat <$> mf
+  len <- takeInt32BE
+  case len of
+    (-1) -> pure Nothing
+    _ -> Just . castWord32ToFloat <$> takeWord32BE
 
 {-# INLINE takeFloatBE #-}
 takeFloatBE :: Parser Float
@@ -203,6 +186,43 @@ takeDoubleBE = Parser $ \idx bs kf ks ->
   case PBA.decodeWord64BE idx bs of
     Right v -> ks (castWord64ToDouble v) (idx + 8) bs
     Left err -> kf err
+
+{-# INLINE takeWord8 #-}
+takeWord8 :: Parser Word8
+takeWord8 = Parser $ \idx bs kf ks ->
+  case PBA.decodeWord8 idx bs of
+    Right v -> ks v (idx + 1) bs
+    Left err -> kf err
+
+{-# INLINE takeWord8WithFieldLength #-}
+takeWord8WithFieldLength :: Parser (Maybe Word8)
+takeWord8WithFieldLength = do
+  fieldLen <- takeInt32BE
+  if fieldLen == (-1)
+    then pure Nothing
+    else Just <$> takeWord8
+
+{-# INLINE takeInt16BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int16 in a row.
+takeInt16BEWithFieldLength :: Parser (Maybe Int16)
+takeInt16BEWithFieldLength = do
+  fieldLen <- takeInt32BE
+  if fieldLen == (-1)
+    then pure Nothing
+    else Just <$> takeInt16BE
+
+{-# INLINE takeInt32BEWithFieldLength #-}
+
+-- | Parses both a field length and the field itself, for
+-- an Int32 in a row.
+takeInt32BEWithFieldLength :: Parser (Maybe Int32)
+takeInt32BEWithFieldLength = do
+  fieldLen <- takeInt32BE
+  if fieldLen == (-1)
+    then pure Nothing
+    else Just <$> takeInt32BE
 
 {-# INLINE takeInt64BEWithFieldLength #-}
 
@@ -222,6 +242,13 @@ takeInt64BE = Parser $ \idx bs kf ks ->
     Right v -> ks v (idx + 8) bs
     Left err -> kf err
 
+{-# INLINE takeWord32BE #-}
+takeWord32BE :: Parser Word32
+takeWord32BE = Parser $ \idx bs kf ks ->
+  case PBA.decodeWord32BE idx bs of
+    Right v -> ks v (idx + 4) bs
+    Left err -> kf err
+
 {-# INLINE takeWord64BE #-}
 takeWord64BE :: Parser Word64
 takeWord64BE = Parser $ \idx bs kf ks ->
@@ -238,18 +265,6 @@ takeDataRow = Parser $ \idx bs kf ks ->
   case PBA.decodeDataRow idx bs of
     Left err -> kf err
     Right idxRest -> ks idxRest idxRest bs
-
-{-# INLINE parsePgFieldWithAtMost4Bytes #-}
-
--- | A specialized parser that reads a query result's
--- field's contents.
-parsePgFieldWithAtMost4Bytes :: forall a. (Storable a, Integral a) => PBA.WordDecoding a -> Parser (Maybe a)
-parsePgFieldWithAtMost4Bytes wdec =
-  let dec = PBA.decodePgFieldWithAtMost4Bytes wdec
-   in Parser $ \idx bs kf ks ->
-        case dec idx bs of
-          Right (v, restIdx) -> ks v restIdx bs
-          Left err -> kf err
 
 -- | Parses as many PG rows as there are available, returns
 -- the index/offset of the first left-unparsed byte and the

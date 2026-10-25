@@ -1203,7 +1203,8 @@ boolFieldDecoder = parsePgType "Bool" [boolOid] $ const $ \case
 
 {-# INLINE boolRowDecoder #-}
 boolRowDecoder :: Parser.Parser (Maybe Bool)
-boolRowDecoder = fmap (== 1) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
+boolRowDecoder =
+  fmap (== 1) <$> Parser.takeWord8WithFieldLength
 
 instance FromPgField Bool where
   {-# INLINE fieldDecoder #-}
@@ -1243,7 +1244,7 @@ instance FromPgField Char where
   {-# INLINE specializedFieldDecoder #-}
   specializedFieldDecoder finfo =
     if rootBaseTypeOf finfo == charOid
-      then fmap (chr . fromIntegral) <$> Parser.parsePgFieldWithAtMost4Bytes PBA.TypeSize1
+      then fmap (chr . fromIntegral) <$> Parser.takeWord8WithFieldLength
       else do
         mt <- specializedFieldDecoder @Text finfo
         case mt of
