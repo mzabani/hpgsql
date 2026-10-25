@@ -173,15 +173,6 @@ peekInt32BE = Parser $ \idx bs kf ks ->
     Right v -> ks v idx bs
     Left err -> kf err
 
-{-# INLINE takeInt32BEWithFieldLength #-}
-
--- | Parses both a field length and the field itself, for
--- an Int32 in a row.
-takeInt32BEWithFieldLength :: Parser (Maybe Int32)
-takeInt32BEWithFieldLength = do
-  mi32 <- parsePgFieldWithAtMost4Bytes PBA.TypeSize4
-  pure $ fromIntegral <$> mi32
-
 {-# INLINE takeFloatBEWithFieldLength #-}
 
 -- | Parses both a field length and the field itself, for
@@ -205,8 +196,17 @@ takeDoubleBE = Parser $ \idx bs kf ks ->
     Right v -> ks (castWord64ToDouble v) (idx + 8) bs
     Left err -> kf err
 
-{-# INLINE takeInt64BEWithFieldLength #-}
+{-# INLINE takeInt32BEWithFieldLength #-}
+-- | Parses both a field length and the field itself, for
+-- an Int32 in a row.
+takeInt32BEWithFieldLength :: Parser (Maybe Int32)
+takeInt32BEWithFieldLength = do
+  fieldLen <- takeInt32BE
+  if fieldLen == (-1)
+    then pure Nothing
+    else Just <$> takeInt32BE
 
+{-# INLINE takeInt64BEWithFieldLength #-}
 -- | Parses both a field length and the field itself, for
 -- an Int64 in a row.
 takeInt64BEWithFieldLength :: Parser (Maybe Int64)
