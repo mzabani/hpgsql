@@ -1,3 +1,7 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE UnboxedTuples #-}
+{-# OPTIONS_GHC -ddump-simpl -dsuppress-coercions -dsuppress-module-prefixes -dsuppress-type-applications -ddump-to-file #-}
+
 module Hpgsql.Internal
   ( -- * Connection
     connect,
@@ -131,13 +135,14 @@ import qualified Data.Text as Text
 import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text.IO as Text
 import Data.Time (DiffTime, diffTimeToPicoseconds, secondsToDiffTime)
+import GHC.Base (Int (..))
 import GHC.Conc (ThreadStatus (..), threadStatus)
 import Hpgsql.Base
 import qualified Hpgsql.Builder as Builder
 import Hpgsql.Encoding.Internal (FieldInfo (..), FromPgRow (..), RowDecoder (..), RowEncoder (..), ToPgRow (..))
 import Hpgsql.Encoding.RowDecoderMonadic (ConversionState (..), RowDecoderMonadic (..))
 import Hpgsql.Internal.InternalTypes (BindComplete (..), CommandComplete (..), ConnectOpts (..), ConnectionString (..), CopyInResponse (..), CopyQueryState (..), DataRow (..), Either3 (..), EncodingContext (..), ErrorDetail (..), ErrorResponse (..), HPgConnection (..), InternalConnectionState (..), IrrecoverableHpgsqlError (..), NoData (..), NotificationResponse (..), ParseComplete (..), Pipeline (..), PostgresError (..), Query (..), QueryId (..), QueryProtocol (..), QueryState (..), ReadyForQuery (..), ResetConnectionOpts (..), ResponseMsg (..), ResponseMsgsReceived (..), RowDescription (..), SingleQuery (..), TransactionStatus (..), WeakThreadId (..), mkMutex, queryToByteString, throwIrrecoverableError)
-import Hpgsql.Internal.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray, takePgMessageIdentAndLen)
+import Hpgsql.Internal.PinnedByteArray (LazyPinnedByteArray, PinnedByteArray (..), takePgMessageIdentAndLen)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
@@ -536,7 +541,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
   let lenLeftToFetch :: Int = fromIntegral $ lenPlus4 - 4
       fullMessageLen = 5 + lenLeftToFetch
   (nowBuf, nowBufLen) <- if initialBufLen >= fullMessageLen then pure (initialBuf, initialBufLen) else receiveUntilBufferHasAtLeast fullMessageLen
-  let fullMsg = PBA.copyStrictSlice 0 fullMessageLen nowBuf
+  let fullMsg = PBA.copyStrictSlice 0# fullMessageLen nowBuf
   receivedNoticeOrParameterSoTryAgain <- go msgIdentChar fullMsg nowBuf nowBufLen
   case receivedNoticeOrParameterSoTryAgain of
     Nothing -> receiveNextMsgGeneric conn receiveWhat
@@ -551,7 +556,8 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
     -- Ideally we'd have non-retriable STM at the type-level here. Maybe later.
     -- Make sure to do very little work inside `go`!
     go msgIdentChar fullMsgPBA nowBuf nowBufLen = mask_ $ modifyIORefIO recvBuffer $ do
-      let bufferWithoutMsg = PBA.fromStrict $ PBA.copyStrictSlice (PBA.length fullMsgPBA) (nowBufLen - PBA.length fullMsgPBA) nowBuf
+      let !(I# fullMsgLen#) = fullMsgPBA.len
+          bufferWithoutMsg = PBA.fromStrict $ PBA.copyStrictSlice fullMsgLen# (nowBufLen - fullMsgPBA.len) nowBuf
           fullMsg = LBS.fromStrict $ PBA.toByteString fullMsgPBA
           handleUnexpectedMsg onNotAnyReasonableMsg =
             -- This could be a Notification, NOTICE or a ParameterStatus message, since these
@@ -585,10 +591,13 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
           let strictNowBuf = PBA.toStrict nowBuf
            in case Parser.parseOnly Parser.parseManyRows strictNowBuf of
-                Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) | nRowsParsed > 0 -> do
-                  let (msgs, unconsumedBuffer) = PBA.splitAt unconsumedBufferBegin.idx strictNowBuf
-                  debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (PBA.length msgs)
-                  pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
+                Parser.ParseOk nRowsParsed unconsumedBufferBegin ->
+                  if nRowsParsed > 0
+                    then do
+                      let (msgs, unconsumedBuffer) = PBA.splitAt (I# unconsumedBufferBegin) strictNowBuf
+                      debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show msgs.len
+                      pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))
+                    else handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
                 _ -> handleUnexpectedMsg $ const $ pure (PBA.emptyPBA, 0) -- No error when we stop receiving DataRows, only emptiness
         ReceiveArbitraryMsg parser f ->
           case parsePgMessage msgIdentChar fullMsg parser of
@@ -1427,7 +1436,7 @@ consumeStreamingResults rp conn qryId = S.effect $ do
             S.mapM
               ( \(DataRows (rowColumnData, nRows)) ->
                   case Parser.parseOnly (replicateM nRows rowparser <* Parser.endOfInput) rowColumnData of
-                    Parser.ParseOk rows -> pure rows
+                    Parser.ParseOk rows _ -> pure rows
                     Parser.ParseFail err -> throwIrrecoverableErrorWithStatement qText $ "Failed parsing a row: " <> Text.pack (show err)
               )
               rowsStream
@@ -1757,7 +1766,7 @@ _globalDebugLock = unsafePerformIO $ newMVar True
 debugPrint :: String -> IO ()
 debugPrint _ = pure ()
 
--- debugPrint str = modifyMVar_ _globalDebugLock $ \p -> when p (putStrLn str) >> pure p
+-- debugPrint _ = pure ()
 
 {-# INLINE timeDebugNonBlockingOperation #-}
 timeDebugNonBlockingOperation :: String -> IO a -> IO a

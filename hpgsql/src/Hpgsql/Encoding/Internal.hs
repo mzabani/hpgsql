@@ -1,6 +1,8 @@
+{-# LANGUAGE MagicHash #-}
 -- For the disabled warning, see Note [singleField fieldDecoder rewrite rules]
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-inline-rule-shadowing #-}
+{-# OPTIONS_GHC -ddump-simpl -dsuppress-coercions -dsuppress-module-prefixes -dsuppress-type-applications -ddump-to-file #-}
 
 module Hpgsql.Encoding.Internal
   ( -- * Decoding
@@ -286,7 +288,7 @@ compositeTypeDecoder (RowDecoder {..}) =
               Nothing -> Left "Got NULL in composite type but it was not allowed"
               Just bs ->
                 case Parser.parseOnly prs (PBA.fromByteString bs) of
-                  Parser.ParseOk v -> Right v
+                  Parser.ParseOk v _ -> Right v
                   Parser.ParseFail err -> Left err,
       allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
     }
@@ -306,7 +308,7 @@ compositeTypeDecoder (RowDecoder {..}) =
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
       unless (all snd typecheckedCols) $ fail $ "Parser for composite type found type OIDs " ++ show (map fst cols) ++ " but expected different"
       case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (PBA.toStrict $ PBA.fromChunks $ map snd cols) of
-        Parser.ParseOk v -> pure v
+        Parser.ParseOk v _ -> pure v
         Parser.ParseFail err -> fail $ "Error decoding composite type: " ++ show err
 
 -- | Allows you to create a @FieldEncoder@ for composite types.
@@ -812,18 +814,18 @@ binaryIntDecoder finfo =
   where
     maxBoundAndDecoder :: Oid -> Either String (PinnedByteArray -> Either String a)
     maxBoundAndDecoder typOid
-      | typOid == int8Oid = if fits (Proxy @Int64) then Right (fmap fromIntegral . PBA.decodeInt64BE 0) else Left "Postgres int8 does not fit into target numeric Haskell type"
-      | typOid == int4Oid = if fits (Proxy @Int32) then Right (fmap fromIntegral . PBA.decodeInt32BE 0) else Left "Postgres int4 does not fit into target numeric Haskell type"
-      | typOid == int2Oid = if fits (Proxy @Int16) then Right (fmap fromIntegral . PBA.decodeInt16BE 0) else Left "Postgres int2 does not fit into target numeric Haskell type"
+      | typOid == int8Oid = if fits (Proxy @Int64) then Right (fmap fromIntegral . PBA.decodeInt64BE 0#) else Left "Postgres int8 does not fit into target numeric Haskell type"
+      | typOid == int4Oid = if fits (Proxy @Int32) then Right (fmap fromIntegral . PBA.decodeInt32BE 0#) else Left "Postgres int4 does not fit into target numeric Haskell type"
+      | typOid == int2Oid = if fits (Proxy @Int16) then Right (fmap fromIntegral . PBA.decodeInt16BE 0#) else Left "Postgres int2 does not fit into target numeric Haskell type"
       | otherwise = Left "Probable bug in Hpgsql. Decoding binary integral type not an int2, int4 or int8, nor a domain type derived from those"
     fits :: forall b. (Integral b, Bounded b) => Proxy b -> Bool
     fits _ = fromIntegral @b @Integer (maxBound @b) <= fromIntegral (maxBound @a)
 
 binaryFloat4Decoder :: PinnedByteArray -> Either String Float
-binaryFloat4Decoder = fmap castWord32ToFloat . PBA.decodeWord32BE 0
+binaryFloat4Decoder = fmap castWord32ToFloat . PBA.decodeWord32BE 0#
 
 binaryFloat8Decoder :: PinnedByteArray -> Either String Double
-binaryFloat8Decoder = fmap castWord64ToDouble . PBA.decodeWord64BE 0
+binaryFloat8Decoder = fmap castWord64ToDouble . PBA.decodeWord64BE 0#
 
 -- | The OID of the base type for a field. For most types this is just the OID of
 -- the type of the field itself, but for Domain types this is the first non-Domain
@@ -991,7 +993,7 @@ integerFieldDecoder = parsePgType "Integer" [int8Oid, numericOid, int4Oid, int2O
            in if rootTypeOid /= numericOid
                 then fromIntegral <$> decodeInt pbaBs
                 else case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
-                  Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
+                  Parser.ParseOk sci _ -> case floatingOrInteger @Double @Integer sci of
                     Right i -> Right i
                     Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
                   Parser.ParseFail err -> Left err
@@ -1011,7 +1013,7 @@ instance FromPgField Integer where
         pbaBs <- Parser.take len
         if rootTypeOid == numericOid
           then case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
-            Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
+            Parser.ParseOk sci _ -> case floatingOrInteger @Double @Integer sci of
               Right i -> pure $ Just i
               Left _ -> fail "Internal error in Hpgsql. Scientific to Integer conversion failed"
             Parser.ParseFail err -> fail err
@@ -1030,7 +1032,7 @@ oidFieldDecoder :: FieldDecoder Oid
 oidFieldDecoder = parsePgType "Oid" [oidOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell Oid type. Use a `Maybe Oid`"
   -- Oids are just int4
-  Just bs -> Oid <$> PBA.decodeInt32BE 0 (PBA.fromByteString bs)
+  Just bs -> Oid <$> PBA.decodeInt32BE 0# (PBA.fromByteString bs)
 
 instance FromPgField Oid where
   {-# INLINE fieldDecoder #-}
@@ -1157,7 +1159,7 @@ scientificFieldDecoder = parsePgType "Scientific" [numericOid, int2Oid, int4Oid,
                   -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
                   -- float4Oid and float8Oid here?
                   case Parser.parseOnly (scientificDecoder False <* Parser.endOfInput) pbaBs of
-                    Parser.ParseOk sci -> Right sci
+                    Parser.ParseOk sci _ -> Right sci
                     Parser.ParseFail err -> Left err
 
 instance FromPgField Scientific where
@@ -1276,7 +1278,7 @@ instance FromPgField LBS.ByteString where
 textFieldDecoder :: FieldDecoder Text
 textFieldDecoder = parsePgType "Text" [textOid, varcharOid, nameOid, bpcharOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell Text type. Use a `Maybe Text`"
-  Just bs -> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+  Just bs -> PBA.unsafeToUtf8Text 0# (BS.length bs) (PBA.fromByteString bs)
 
 {-# INLINE textDecoder #-}
 textDecoder :: Parser.Parser (Maybe Text)
@@ -1322,7 +1324,7 @@ instance FromPgField LT.Text where
 stringFieldDecoder :: FieldDecoder String
 stringFieldDecoder = parsePgType "String" [textOid, varcharOid, nameOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell String type. Use a `Maybe String`"
-  Just bs -> Text.unpack <$> PBA.unsafeToUtf8Text 0 (BS.length bs) (PBA.fromByteString bs)
+  Just bs -> Text.unpack <$> PBA.unsafeToUtf8Text 0# (BS.length bs) (PBA.fromByteString bs)
 
 {-# INLINE stringDecoder #-}
 stringDecoder :: Parser.Parser (Maybe String)
@@ -1400,7 +1402,7 @@ utcTimeFieldDecoder = parsePgType "UTCTime" [timestamptzOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell UTCTime type. Use a `Maybe UTCTime`"
   Just bs -> do
     -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    totalusecs <- PBA.decodeInt64BE 0# (PBA.fromByteString bs)
     let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
         parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
     Right $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1435,7 +1437,7 @@ unboundedUtcTimeFieldDecoder = parsePgType "Unbounded UTCTime" [timestamptzOid] 
   Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded UTCTime type. Use a `Maybe (Unbounded UTCTime)`"
   Just bs -> do
     -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    totalusecs <- PBA.decodeInt64BE 0# (PBA.fromByteString bs)
     Right $
       if totalusecs == minBound
         then NegInfinity
@@ -1485,7 +1487,7 @@ zonedTimeFieldDecoder = parsePgType "ZonedTime" [timestamptzOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell ZonedTime type. Use a `Maybe ZonedTime`"
   Just bs -> do
     -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    totalusecs <- PBA.decodeInt64BE 0# (PBA.fromByteString bs)
     let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
         parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
     Right $ utcToZonedTime utc $ UTCTime parsedDate (picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1520,7 +1522,7 @@ unboundedZonedTimeFieldDecoder = parsePgType "Unbounded ZonedTime" [timestamptzO
   Nothing -> Left "Cannot decode SQL null as the Haskell Unbounded ZonedTime type. Use a `Maybe (Unbounded ZonedTime)`"
   Just bs -> do
     -- See https://github.com/postgres/postgres/blob/50cb7505b3010736b9a7922e903931534785f3aa/src/backend/utils/adt/timestamp.c#L1909
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    totalusecs <- PBA.decodeInt64BE 0# (PBA.fromByteString bs)
     Right $
       if totalusecs == minBound
         then NegInfinity
@@ -1569,7 +1571,7 @@ localTimeFieldDecoder :: FieldDecoder LocalTime
 localTimeFieldDecoder = parsePgType "LocalTime" [timestampOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell LocalTime type. Use a `Maybe LocalTime`"
   Just bs -> do
-    totalusecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    totalusecs <- PBA.decodeInt64BE 0# (PBA.fromByteString bs)
     let (day, timeusecs) = totalusecs `divMod` 86_400_000_000 -- USECS per day
         parsedDate = addJulianDurationClip (CalendarDiffDays 0 (fromIntegral day)) $ fromJulian 1999 12 19
     Right $ LocalTime parsedDate (timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral timeusecs * 1_000_000)
@@ -1603,7 +1605,7 @@ timeOfDayFieldDecoder :: FieldDecoder TimeOfDay
 timeOfDayFieldDecoder = parsePgType "TimeOfDay" [timeOid] $ const $ \case
   Nothing -> Left "Cannot decode SQL null as the Haskell TimeOfDay type. Use a `Maybe TimeOfDay`"
   Just bs -> do
-    usecs <- PBA.decodeInt64BE 0 (PBA.fromByteString bs)
+    usecs <- PBA.decodeInt64BE 0# (PBA.fromByteString bs)
     Right $ timeToTimeOfDay $ picosecondsToDiffTime $ fromIntegral usecs * 1_000_000
 
 {-# INLINE timeOfDayRowDecoder #-}
@@ -1636,7 +1638,7 @@ dayFieldDecoder = parsePgType "Day" [dateOid] $ const $ \case
     -- There is a very specific conversion function for these, which I poorly translated to Haskell
     -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
     -- But I found a simpler way to do this. Let's see if it works in our property based tests
-    jd <- PBA.decodeInt32BE 0 (PBA.fromByteString bs)
+    jd <- PBA.decodeInt32BE 0# (PBA.fromByteString bs)
     Right $ addJulianDurationClip (CalendarDiffDays 0 (fromIntegral jd - 13)) $ fromJulian 2000 01 01
 
 {-# INLINE dayRowDecoder #-}
@@ -1665,7 +1667,7 @@ unboundedDayFieldDecoder = parsePgType "Unbounded Day" [dateOid] $ const $ \case
     -- There is a very specific conversion function for these, which I poorly translated to Haskell
     -- https://github.com/postgres/postgres/blob/799959dc7cf0e2462601bea8d07b6edec3fa0c4f/src/backend/utils/adt/datetime.c#L321
     -- But I found a simpler way to do this. Let's see if it works in our property based tests
-    jd <- PBA.decodeInt32BE 0 (PBA.fromByteString bs)
+    jd <- PBA.decodeInt32BE 0# (PBA.fromByteString bs)
     Right $
       if jd == minBound
         then NegInfinity
@@ -1690,9 +1692,9 @@ calendarDiffTimeFieldDecoder = parsePgType "CalendarDiffTime " [intervalOid] $ c
   Nothing -> Left "Cannot decode SQL null as the Haskell CalendarDiffTime  type. Use a `Maybe CalendarDiffTime `"
   Just bs -> do
     let !pbaBs = PBA.fromByteString bs
-    nMicrosecs <- PBA.decodeInt64BE 0 pbaBs
-    nDays <- PBA.decodeInt32BE 8 pbaBs
-    nMonths <- PBA.decodeInt32BE 12 pbaBs
+    nMicrosecs <- PBA.decodeInt64BE 0# pbaBs
+    nDays <- PBA.decodeInt32BE 8# pbaBs
+    nMonths <- PBA.decodeInt32BE 12# pbaBs
     Right $ CalendarDiffTime {ctMonths = fromIntegral nMonths, ctTime = secondsToNominalDiffTime (fromIntegral nDays * 86400) + realToFrac (picosecondsToDiffTime (fromIntegral nMicrosecs * 1_000_000))}
 
 instance FromPgField CalendarDiffTime where
@@ -1826,7 +1828,7 @@ instance {-# INCOHERENT #-} forall a. (FromPgField a) => FromPgField (Vector (Ve
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell (Vector (Vector a)) type. Use a `Maybe (Vector (Vector a))`"
                 Just bs -> case Parser.parseOnly arrfdec (PBA.fromByteString bs) of
-                  Parser.ParseOk v -> Right v
+                  Parser.ParseOk v _ -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = allowOnlyArrayTypes
       }
@@ -2050,7 +2052,7 @@ arrayField !replicateFunction !elementParser =
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
               Just bs -> case Parser.parseOnly fdec (PBA.fromByteString bs) of
-                Parser.ParseOk v -> Right v
+                Parser.ParseOk v _ -> Right v
                 Parser.ParseFail err -> Left err,
       allowedPgTypes = allowOnlyArrayTypes
     }
@@ -2094,7 +2096,7 @@ arrayFieldRowDec !replicateFunction =
                 Just bs -> case Parser.parseOnly dec (PBA.fromByteString bs) of
                   -- Some forcing to avoid thunks keeping references to our
                   -- PinnedByteArray buffers
-                  Parser.ParseOk !v -> Right v
+                  Parser.ParseOk !v _ -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = allowOnlyArrayTypes
       },

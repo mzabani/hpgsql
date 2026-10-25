@@ -1,3 +1,5 @@
+{-# LANGUAGE MagicHash #-}
+
 module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), PasswordMessage (..), Sync (..), parsePgMessage, nulTermCString) where
 
 import Control.Applicative (Alternative (..))
@@ -54,7 +56,7 @@ colParser = do
   colName <- nulTerminatedCStringParser -- Column name as C string
   void $ Parsec.take (4 + 2)
   -- TODO: OIDs are unsigned integers! Try `select (-1)::oid` to see. Change to UInt32 somehow
-  typOid <- either fail pure . PBA.decodeInt32BE 0 . PBA.fromByteString =<< Parsec.take 4
+  typOid <- either fail pure . PBA.decodeInt32BE 0# . PBA.fromByteString =<< Parsec.take 4
   void $ Parsec.take (2 + 4 + 2)
   pure (colName, Oid (fromIntegral typOid))
 
@@ -138,7 +140,7 @@ data Terminate = Terminate
 
 instance FromPgMessage AuthenticationResponse where
   msgParser = PgMsgParser $ \c (LBS.drop 5 -> restOfMsg) -> case c of
-    'R' -> case first (PBA.decodeInt32BE 0 . PBA.fromByteString . LBS.toStrict) $ LBS.splitAt 4 restOfMsg of
+    'R' -> case first (PBA.decodeInt32BE 0# . PBA.fromByteString . LBS.toStrict) $ LBS.splitAt 4 restOfMsg of
       (Right 0, _) -> Just $ AuthenticationResponse AuthOk
       (Right 2, _) -> Just $ AuthenticationResponse AuthKerberosV5
       (Right 3, _) -> Just $ AuthenticationResponse AuthCleartextPassword
@@ -155,7 +157,7 @@ instance FromPgMessage AuthenticationResponse where
 
 instance FromPgMessage BackendKeyData where
   msgParser = PgMsgParser $ \c (LBS.splitAt 4 . LBS.drop 5 -> (pidBS, backendSecretKey)) -> case c of
-    'K' -> case PBA.decodeInt32BE 0 $ PBA.fromByteString $ LBS.toStrict pidBS of
+    'K' -> case PBA.decodeInt32BE 0# $ PBA.fromByteString $ LBS.toStrict pidBS of
       Right pid -> Just $ BackendKeyData {backendPid = pid, backendSecretKey = LBS.toStrict backendSecretKey}
       Left _ -> Nothing
     _ -> Nothing
@@ -359,7 +361,7 @@ instance FromPgMessage RowDescription where
     if c == 'T'
       then
         let (numColsBS, colContents) = LBS.splitAt 2 restOfMsg
-            numCols = either error id $ PBA.decodeInt16BE 0 $ PBA.fromByteString $ LBS.toStrict numColsBS
+            numCols = either error id $ PBA.decodeInt16BE 0# $ PBA.fromByteString $ LBS.toStrict numColsBS
             allColOidsParser :: Parsec.Parser [(Text, Oid)]
             allColOidsParser = replicateM (fromIntegral numCols) colParser
          in case LazyParsec.parseOnly (allColOidsParser <* Parsec.endOfInput) colContents of
@@ -406,7 +408,7 @@ instance FromPgMessage NotificationResponse where
       then Nothing
       else
         let (notifierPidBs, channelNameAndPayload) = LBS.splitAt 4 restOfMsg
-            notifierPid = either error id $ PBA.decodeInt32BE 0 $ PBA.fromByteString $ LBS.toStrict notifierPidBs
+            notifierPid = either error id $ PBA.decodeInt32BE 0# $ PBA.fromByteString $ LBS.toStrict notifierPidBs
          in case LazyParsec.parseOnly
               ((NotificationResponse notifierPid <$> nulTerminatedCStringParser <*> nulTerminatedCStringParser) <* Parsec.endOfInput)
               channelNameAndPayload of
