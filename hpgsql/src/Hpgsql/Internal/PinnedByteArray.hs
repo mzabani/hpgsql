@@ -206,9 +206,9 @@ copyStrictSlice :: Int -> Int -> LazyPinnedByteArray -> PinnedByteArray
 copyStrictSlice (max 0 -> skip) (max 0 -> n') (LazyPinnedByteArray totalLen' (reverse -> chunks)) =
   let n = min n' totalLen'
    in unsafeDupablePerformIO $ createPinnedByteArray n $ \dst -> do
-        let go copied _ _ [] = pure copied
-            go copied _ 0 _ = pure copied
-            go offset skipLeft nLeft (PinnedByteArray start l arr# : rest) = do
+        let go !copied !_ !_ [] = pure copied
+            go !copied !_ 0 !_ = pure copied
+            go !offset !skipLeft !nLeft (PinnedByteArray start l arr# : rest) = do
               let toSkipSrc = min l skipLeft
                   toCopy = min nLeft (l - toSkipSrc)
               when (toCopy > 0 && toSkipSrc < l) $ copyBytes (Ptr dst `plusPtr` offset) (Ptr (byteArrayContents# arr#) `plusPtr` (start + toSkipSrc)) toCopy
