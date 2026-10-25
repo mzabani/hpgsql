@@ -30,13 +30,14 @@ module Hpgsql.SimpleParser
     peekInt32BE,
     takeUtf8Text,
     takeWord64BE,
+    takeWord8,
   )
 where
 
 import Control.Applicative (Alternative (..))
 import Data.Int (Int16, Int32, Int64)
 import Data.Text (Text)
-import Data.Word (Word64)
+import Data.Word (Word64, Word8)
 import Foreign.Storable (Storable)
 import GHC.Float (castWord32ToFloat, castWord64ToDouble)
 import Hpgsql.Internal.PinnedByteArray (ByteStringIdx (..), PinnedByteArray)
@@ -220,6 +221,13 @@ takeInt64BE :: Parser Int64
 takeInt64BE = Parser $ \idx bs kf ks ->
   case PBA.decodeInt64BE idx bs of
     Right v -> ks v (idx + 8) bs
+    Left err -> kf err
+
+{-# INLINE takeWord8 #-}
+takeWord8 :: Parser Word8
+takeWord8 = Parser $ \idx bs kf ks ->
+  case PBA.decodeWord8 idx bs of
+    Right v -> ks v (idx + 1) bs
     Left err -> kf err
 
 {-# INLINE takeWord64BE #-}

@@ -67,6 +67,7 @@ module Hpgsql.Internal.PinnedByteArray
     decodeInt16BE,
     decodeInt32BE,
     decodeInt64BE,
+    decodeWord8,
     decodeWord32BE,
     decodeWord64BE,
     encodeInt32BE,
