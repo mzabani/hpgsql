@@ -29,7 +29,6 @@ module Hpgsql.SimpleParser
     peekInt32BE,
     takeUtf8Text,
     takeWord64BE,
-    takeWord8,
     takeWord8WithFieldLength,
   )
 where

@@ -77,7 +77,6 @@ module Hpgsql.Internal.PinnedByteArray
     encodeInt16BE,
     encodePgBoolean,
     decodeDataRow,
-    WordDecoding (..),
   )
 where
 
@@ -111,9 +110,9 @@ import GHC.Float (castDoubleToWord64, castFloatToWord32)
 import GHC.Word (Word16 (..), Word32 (..), Word64 (..), Word8 (..))
 
 data PinnedByteArray = PinnedByteArray
-  { start :: !Int,
-    len :: !Int,
-    array :: !ByteArray#
+  { _start :: !Int,
+    _len :: !Int,
+    _array :: !ByteArray#
   }
 
 instance Eq PinnedByteArray where
@@ -260,11 +259,6 @@ data WordDecodingAll a where
   CWord16 :: WordDecodingAll Word16
   CWord32 :: WordDecodingAll Word32
   CWord64 :: WordDecodingAll Word64
-
-data WordDecoding a where
-  TypeSize1 :: WordDecoding Word8
-  TypeSize2 :: WordDecoding Word16
-  TypeSize4 :: WordDecoding Word32
 
 {-# INLINE decodeWord #-}
 decodeWord :: WordDecodingAll a -> ByteStringIdx -> PinnedByteArray -> (a -> a) -> Either String a
