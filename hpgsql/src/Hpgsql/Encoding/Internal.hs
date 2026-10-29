@@ -286,7 +286,7 @@ compositeTypeDecoder (RowDecoder {..}) =
               Nothing -> Left "Got NULL in composite type but it was not allowed"
               Just bs ->
                 case Parser.parseOnly prs (PBA.fromByteString bs) of
-                  Parser.ParseOk v -> Right v
+                  Parser.ParseOk v _ -> Right v
                   Parser.ParseFail err -> Left err,
       allowedPgTypes = const True -- There's no way to enforce a custom type's OID. We only check if it's structurally the same in the parser (same subtypes in same order)
     }
@@ -306,7 +306,7 @@ compositeTypeDecoder (RowDecoder {..}) =
       let typecheckedCols = rowColumnsTypeCheck (map (mkColInfo . fst) cols)
       unless (all snd typecheckedCols) $ fail $ "Parser for composite type found type OIDs " ++ show (map fst cols) ++ " but expected different"
       case Parser.parseOnly (fullRowDecoder (map (mkColInfo . fst) cols) <* Parser.endOfInput) (PBA.toStrict $ PBA.fromChunks $ map snd cols) of
-        Parser.ParseOk v -> pure v
+        Parser.ParseOk v _ -> pure v
         Parser.ParseFail err -> fail $ "Error decoding composite type: " ++ show err
 
 -- | Allows you to create a @FieldEncoder@ for composite types.
@@ -991,7 +991,7 @@ integerFieldDecoder = parsePgType "Integer" [int8Oid, numericOid, int4Oid, int2O
            in if rootTypeOid /= numericOid
                 then fromIntegral <$> decodeInt pbaBs
                 else case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
-                  Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
+                  Parser.ParseOk sci _ -> case floatingOrInteger @Double @Integer sci of
                     Right i -> Right i
                     Left _ -> Left "Internal error in Hpgsql. Scientific to Integer conversion failed"
                   Parser.ParseFail err -> Left err
@@ -1011,7 +1011,7 @@ instance FromPgField Integer where
         pbaBs <- Parser.take len
         if rootTypeOid == numericOid
           then case Parser.parseOnly (scientificDecoder True <* Parser.endOfInput) pbaBs of
-            Parser.ParseOk sci -> case floatingOrInteger @Double @Integer sci of
+            Parser.ParseOk sci _ -> case floatingOrInteger @Double @Integer sci of
               Right i -> pure $ Just i
               Left _ -> fail "Internal error in Hpgsql. Scientific to Integer conversion failed"
             Parser.ParseFail err -> fail err
@@ -1157,7 +1157,7 @@ scientificFieldDecoder = parsePgType "Scientific" [numericOid, int2Oid, int4Oid,
                   -- TODO: There is loss converting from Float/Double to Scientific, but it might be quite small, so should we accept
                   -- float4Oid and float8Oid here?
                   case Parser.parseOnly (scientificDecoder False <* Parser.endOfInput) pbaBs of
-                    Parser.ParseOk sci -> Right sci
+                    Parser.ParseOk sci _ -> Right sci
                     Parser.ParseFail err -> Left err
 
 instance FromPgField Scientific where
@@ -1826,7 +1826,7 @@ instance {-# INCOHERENT #-} forall a. (FromPgField a) => FromPgField (Vector (Ve
            in \case
                 Nothing -> Left "Cannot decode SQL null as the Haskell (Vector (Vector a)) type. Use a `Maybe (Vector (Vector a))`"
                 Just bs -> case Parser.parseOnly arrfdec (PBA.fromByteString bs) of
-                  Parser.ParseOk v -> Right v
+                  Parser.ParseOk v _ -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = allowOnlyArrayTypes
       }
@@ -2050,7 +2050,7 @@ arrayField !replicateFunction !elementParser =
          in \case
               Nothing -> Left "Cannot decode SQL null as the Haskell Vector type. Use a `Maybe (Vector a)`"
               Just bs -> case Parser.parseOnly fdec (PBA.fromByteString bs) of
-                Parser.ParseOk v -> Right v
+                Parser.ParseOk v _ -> Right v
                 Parser.ParseFail err -> Left err,
       allowedPgTypes = allowOnlyArrayTypes
     }
@@ -2094,7 +2094,7 @@ arrayFieldRowDec !replicateFunction =
                 Just bs -> case Parser.parseOnly dec (PBA.fromByteString bs) of
                   -- Some forcing to avoid thunks keeping references to our
                   -- PinnedByteArray buffers
-                  Parser.ParseOk !v -> Right v
+                  Parser.ParseOk !v _ -> Right v
                   Parser.ParseFail err -> Left err,
         allowedPgTypes = allowOnlyArrayTypes
       },
