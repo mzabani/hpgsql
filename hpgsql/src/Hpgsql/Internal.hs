@@ -585,7 +585,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- Parse as many DataRows as we can to do as much work as we can per buffer "churn"
           let strictNowBuf = PBA.toStrict nowBuf
            in case Parser.parseOnly Parser.parseManyRows strictNowBuf of
-                Parser.ParseOk (unconsumedBufferBegin, nRowsParsed) _ | nRowsParsed > 0 -> do
+                Parser.ParseOk nRowsParsed unconsumedBufferBegin | nRowsParsed > 0 -> do
                   let (msgs, unconsumedBuffer) = PBA.splitAt unconsumedBufferBegin.idx strictNowBuf
                   debugPrint $ "Received " ++ show nRowsParsed ++ " messages with total length " ++ show (PBA.length msgs)
                   pure (PBA.fromStrict unconsumedBuffer, Just (msgs, nRowsParsed))

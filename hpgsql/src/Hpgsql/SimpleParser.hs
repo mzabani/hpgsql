@@ -44,9 +44,6 @@ newtype Parser a = Parser
       ByteStringIdx ->
       PinnedByteArray ->
       ParseResult a
-      -- \^ either a failure message, or the parsed value along with the
-      -- index into the original/new bytestring of the first yet-unparsed
-      -- byte
   }
 
 instance Functor Parser where
@@ -243,22 +240,20 @@ takeWord64BE = Parser $ \idx bs -> case PBA.decodeWord64BE idx bs of
 
 {-# INLINE takeDataRow #-}
 
--- | A specialized parser to parse a postgres DataRow,
--- returning the index of the byte after this DataRow's last.
-takeDataRow :: Parser ByteStringIdx
+-- | A specialized parser to parse a postgres DataRow.
+takeDataRow :: Parser ()
 takeDataRow = Parser $ \idx bs -> case PBA.decodeDataRow idx bs of
   Left err -> ParseFail err
-  Right idxRest -> ParseOk idxRest idxRest
+  Right idxRest -> ParseOk () idxRest
 
--- | Parses as many PG rows as there are available, returns
--- the index/offset of the first left-unparsed byte and the
+-- | Parses as many PG rows as there are available, returns the
 -- number of rows parsed.
-parseManyRows :: Parser (ByteStringIdx, Int)
-parseManyRows = Parser $ \idx' bs' -> let (restIdx, nParsed) = go idx' bs' 0 in ParseOk (restIdx, nParsed) restIdx
+parseManyRows :: Parser Int
+parseManyRows = Parser $ \idx' bs' -> go idx' bs' 0
   where
-    go idx bs !nParsedSoFar = case parseOnlyOffset takeDataRow idx bs of
-      ParseOk unconsumedIdx _ -> go unconsumedIdx bs (nParsedSoFar + 1)
-      ParseFail _ -> (idx, nParsedSoFar)
+    go !idx !bs !nParsedSoFar = case parseOnlyOffset takeDataRow idx bs of
+      ParseOk _ unconsumedIdx -> go unconsumedIdx bs (nParsedSoFar + 1)
+      ParseFail _ -> ParseOk nParsedSoFar idx
 {-# INLINE parseManyRows #-}
 
 -- | Succeeds only when the input has been fully consumed.
