@@ -57,7 +57,7 @@ vALUES rows =
 commaSeparatedRowTuples :: [[EncodingContext -> (Maybe Oid, BinaryField)]] -> Query
 commaSeparatedRowTuples rowTuples =
   let (_, queryFragsPerRow) =
-        List.mapAccumR
+        List.mapAccumL
           ( \(!maxArgSoFar) singleRow ->
               let numParams = length singleRow
                   numberedArgs = map (QueryArgumentPlaceHolder . (+ maxArgSoFar)) [1 .. numParams]

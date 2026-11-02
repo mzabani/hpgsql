@@ -21,7 +21,7 @@ import Hpgsql.Builder (BinaryField (..))
 import Hpgsql.Encoding (FromPgField, LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeEncoder, typeFieldEncoder, typeOidWithName)
 import Hpgsql.Internal.InternalTypes (Query (..), SingleQuery (..))
 import Hpgsql.ParsingInternal (ParsingOpts (..), parseSql)
-import Hpgsql.Query (breakQueryIntoStatements, mkQuery, sql)
+import Hpgsql.Query (breakQueryIntoStatements, escapeIdentifier, mkQuery, sql, vALUES)
 import Hpgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
 import Hpgsql.Types (Only (..))
 import Test.Hspec
@@ -49,7 +49,7 @@ spec = do
       query.queryString `shouldBe` encodeUtf8 "SELECT $1;"
       length query.queryParams `shouldBe` 1
 
--- | Shared property: concatenating arbitrary queries produces valid results.
+-- | Concatenating arbitrary queries produces valid results.
 checkQueryConcatenation :: Gen (Query, [(Maybe Oid, BinaryField)]) -> PropertyT IO ()
 checkQueryConcatenation gen = hedgehog $ do
   queries <- forAll $ Gen.list (Range.linear 1 50) gen
@@ -77,9 +77,7 @@ checkQueryConcatenation gen = hedgehog $ do
     let placeholders = extractPlaceholders qText
         numParams = length qParams
 
-    if numParams == 0
-      then placeholders === []
-      else placeholders === [1 .. numParams]
+    placeholders === [1 .. numParams]
 
 mkQueryConcatenation :: PropertyT IO ()
 mkQueryConcatenation = checkQueryConcatenation genMkQuery
@@ -250,7 +248,16 @@ genEmbeddedQuery =
         z <- genInt
         let inner1 = mkQuery "$1" (Only x)
             inner2 = mkQuery "$1 + $1, $2" (y, z)
-        pure ([sql|SELECT ^{inner1}, ^{inner2};|], toComparableParams (x, y, z))
+        pure ([sql|SELECT ^{inner1}, ^{inner2};|], toComparableParams (x, y, z)),
+      do
+        rows <- Gen.list (Range.linear 2 5) ((,) <$> genInt <*> genInt)
+        let valuesQuery = vALUES rows
+        pure ([sql|SELECT * FROM (^{valuesQuery}) AS t(a, b);|], concatMap toComparableParams rows),
+      do
+        x <- genInt
+        y <- genInt
+        let zeroParamQuery = escapeIdentifier "some_table"
+        pure ([sql|SELECT #{x} FROM ^{zeroParamQuery} WHERE z = #{y};|], toComparableParams (x, y))
     ]
 
 -- | Mix of mkQuery, #{} interpolation, and ^{} embedding.
@@ -325,10 +332,12 @@ threeParamTemplates =
 getUniqueNE :: (HasCallStack) => Query -> SingleQuery
 getUniqueNE = NE.head . breakQueryIntoStatements
 
--- | Extract all $N placeholder numbers from SQL text, returning them sorted and deduplicated.
+-- | Extract all $N placeholder numbers from SQL text, in the order they first occur
+-- (later repeats of an already-seen number are dropped, but the occurrence order is not
+-- otherwise touched, so a placeholder numbered out of order is still detected).
 -- This is a different implementation from the application, and it is so on purpose.
 extractPlaceholders :: Text -> [Int]
-extractPlaceholders = List.sort . List.nub . go
+extractPlaceholders = List.nub . go
   where
     go txt =
       case Text.break (== '$') txt of
