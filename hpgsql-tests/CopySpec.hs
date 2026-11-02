@@ -3,6 +3,7 @@ module CopySpec where
 import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Int (Int32, Int64)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TE
@@ -19,6 +20,7 @@ import Hpgsql
 import Hpgsql.Copy (copyFrom, copyStart, putCopyData, putCopyError, withCopy_)
 import Hpgsql.Query (sql)
 import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
+import System.Timeout (timeout)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
@@ -37,6 +39,12 @@ spec = do
     it
       "putCopyError"
       copyError
+    it
+      "COPY with a SQL syntax error fails promptly instead of hanging"
+      copyWithSyntaxErrorDoesNotHang
+    it
+      "COPY to a non-existent table fails promptly instead of hanging"
+      copyToNonExistentTableDoesNotHang
 
 genRows :: Gen.Gen [(Int32, Text, Int64)]
 genRows = do
@@ -83,6 +91,27 @@ copyError conn = do
     transactionStatus conn `shouldReturn` TransInError
   execute_ conn "SELECT 1"
   transactionStatus conn `shouldReturn` TransIdle
+
+-- | Invalid syntax in COPY statements makes postgres hand us an error message
+-- before Parse/Bind, so that's worth testing. In the past hpgsql would hang in such
+-- a case, waiting for ReadyForQuery forever.
+copyWithSyntaxErrorDoesNotHang :: HPgConnection -> IO ()
+copyWithSyntaxErrorDoesNotHang conn = do
+  result <-
+    timeout 5_000_000 $
+      withCopy_ conn "COPY FROM STDIN WITH (FORMAT CSV);" (pure ())
+        `shouldThrow` pgErrorMustContain "COPY FROM STDIN" [(ErrorSeverity, "ERROR"), (ErrorCode, "42601")]
+  result `shouldSatisfy` isJust
+
+-- | Same concern as 'copyWithSyntaxErrorDoesNotHang', but for a statement that fails at
+-- Execute time (a missing table) rather than at Parse time.
+copyToNonExistentTableDoesNotHang :: HPgConnection -> IO ()
+copyToNonExistentTableDoesNotHang conn = do
+  result <-
+    timeout 5_000_000 $
+      withCopy_ conn "COPY table_that_does_not_exist_xyz FROM STDIN WITH (FORMAT CSV);" (pure ())
+        `shouldThrow` pgErrorMustContain "COPY table_that_does_not_exist_xyz FROM STDIN" [(ErrorSeverity, "ERROR")]
+  result `shouldSatisfy` isJust
 
 copyErrorPutCopyError :: HPgConnection -> IO ()
 copyErrorPutCopyError conn = do

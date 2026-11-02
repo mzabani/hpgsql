@@ -1529,15 +1529,32 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
               SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0, preparedStmtHash = Nothing},
               -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
               SomeMessage Execute,
-              SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
+              SomeMessage Sync
             ]
     )
     (pure ())
     $ \(qryId :| _) -> do
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      copyFn qryId
+      -- Keep receiving until we're either in copy-in mode (CopyInResponse) or Parse/Bind/
+      -- Execute failed and we've drained all the way to ReadyForQuery
+      let receiveUntilCopyReadyOrError = do
+            (_, st) <- receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+            case st of
+              RowDescriptionOrNoDataOrCopyInResponseReceived (Right3 CopyInResponse) -> pure Nothing
+              RowDescriptionOrNoDataOrCopyInResponseReceived _notCopyInResponse -> throwIrrecoverableErrorWithStatement queryString "Got a response not for COPY statements from Postgres. Are you sure this is a valid COPY statement?"
+              ReadyForQueryReceived (Left err) _ -> pure $ Just err
+              ReadyForQueryReceived (Right _) _ -> pure Nothing
+              ParseCompleteReceived _ -> receiveUntilCopyReadyOrError
+              BindCompleteReceived _ -> receiveUntilCopyReadyOrError
+              ErrorResponseReceived _ _ -> receiveUntilCopyReadyOrError -- We want to receive ReadyForQuery before continuing
+              _ -> throwIrrecoverableErrorWithStatement queryString "Received unknown message from postgres after sending COPY statement"
+      mErr <- receiveUntilCopyReadyOrError
+      case mErr of
+        Just err -> throwPostgresError queryString err
+        Nothing ->
+          -- We expect copyFn to send rows, Sync, and wait until ReadyForQuery.
+          -- This is an internal method, and this expectation is part of
+          -- our contract.
+          copyFn qryId
 
 -- | Copies rows into a table with the binary COPY protocol.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
