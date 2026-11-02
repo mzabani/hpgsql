@@ -142,7 +142,7 @@ import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
-import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
+import Hpgsql.Networking (RecvResult (..), recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.ScramSHA256 as ScramSHA256
 import qualified Hpgsql.SimpleParser as Parser
@@ -611,8 +611,12 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- or an exception is thrown when receiving.
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
-            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
+            recvRes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+            case recvRes of
+              RecvSuccess someBytes -> atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
+              RecvRemotePeerClosed ->
+                throwIrrecoverableError "Remote peer has closed the connection"
+              RecvTryAgain -> pure ()
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()

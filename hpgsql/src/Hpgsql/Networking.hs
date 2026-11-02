@@ -12,7 +12,8 @@
 --
 -- See: https://github.com/haskell/network/blob/master/LICENSE
 module Hpgsql.Networking
-  ( recvNonBlocking,
+  ( RecvResult (..),
+    recvNonBlocking,
     socketWaitRead,
     socketWaitWrite,
     sendNonBlocking,
@@ -25,9 +26,10 @@ import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.Int (Int64)
 import Foreign (Ptr, Storable (..), Word8, allocaArray, castPtr, nullPtr, plusPtr)
-import Foreign.C (CInt (..), CSize (..), eAGAIN, eWOULDBLOCK, getErrno)
+import Foreign.C (CInt (..), CSize (..), Errno (..), eAGAIN, eWOULDBLOCK, getErrno)
 import GHC.Base (Addr#)
-import Hpgsql.Internal.PinnedByteArray (PinnedByteArray, createPinnedByteArray)
+import Hpgsql.Internal.PinnedByteArray (PinnedByteArray, createPinnedByteArray')
+import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Network.Socket (Socket, withFdSocket)
 import System.Posix.Types (CSsize (..))
 
@@ -37,23 +39,35 @@ socketWaitRead socket = withFdSocket socket (threadWaitRead . fromIntegral)
 socketWaitWrite :: Socket -> IO ()
 socketWaitWrite socket = withFdSocket socket (threadWaitWrite . fromIntegral)
 
-recvNonBlocking :: Socket -> Int -> IO PinnedByteArray
-recvNonBlocking s nbytes = withFdSocket s $ \fd -> createPinnedByteArray nbytes $ \buffer -> do
+data RecvResult
+  = -- | No bytes available in the socket yet, try again later
+    RecvTryAgain
+  | -- | When the remote peer has closed the connection.
+    RecvRemotePeerClosed
+  | RecvSuccess !PinnedByteArray
+
+recvNonBlocking :: Socket -> Int -> IO RecvResult
+recvNonBlocking s nbytes = fmap toRecvRes $ withFdSocket s $ \fd -> createPinnedByteArray' nbytes $ \buffer -> do
   -- Largely copied from https://hackage-content.haskell.org/package/network-3.2.8.0/docs/src/Network.Socket.Buffer.html#recvBufNoWait and other functions from the network library,
   -- but then modified to our needs.
   r <- c_recv fd buffer (fromIntegral nbytes) 0 {-flags-}
   if r >= 0
     then do
       -- putStrLn $ "Asked for " ++ show nbytes ++ ", got " ++ show r
-      pure $ fromIntegral r
+      pure (r, Just r)
     else do
-      err <- getErrno
+      err@(Errno errnoNum) <- getErrno
       if err == eAGAIN || err == eWOULDBLOCK
         then do
           -- putStrLn $ "Asked for " ++ show nbytes ++ ", but got eAGAIN"
-          pure 0
+          pure (0, Nothing)
         else
-          throw $ userError "Internal error in hpgsql's recvNonBlocking"
+          throw $ userError $ "Error in recvNonBlocking. errno " ++ show errnoNum
+  where
+    toRecvRes :: (PinnedByteArray, Maybe CInt) -> RecvResult
+    toRecvRes = \case
+      (_, Nothing) -> RecvTryAgain
+      (pba, Just _) -> if PBA.length pba == 0 then RecvRemotePeerClosed else RecvSuccess pba
 
 sendNonBlocking :: Socket -> L.ByteString -> IO Int64
 sendNonBlocking s lbs = do
