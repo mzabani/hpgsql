@@ -1639,6 +1639,8 @@ copyStart conn copyQry = snd <$> withCopyInternal conn copyQry (\_qryId -> pure 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn $ CopyData (Builder.byteString t)
 
+-- | Aborts an ongoing COPY operation with an abort message. This cannot be used
+-- with `withCopy` and `withCopy_` yet.
 putCopyError :: HPgConnection -> String -> IO ()
 putCopyError conn causeForFailure = withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ const $ do
   mCopyState <-
@@ -1655,6 +1657,8 @@ putCopyError conn causeForFailure = withControlMsgsLock conn (const $ pure ()) (
               [qs@QueryState {queryProtocol = CopyQuery StillCopying}] -> STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = [qs {queryProtocol = CopyQuery CopyFailAndSyncSent}]}
               _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
       atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail causeForFailure, SomeMessage Sync], markCopyFailSent)
+      -- Drain the backend's next messages, which should be ErrorResponse and ReadyForQuery
+      cancelActiveStatement conn True
     Just copyState ->
       throwIrrecoverableError $ "Current COPY command is not in a cancellable state. Its current state is " <> Text.pack (show copyState)
     Nothing ->
@@ -1666,13 +1670,13 @@ copyEnd conn = do
   qryId <- STM.atomically $ do
     st <- STM.readTVar conn.internalConnectionState
     case st.currentPipeline of
-      [] -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd"
+      [] -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "No active COPY statement when running copyEnd"
       [qs] -> case qs.queryProtocol of
-        ExtendedQuery -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd, but rather there was a regular query"
-        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was issued by a different thread, and Hpgsql does not support multiple threads running/ending the same COPY statement"
-        CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was already finished"
-        CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement had previously failed"
-      _ -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active pipeline with other statements running when a copyEnd was attempted"
+        ExtendedQuery -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "No active COPY statement when running copyEnd, but rather there was a regular query"
+        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement was issued by a different thread, and Hpgsql does not support multiple threads running/ending the same COPY statement"
+        CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement was already finished"
+        CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement had previously failed"
+      _ -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active pipeline with other statements running when a copyEnd was attempted"
 
   copyEndInternal conn qryId
 

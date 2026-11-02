@@ -38,7 +38,7 @@ spec = do
       copyError
     it
       "putCopyError"
-      copyError
+      copyErrorPutCopyError
     it
       "COPY with a SQL syntax error fails promptly instead of hanging"
       copyWithSyntaxErrorDoesNotHang
