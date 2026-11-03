@@ -171,7 +171,7 @@ instance IsString Query where
 -- | For internal usage only. Takes a `Query` and breaks it up into
 -- individual SQL statements that can be sent to a postgres backend.
 breakQueryIntoStatements :: Query -> NonEmpty SingleQuery
-breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams = allQueryParams, isPrepared} =
+breakQueryIntoStatements Query {queryString = fullQueryString, queryParams = allQueryParams, isPrepared} =
   -- If a user insists in trying to run an empty query, or if
   -- they mistakenly concatenate empty statements, we let them
   toEmptyQueryIfNecessary $
@@ -206,7 +206,7 @@ breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams =
       FragmentOfCommentsOrWhitespace t -> t
     go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, BinaryField)] -> [([SingleQueryFragment], [EncodingContext -> (Maybe Oid, BinaryField)])]
     go [] [] = []
-    go [] _ = error $ "Hpgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
+    go [] _ = error $ "Hpgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query fragments are " ++ show fullQueryString
     go frags params =
       let (stmtFrags, nextFrags) = case List.break isLastFragmentOfAStatement frags of
             (firstStmts, []) -> (firstStmts, [])
