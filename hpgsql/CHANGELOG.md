@@ -1,6 +1,13 @@
 ## v0.4.0
 
-- Around 16% performance improvements in row decoding performance
+This is a performance improvement and bugfixing release. Users are highly encouraged to upgrade.
+
+- `vALUES` was encoding the list in reverse order, and that has been fixed. Shouldn't have affected order-insensitive queries, but is embarrassing.
+- Fix a connection hanging if postgres killed the connection abruptly. Now a proper exception is thrown.
+- Fix a parameter interpolation bug that caused an infinite loop in user-space, before queries were even sent to postgres.
+- Fix COPY deadlocking in cases of wrong COPY syntax.
+- Fix wrong numeric scale as per the postgres `scale(numeric)` function.
+- In terms of raw row decoding performance, we now beat Npgsql and are close to tokio-postgres in one benchmark. Read more below.
 
 No breaking API changes in non-Internal modules in this version, but we now recommend using `fieldRowDecoder` instead of `singleField fieldDecoder` where you can. They're equivalent when compiling with -O1 due to rewrite rules, but the former is more performant when compiling with no optimizations.
 
