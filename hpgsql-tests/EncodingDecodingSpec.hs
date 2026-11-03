@@ -53,7 +53,7 @@ import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnect
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowDecoder, RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Pipeline (pipeline, pipeline1, pipeline1With, pipelineWith, runPipeline)
-import Hpgsql.Query (mkQuery, sql, vALUES)
+import Hpgsql.Query (escapeIdentifier, mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
 import Hpgsql.TypeInfo (Oid (..))
 import Hpgsql.Types (Only (..), PGArray (..), PgJson)
@@ -1330,8 +1330,8 @@ valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
 valuesTypeRoundTrip conn = hedgehog $ do
   rows2Tuple <- Gen.forAll $ Gen.list (Gen.linear 0 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
   rowsSingleVal <- Gen.forAll $ Gen.list (Gen.linear 0 20) $ Only <$> Gen.int (Gen.linearFrom 0 (-1000) 1000)
-  results2Tuple <- liftIO $ query conn [sql|WITH t AS (^{vALUES rows2Tuple}) SELECT * FROM t|]
-  resultsSingleVal <- liftIO $ query conn [sql|WITH t AS (^{vALUES rowsSingleVal}) SELECT * FROM t|]
+  results2Tuple <- liftIO $ query conn [sql|WITH ^{escapeIdentifier "t"} AS (^{vALUES rows2Tuple}) SELECT * FROM ^{escapeIdentifier "t"}|]
+  resultsSingleVal <- liftIO $ query conn [sql|WITH ^{escapeIdentifier "t"} AS (^{vALUES rowsSingleVal}) SELECT * FROM t|]
   List.sort results2Tuple === List.sort rows2Tuple
   List.sort resultsSingleVal === List.sort rowsSingleVal
 
