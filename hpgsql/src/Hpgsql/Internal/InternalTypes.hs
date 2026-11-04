@@ -138,6 +138,9 @@ instance Semigroup Query where
         -- That feels unlikely.. so we go with ||
         Query {queryString = q1.queryString <> remappedQ2, queryParams = q1.queryParams <> q2.queryParams, isPrepared = q1.isPrepared || q2.isPrepared}
 
+instance Monoid Query where
+  mempty = Query {queryString = [], queryParams = [], isPrepared = False}
+
 -- | A single statement, not multiple, with dollar-numbered query arguments
 -- starting from $1.
 data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)], preparedStmtHash :: !(Maybe String)}

@@ -1,5 +1,7 @@
 module SqlQuasiquoterSpec where
 
+import Control.DeepSeq (force)
+import Control.Exception (evaluate)
 import Control.Monad (forM_)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
@@ -18,8 +20,8 @@ import Hedgehog (Gen, PropertyT, annotateShow, forAll, (===))
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 import Hpgsql.Builder (BinaryField (..))
-import Hpgsql.Encoding (FromPgField, LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeEncoder, typeFieldEncoder, typeOidWithName)
-import Hpgsql.Internal.InternalTypes (Query (..), SingleQuery (..))
+import Hpgsql.Encoding (FieldEncoder (..), FromPgField, LowerCasedPgEnum (..), RowEncoder (..), ToPgField (..), ToPgRow (..), compositeTypeEncoder, typeFieldEncoder, typeOidWithName)
+import Hpgsql.Internal.InternalTypes (Query (..), SingleQuery (..), queryToByteString)
 import Hpgsql.ParsingInternal (ParsingOpts (..), parseSql)
 import Hpgsql.Query (breakQueryIntoStatements, escapeIdentifier, mkQuery, sql, vALUES)
 import Hpgsql.TypeInfo (EncodingContext (..), Oid, builtinPgTypesMap)
@@ -28,8 +30,11 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 spec :: Spec
-spec = do
+spec = parallel $ do
   describe "Query concatenation" $ do
+    it
+      "Concatenating fragments of one single statement"
+      fragmentsSingleStatementConcatenation
     it
       "Concatenating mkQuery queries"
       mkQueryConcatenation
@@ -48,6 +53,17 @@ spec = do
           query = getUniqueNE [sql|SELECT ^{(inner)};|]
       query.queryString `shouldBe` encodeUtf8 "SELECT $1;"
       length query.queryParams `shouldBe` 1
+
+  describe "Explicit validation errors" $ do
+    it "mkQuery throws when a dollar-numbered placeholder is less than 1" $ do
+      evaluate (force $ show (mkQuery "SELECT $0" (Only (1 :: Int))).queryString) `shouldThrow` anyErrorCall
+
+    it "mkQuery throws when a dollar-numbered placeholder exceeds the supplied argument count" $ do
+      evaluate (force $ show (mkQuery "SELECT $2" (Only (1 :: Int))).queryString) `shouldThrow` anyErrorCall
+
+    it "breakQueryIntoStatements throws promptly when there are more supplied arguments than referenced placeholders" $ do
+      let q = mkQuery "SELECT $1" (1 :: Int, 2 :: Int)
+      evaluate (length (NE.toList (breakQueryIntoStatements q))) `shouldThrow` anyErrorCall
 
 -- | Concatenating arbitrary queries produces valid results.
 checkQueryConcatenation :: Gen (Query, [(Maybe Oid, BinaryField)]) -> PropertyT IO ()
@@ -78,6 +94,38 @@ checkQueryConcatenation gen = hedgehog $ do
         numParams = length qParams
 
     placeholders === [1 .. numParams]
+
+-- | Concatenating fragments that together form a single SQL statement produces
+-- valid parameter interpolation and a valid query string.
+fragmentsSingleStatementConcatenation :: PropertyT IO ()
+fragmentsSingleStatementConcatenation = hedgehog $ do
+  fragments :: [(ByteString, (Int, Int))] <-
+    forAll $
+      Gen.list (Range.linear 1 100) $
+        Gen.element
+          [ ("$1, $2 ", (1, 37)),
+            ("$1 FROM t WHERE x = $2 ", (91, 15)),
+            ("$1, $2, $1 + $2,", (49, 61)),
+            ("COALESCE($1, $2), COALESCE($2, $1),", ((-38), 42)),
+            ("($1::jsonb ?| $2),", (0, 1237))
+          ]
+  let concatenatedQuery = mconcat $ map (\(queryString, queryArgs) -> mkQuery queryString queryArgs) fragments
+      expectedParams :: [Int] = concatMap (\(_, (arg1, arg2)) -> [arg1, arg2]) fragments
+      encCtx = EncodingContext builtinPgTypesMap
+      intEncoder = fieldEncoder @Int
+  map ($ encCtx) concatenatedQuery.queryParams === map (\argValue -> (intEncoder.toTypeOid encCtx, intEncoder.toPgField encCtx argValue)) expectedParams
+  length (breakQueryIntoStatements concatenatedQuery) === 1
+  extractPlaceholders (decodeUtf8 (queryToByteString concatenatedQuery)) === [1 .. length expectedParams]
+
+  -- All the numbered arguments in the fragments are $1 or $2. If we re-parse the concatened query string, the first
+  -- pair of Int args should be the only args. This is a strange assertion to make, but might as well
+  -- make it if it's valid
+  let (reparsedQuery, reparsedArgList) = case fragments of
+        [] -> ("", [])
+        ((_, firstFragArgs@(arg1, arg2)) : _) -> (mkQuery (mconcat $ map fst fragments) firstFragArgs, [arg1, arg2])
+  map ($ encCtx) reparsedQuery.queryParams === map (\argValue -> (intEncoder.toTypeOid encCtx, intEncoder.toPgField encCtx argValue)) reparsedArgList
+  length (breakQueryIntoStatements reparsedQuery) === 1
+  extractPlaceholders (decodeUtf8 (queryToByteString reparsedQuery)) === [1, 2]
 
 mkQueryConcatenation :: PropertyT IO ()
 mkQueryConcatenation = checkQueryConcatenation genMkQuery
@@ -256,8 +304,7 @@ genEmbeddedQuery =
       do
         x <- genInt
         y <- genInt
-        let zeroParamQuery = escapeIdentifier "some_table"
-        pure ([sql|SELECT #{x} FROM ^{zeroParamQuery} WHERE z = #{y};|], toComparableParams (x, y))
+        pure ([sql|SELECT #{x} FROM ^{escapeIdentifier "some_table"} WHERE z = #{y};|], toComparableParams (x, y))
     ]
 
 -- | Mix of mkQuery, #{} interpolation, and ^{} embedding.
