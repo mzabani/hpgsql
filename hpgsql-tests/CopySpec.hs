@@ -1,6 +1,6 @@
 module CopySpec where
 
-import Control.Monad (forM_)
+import Control.Monad (forM_, void)
 import Control.Monad.IO.Class (liftIO)
 import Data.Int (Int32, Int64)
 import Data.Maybe (isJust)
@@ -102,6 +102,7 @@ copyWithSyntaxErrorDoesNotHang conn = do
       withCopy_ conn "COPY FROM STDIN WITH (FORMAT CSV);" (pure ())
         `shouldThrow` pgErrorMustContain "COPY FROM STDIN" [(ErrorSeverity, "ERROR"), (ErrorCode, "42601")]
   result `shouldSatisfy` isJust
+  void $ execute conn "SELECT 1" -- Connection should be healthy for another query
 
 -- | Same concern as 'copyWithSyntaxErrorDoesNotHang', but for a statement that fails at
 -- Execute time (a missing table) rather than at Parse time.
@@ -112,6 +113,7 @@ copyToNonExistentTableDoesNotHang conn = do
       withCopy_ conn "COPY table_that_does_not_exist_xyz FROM STDIN WITH (FORMAT CSV);" (pure ())
         `shouldThrow` pgErrorMustContain "COPY table_that_does_not_exist_xyz FROM STDIN" [(ErrorSeverity, "ERROR")]
   result `shouldSatisfy` isJust
+  void $ execute conn "SELECT 1" -- Connection should be healthy for another query
 
 copyErrorPutCopyError :: HPgConnection -> IO ()
 copyErrorPutCopyError conn = do
