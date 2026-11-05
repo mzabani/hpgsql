@@ -8,6 +8,7 @@ This is a performance improvement and bugfixing release, with very few features 
 - Fix COPY deadlocking when trying to run syntactically invalid COPY statements.
 - Fix wrong scale when encoding `numeric` values as per the postgres `scale(numeric)` function.
 - Fix stale `transactionStatus` immediately after `putCopyError`.
+- Add missing client nonce check in ScramSHA256 authentication.
 - Added a `Monoid Query` instance.
 - Domain types in both arrays and custom types can now be decoded.
 - In terms of raw row decoding performance, we now beat Npgsql and are close to tokio-postgres in one benchmark. Read more below.
