@@ -142,7 +142,7 @@ import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
-import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
+import Hpgsql.Networking (RecvResult (..), recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.ScramSHA256 as ScramSHA256
 import qualified Hpgsql.SimpleParser as Parser
@@ -611,8 +611,12 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- or an exception is thrown when receiving.
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
-            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
+            recvRes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+            case recvRes of
+              RecvSuccess someBytes -> atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
+              RecvRemotePeerClosed ->
+                throwIrrecoverableError "Remote peer has closed the connection"
+              RecvTryAgain -> pure ()
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()
@@ -1525,15 +1529,32 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
               SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0, preparedStmtHash = Nothing},
               -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
               SomeMessage Execute,
-              SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
+              SomeMessage Sync
             ]
     )
     (pure ())
     $ \(qryId :| _) -> do
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      copyFn qryId
+      -- Keep receiving until we're either in copy-in mode (CopyInResponse) or Parse/Bind/
+      -- Execute failed and we've drained all the way to ReadyForQuery
+      let receiveUntilCopyReadyOrError = do
+            (_, st) <- receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+            case st of
+              RowDescriptionOrNoDataOrCopyInResponseReceived (Right3 CopyInResponse) -> pure Nothing
+              RowDescriptionOrNoDataOrCopyInResponseReceived _notCopyInResponse -> throwIrrecoverableErrorWithStatement queryString "Got a response not for COPY statements from Postgres. Are you sure this is a valid COPY statement?"
+              ReadyForQueryReceived (Left err) _ -> pure $ Just err
+              ReadyForQueryReceived (Right _) _ -> pure Nothing
+              ParseCompleteReceived _ -> receiveUntilCopyReadyOrError
+              BindCompleteReceived _ -> receiveUntilCopyReadyOrError
+              ErrorResponseReceived _ _ -> receiveUntilCopyReadyOrError -- We want to receive ReadyForQuery before continuing
+              _ -> throwIrrecoverableErrorWithStatement queryString "Received unknown message from postgres after sending COPY statement"
+      mErr <- receiveUntilCopyReadyOrError
+      case mErr of
+        Just err -> throwPostgresError queryString err
+        Nothing ->
+          -- We expect copyFn to send rows, Sync, and wait until ReadyForQuery.
+          -- This is an internal method, and this expectation is part of
+          -- our contract.
+          copyFn qryId
 
 -- | Copies rows into a table with the binary COPY protocol.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
@@ -1618,6 +1639,8 @@ copyStart conn copyQry = snd <$> withCopyInternal conn copyQry (\_qryId -> pure 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn $ CopyData (Builder.byteString t)
 
+-- | Aborts an ongoing COPY operation with an abort message. This cannot be used
+-- with `withCopy` and `withCopy_` yet.
 putCopyError :: HPgConnection -> String -> IO ()
 putCopyError conn causeForFailure = withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ const $ do
   mCopyState <-
@@ -1634,6 +1657,8 @@ putCopyError conn causeForFailure = withControlMsgsLock conn (const $ pure ()) (
               [qs@QueryState {queryProtocol = CopyQuery StillCopying}] -> STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = [qs {queryProtocol = CopyQuery CopyFailAndSyncSent}]}
               _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
       atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail causeForFailure, SomeMessage Sync], markCopyFailSent)
+      -- Drain the backend's next messages, which should be ErrorResponse and ReadyForQuery
+      cancelActiveStatement conn True
     Just copyState ->
       throwIrrecoverableError $ "Current COPY command is not in a cancellable state. Its current state is " <> Text.pack (show copyState)
     Nothing ->
@@ -1645,13 +1670,13 @@ copyEnd conn = do
   qryId <- STM.atomically $ do
     st <- STM.readTVar conn.internalConnectionState
     case st.currentPipeline of
-      [] -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd"
+      [] -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "No active COPY statement when running copyEnd"
       [qs] -> case qs.queryProtocol of
-        ExtendedQuery -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd, but rather there was a regular query"
-        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was issued by a different thread, and Hpgsql does not support multiple threads running/ending the same COPY statement"
-        CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was already finished"
-        CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement had previously failed"
-      _ -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active pipeline with other statements running when a copyEnd was attempted"
+        ExtendedQuery -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "No active COPY statement when running copyEnd, but rather there was a regular query"
+        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement was issued by a different thread, and Hpgsql does not support multiple threads running/ending the same COPY statement"
+        CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement was already finished"
+        CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement had previously failed"
+      _ -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active pipeline with other statements running when a copyEnd was attempted"
 
   copyEndInternal conn qryId
 

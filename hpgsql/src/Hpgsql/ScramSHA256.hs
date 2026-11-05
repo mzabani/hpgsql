@@ -22,7 +22,7 @@ where
 -- TODO: We should test these scenarios, but we don't yet.
 
 import Control.Applicative ((<|>))
-import Control.Monad (void)
+import Control.Monad (unless, void)
 import Crypto.Hash (Digest, SHA256, hash)
 import Crypto.KDF.PBKDF2 (Parameters (..), fastPBKDF2_SHA256)
 import Crypto.MAC.HMAC (HMAC, hmac, hmacGetDigest)
@@ -149,6 +149,12 @@ handleServerFirstMsg (encodeUtf8 -> password) ScramClientFirstMessage {gs2Header
       --       i=4096
       void $ string "r=" <|> fail "Missing nonce in server-first-message (1)"
       nonce <- Parsec.takeWhile1 (/= ',') <|> fail "Missing nonce in server-first-message (2)"
+      -- As per the RFC, the client MUST verify that the nonce in the server-first-message
+      -- extends the nonce it sent in the client-first-message, aborting otherwise. clientFirstBare
+      -- is always "n=,r=" <> clientNonce (see generateClientFirstMessage), so we drop 5
+      -- characters to get the clientNonce
+      unless (BS.drop 5 clientFirstBare `BS.isPrefixOf` nonce) $
+        fail "Server's nonce in the server-first-message does not extend the client's nonce; aborting SCRAM authentication"
       void $ string ","
       void $ string "s=" <|> fail "Missing salt in server-first-message (1)"
       saltB64 <- Parsec.takeWhile1 (/= ',') <|> fail "Missing salt in server-first-message (2)"

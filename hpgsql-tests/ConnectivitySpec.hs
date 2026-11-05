@@ -1,6 +1,9 @@
 module ConnectivitySpec where
 
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (wait, withAsync)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar)
+import Control.Exception.Safe (SomeException, try)
 import qualified Data.List as List
 import Data.Text (Text)
 import DbUtils
@@ -10,10 +13,11 @@ import DbUtils
   )
 import Hpgsql
 import Hpgsql.Cancellation (cancelActiveStatement)
-import Hpgsql.Connection (connect, connectionIsClosed, withConnection)
+import Hpgsql.Connection (connect, connectionIsClosed, getBackendPid, withConnection)
 import Hpgsql.Internal.InternalTypes (ConnectOpts (..), ConnectionString (..))
-import Hpgsql.Query (sql)
+import Hpgsql.Query (mkQuery, sql)
 import Hpgsql.Types (Only (..))
+import System.Timeout (timeout)
 import Test.Hspec
 
 spec :: Spec
@@ -37,6 +41,9 @@ spec = do
     it
       "Connecting with MD5 password"
       connectingWithMD5Password
+    it
+      "A connection whose backend was terminated mid-query throws instead of hanging"
+      disconnectingMidQueryDoesNotHang
 
 connectingToNonExistingDb :: IO ()
 connectingToNonExistingDb = do
@@ -94,3 +101,26 @@ connectingWithMD5Password = do
     cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
     query1 conn "SELECT current_user"
   connectedUser `shouldBe` ("user_md5" :: String)
+
+-- | This test exists because once hpgsql had a bug when it wasn't handling recv returning
+-- 0 bytes properly. This bug might not happen ever again, but the test remains.
+disconnectingMidQueryDoesNotHang :: IO ()
+disconnectingMidQueryDoesNotHang = do
+  hpgsqlConnInfo <- testConnInfo
+  waitOutcomeVar <- newEmptyMVar
+  -- The dying connection's own cleanup (on withConnection's exit) also tries to write to the
+  -- now-broken socket and throws some other exception; that's expected and not what this test
+  -- is checking, so it's discarded here rather than conflated with waitOutcomeVar's content.
+  _ <- try @_ @SomeException $ withConnection hpgsqlConnInfo 10 $ \conn -> do
+    let pid = getBackendPid conn
+    withAsync (execute_ conn "SELECT pg_sleep(5)") $ \queryAsync -> do
+      threadDelay 500_000 -- give the query time to be sent, so queryAsync blocks on recv
+      withConnection hpgsqlConnInfo 10 $ \killerConn ->
+        execute_ killerConn (mkQuery "SELECT pg_terminate_backend($1)" (Only pid))
+      waitOutcome <- timeout 5_000_000 (try @_ @IrrecoverableHpgsqlError (wait queryAsync))
+      putMVar waitOutcomeVar waitOutcome
+  waitOutcome <- readMVar waitOutcomeVar
+  case waitOutcome of
+    Nothing -> expectationFailure "Query on a connection whose backend was terminated hung instead of throwing"
+    Just (Right ()) -> expectationFailure "Query succeeded even though its backend was terminated mid-query"
+    Just (Left ex) -> ex `shouldSatisfy` irrecoverableErrorWithMsg "Remote peer has closed the connection"
