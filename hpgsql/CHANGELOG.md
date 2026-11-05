@@ -10,7 +10,7 @@ This is a performance improvement and bugfixing release, with very few features 
 - Fix stale `transactionStatus` immediately after `putCopyError`.
 - Add missing client nonce check in ScramSHA256 authentication.
 - Added a `Monoid Query` instance.
-- Domain types in both arrays and custom types can now be decoded.
+- Domain types in both arrays and custom types can now be decoded, and `DomainType` now has more information in it.
 - In terms of raw row decoding performance, we now beat Npgsql and are close to tokio-postgres in one benchmark. Read more below.
 
 No breaking API changes in non-Internal modules in this version, but we now recommend using `fieldRowDecoder` instead of `singleField fieldDecoder` where you can. They're equivalent when compiling with -O1 due to rewrite rules, but the former is more performant when compiling with no optimizations.
