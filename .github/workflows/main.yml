@@ -68,7 +68,7 @@ jobs:
           'nix-build --no-out-link --argstr ghc ghc967 -A hpgsql-simple-compat-tests && timeout 5m scripts/ci/run-tests-and-annotate-with-error.sh local/pg14-ghc967-simple-compat-tests.txt nix-build --no-out-link --argstr ghc ghc967 -A hpgsqlSimpleCompatTestsPg14'
 
   build-aarch64-darwin:
-    runs-on: macos-14
+    runs-on: macos-26
 
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
