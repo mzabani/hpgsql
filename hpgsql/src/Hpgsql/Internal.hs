@@ -142,7 +142,7 @@ import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
-import Hpgsql.Networking (RecvResult (..), recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
+import Hpgsql.Networking (RecvResult (..), SendResult (..), recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.ScramSHA256 as ScramSHA256
 import qualified Hpgsql.SimpleParser as Parser
@@ -615,7 +615,7 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
             case recvRes of
               RecvSuccess someBytes -> atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
               RecvRemotePeerClosed ->
-                throwIrrecoverableError "Remote peer has closed the connection"
+                throwIrrecoverableError "recv: Remote peer has closed the connection"
               RecvTryAgain -> pure ()
           receiveUntilBufferHasAtLeast minBytesNecessary
 
@@ -700,7 +700,7 @@ withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = d
             let go = do
                   others <- modifyMVar conn.sendBuffer $ \case
                     [] -> pure ([], [])
-                    ((!msgs, afterSentTxn) : xs) ->
+                    buff@((!msgs, afterSentTxn) : xs) ->
                       if LBS.null msgs
                         then do
                           -- debugPrint "Finished sending msgs"
@@ -708,11 +708,15 @@ withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = d
                           pure (xs, xs)
                         else do
                           restore $ socketWaitWrite socket
-                          n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
-                          -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
-                          let !remaining = LBS.drop n msgs
-                              fin = (remaining, afterSentTxn) : xs
-                          pure (fin, fin)
+                          sendRes <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
+                          case sendRes of
+                            SendSuccess n -> do
+                              -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
+                              let !remaining = LBS.drop n msgs
+                                  fin = (remaining, afterSentTxn) : xs
+                              pure (fin, fin)
+                            SendTryAgain -> pure (buff, buff) -- `man 2 select` says "even if a file descriptor indicates as writable, a large write may still block"
+                            SendRemotePeerClosed -> throwIrrecoverableError "send: Remote peer has closed the connection"
 
                   -- debugPrint $ show $ stop || null others
                   unless (null others) go

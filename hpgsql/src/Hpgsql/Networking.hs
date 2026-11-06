@@ -13,6 +13,7 @@
 -- See: https://github.com/haskell/network/blob/master/LICENSE
 module Hpgsql.Networking
   ( RecvResult (..),
+    SendResult (..),
     recvNonBlocking,
     socketWaitRead,
     socketWaitWrite,
@@ -26,7 +27,7 @@ import qualified Data.ByteString.Lazy as L
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.Int (Int64)
 import Foreign (Ptr, Storable (..), Word8, allocaArray, castPtr, nullPtr, plusPtr)
-import Foreign.C (CInt (..), CSize (..), Errno (..), eAGAIN, eWOULDBLOCK, getErrno)
+import Foreign.C (CInt (..), CSize (..), Errno (..), eAGAIN, eCONNRESET, ePIPE, eWOULDBLOCK, getErrno)
 import GHC.Base (Addr#)
 import Hpgsql.Internal.PinnedByteArray (PinnedByteArray, createPinnedByteArray')
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
@@ -69,7 +70,9 @@ recvNonBlocking s nbytes = fmap toRecvRes $ withFdSocket s $ \fd -> createPinned
       (_, Nothing) -> RecvTryAgain
       (pba, Just _) -> if PBA.length pba == 0 then RecvRemotePeerClosed else RecvSuccess pba
 
-sendNonBlocking :: Socket -> L.ByteString -> IO Int64
+data SendResult = SendSuccess Int64 | SendTryAgain | SendRemotePeerClosed
+
+sendNonBlocking :: Socket -> L.ByteString -> IO SendResult
 sendNonBlocking s lbs = do
   -- Largely copied from https://hackage-content.haskell.org/package/network-3.2.8.0/docs/src/Network.Socket.ByteString.Lazy.Posix.html#send,
   -- but then modified to our needs.
@@ -81,7 +84,20 @@ sendNonBlocking s lbs = do
       -- original codebase, but we don't have that here because that
       -- calls threadWaitWrite, which blocks.
       c_writev fd ptr niovs
-  return $ fromIntegral siz
+  if siz >= 0
+    then
+      pure $ SendSuccess (fromIntegral siz)
+    else do
+      err@(Errno errnoNum) <- getErrno
+      if err == eAGAIN || err == eWOULDBLOCK
+        then
+          pure SendTryAgain
+        else
+          if err == eCONNRESET || err == ePIPE
+            then
+              pure SendRemotePeerClosed
+            else
+              throw $ userError $ "Error in sendNonBlocking. errno " ++ show errnoNum
   where
     withPokes ss p f = loop ss p 0 0
       where
