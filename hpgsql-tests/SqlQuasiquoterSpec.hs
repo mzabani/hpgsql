@@ -239,7 +239,7 @@ genInterpolatedQuery =
         y <- genInt
         z <- genInt
         e :: SomeGenericEnum <- Gen.enum minBound maxBound
-        pure ([sql|SELECT #{x}, #{e} FROM t WHERE #{y} BETWEEN 0 AND #{fromIntegral z + 1.421::Float};|], toComparableParams (x, e, y, fromIntegral z + 1.421 :: Float)),
+        pure ([sql|SELECT #{x :: Int}, #{e} FROM t WHERE #{(y :: Int) :: Int} BETWEEN 0 AND #{fromIntegral z + 1.421::Float};|], toComparableParams (x, e, y, fromIntegral z + 1.421 :: Float)),
       do
         x <- genInt
         b <- Gen.bool

@@ -387,8 +387,10 @@ convertType (HsFunTy _ _ (L _ t1) (L _ t2)) =
   TH.AppT . TH.AppT TH.ArrowT <$> convertType t1 <*> convertType t2
 convertType (HsParTy _ (L _ t)) =
   convertType t
-convertType (HsQualTy _ _ (L _ t)) =
-  convertType t
+convertType (HsQualTy _ (L _ ctxt) (L _ t)) = do
+  ctxt' <- traverse (\(L _ c) -> convertType c) ctxt
+  t' <- convertType t
+  Right (TH.ForallT [] ctxt' t')
 convertType (HsForAllTy{}) = unsupportedLanguageFeatureMsg "HsForAllTy in a type"
 convertType (HsAppKindTy{}) = unsupportedLanguageFeatureMsg "HsAppKindTy in a type"
 convertType (HsOpTy{}) = unsupportedLanguageFeatureMsg "HsOpTy in a type"
