@@ -42,6 +42,9 @@ spec = do
       "Connecting with MD5 password"
       connectingWithMD5Password
     it
+      "Connecting with SCRAM-SHA-256 password"
+      connectingWithSCRAMPassword
+    it
       "A connection whose backend was terminated mid-query throws instead of hanging"
       disconnectingMidQueryDoesNotHang
     it
@@ -104,6 +107,15 @@ connectingWithMD5Password = do
     cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
     query1 conn "SELECT current_user"
   connectedUser `shouldBe` ("user_md5" :: String)
+
+connectingWithSCRAMPassword :: IO ()
+connectingWithSCRAMPassword = do
+  hpgsqlConnInfo <- testConnInfo
+  connect hpgsqlConnInfo {user = "user_scram", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
+  Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_scram", password = "hpgsql-pásswörd&abc!@#$%"} 10 $ \conn -> do
+    cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
+    query1 conn "SELECT current_user"
+  connectedUser `shouldBe` ("user_scram" :: String)
 
 -- | This test exists because once hpgsql had a bug when it wasn't handling recv returning
 -- 0 bytes properly. This bug might not happen ever again, but the test remains.
