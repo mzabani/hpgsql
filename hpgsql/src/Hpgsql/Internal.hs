@@ -1251,14 +1251,14 @@ pipelineS = pipelineSWith rowDecoder
 -- you should never consume it more than once, for it _will_ give you wrong results if you do that.
 -- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineSWith :: RowDecoder a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
+pipelineSWith rowDec (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
-    (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just expectedColFmts)])
+    (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just rowDec.numExpectedColumns)])
     ( \conn qryIds -> do
         case lastAndInit qryIds of
           (firstQueries, mLastQry) -> do
             forM_ firstQueries $ consumeResultsIgnoreRows conn
-            pure $ consumeStreamingResults (ApplicativeRowDecoder rowparser) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
+            pure $ consumeStreamingResults (ApplicativeRowDecoder rowDec) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
     )
 
 -- | Prefer to use 'pipelineS' and 'pipelineSWith', because 'RowDecoder' can typecheck PostgreSQL results
