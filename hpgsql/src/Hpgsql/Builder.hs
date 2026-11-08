@@ -12,6 +12,8 @@ import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Builder.Extra as Builder
 import qualified Data.ByteString.Lazy as LBS
 import Data.Int (Int16, Int32, Int64)
+import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8)
 import Data.Word (Word8)
 
 data BinaryField = SqlNull | NotNull !ByteString
@@ -52,6 +54,12 @@ char7 c = LengthAwareBuilder 1 (Builder.char7 c)
 
 string7 :: String -> LengthAwareBuilder
 string7 s = LengthAwareBuilder (fromIntegral $ length s) (Builder.string7 s)
+
+nulTermCString :: String -> Builder
+nulTermCString s = string7 s <> word8 0
+
+nulTerminatedUtf8String :: String -> LengthAwareBuilder
+nulTerminatedUtf8String s = let bs = encodeUtf8 (Text.pack s) in LengthAwareBuilder (fromIntegral $ BS.length bs) (Builder.byteString bs) <> word8 0
 
 word8 :: Word8 -> LengthAwareBuilder
 word8 s = LengthAwareBuilder 1 (Builder.word8 s)

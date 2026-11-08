@@ -91,7 +91,7 @@ connectingWithUnencryptedPassword :: IO ()
 connectingWithUnencryptedPassword = do
   hpgsqlConnInfo <- testConnInfo
   connect hpgsqlConnInfo {user = "user_pass", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
-  Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_pass", password = "hpgsql-password"} 10 $ \conn -> do
+  Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_pass", password = "hpgsql-pásswörd&abc!@#$%"} 10 $ \conn -> do
     cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
     query1 conn "SELECT current_user"
   connectedUser `shouldBe` ("user_pass" :: String)
