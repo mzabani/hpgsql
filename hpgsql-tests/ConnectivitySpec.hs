@@ -6,6 +6,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar)
 import Control.Exception.Safe (SomeException, try)
 import qualified Data.List as List
 import Data.Text (Text)
+import qualified Data.Text as Text
 import DbUtils
   ( irrecoverableErrorMustContain,
     irrecoverableErrorWithMsg,
@@ -91,31 +92,22 @@ connectingAndChangeToUnsupportedClientEncoding = do
       `shouldThrow` irrecoverableErrorWithMsg "Postgres sent us a change of client_encoding to not UTF8, and Hpgsql only supports UTF8"
 
 connectingWithUnencryptedPassword :: IO ()
-connectingWithUnencryptedPassword = do
-  hpgsqlConnInfo <- testConnInfo
-  connect hpgsqlConnInfo {user = "user_pass", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
-  Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_pass", password = "hpgsql-pásswörd&abc!@#$%"} 10 $ \conn -> do
-    cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
-    query1 conn "SELECT current_user"
-  connectedUser `shouldBe` ("user_pass" :: String)
+connectingWithUnencryptedPassword = connectionWithPasswordTest "user_pass"
 
 connectingWithMD5Password :: IO ()
-connectingWithMD5Password = do
-  hpgsqlConnInfo <- testConnInfo
-  connect hpgsqlConnInfo {user = "user_md5", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
-  Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_md5", password = "hpgsql-password"} 10 $ \conn -> do
-    cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
-    query1 conn "SELECT current_user"
-  connectedUser `shouldBe` ("user_md5" :: String)
+connectingWithMD5Password = connectionWithPasswordTest "user_md5"
 
 connectingWithSCRAMPassword :: IO ()
-connectingWithSCRAMPassword = do
+connectingWithSCRAMPassword = connectionWithPasswordTest "user_scram"
+
+connectionWithPasswordTest :: Text -> IO ()
+connectionWithPasswordTest user = do
   hpgsqlConnInfo <- testConnInfo
-  connect hpgsqlConnInfo {user = "user_scram", password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
-  Only connectedUser <- withConnection hpgsqlConnInfo {user = "user_scram", password = "hpgsql-pásswörd&abc!@#$%"} 10 $ \conn -> do
+  connect hpgsqlConnInfo {user, password = "WRONG-password"} 10 `shouldThrow` \(ex :: IrrecoverableHpgsqlError) -> "password authentication failed for user" `List.isInfixOf` show ex
+  Only connectedUser <- withConnection hpgsqlConnInfo {user, password = "hpgsql-pásswörd&abc!@#$%"} 10 $ \conn -> do
     cancelActiveStatement conn False -- This requires connecting again, so it's a reasonable test
     query1 conn "SELECT current_user"
-  connectedUser `shouldBe` ("user_scram" :: String)
+  connectedUser `shouldBe` Text.unpack user
 
 -- | This test exists because once hpgsql had a bug when it wasn't handling recv returning
 -- 0 bytes properly. This bug might not happen ever again, but the test remains.
