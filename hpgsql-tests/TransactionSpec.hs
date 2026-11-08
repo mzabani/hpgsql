@@ -16,6 +16,7 @@ import Hpgsql.Transaction
     rollback,
     transactionStatus,
     withTransaction,
+    withTransactionMode,
   )
 import Hpgsql.Types (Only)
 import Test.Hspec
@@ -42,6 +43,10 @@ everyBeginCombinationIsValid conn =
       beginMode conn il rw
       transactionStatus conn `shouldReturn` TransInTrans
       rollback conn
+      transactionStatus conn `shouldReturn` TransIdle
+      -- Test withTransaction
+      withTransactionMode conn il rw $ do
+        transactionStatus conn `shouldReturn` TransInTrans
       transactionStatus conn `shouldReturn` TransIdle
 
 -- | A synchronous exception thrown from inside 'withTransaction' must cause a
