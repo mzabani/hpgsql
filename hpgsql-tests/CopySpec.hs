@@ -123,7 +123,7 @@ copyErrorPutCopyError conn = do
       conn
       "COPY employee FROM STDIN WITH (FORMAT CSV);"
     putCopyData conn "5,Dracula\n"
-    putCopyError conn "Abort"
+    putCopyError conn "Abort wíth açcëñts"
     transactionStatus conn `shouldReturn` TransInError
   execute_ conn "SELECT 1"
   transactionStatus conn `shouldReturn` TransIdle

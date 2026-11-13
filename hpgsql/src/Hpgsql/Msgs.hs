@@ -193,9 +193,10 @@ instance ToPgMessage CopyData where
      in Builder.char7 'd' <> Builder.int32BE (4 + len) <> bs
 
 instance ToPgMessage CopyFail where
-  toPgMessage (CopyFail bs) =
-    let cstr = Builder.nulTermCString bs
-     in Builder.char7 'f' <> Builder.int32BE (4 + fromIntegral (length bs) + 1) <> cstr
+  toPgMessage (CopyFail failMsg) =
+    let bs = Builder.nulTerminatedUtf8String failMsg
+        len = Builder.builderLength bs
+     in Builder.char7 'f' <> Builder.int32BE (4 + len) <> bs
 
 instance ToPgMessage CopyDone where
   toPgMessage CopyDone =
@@ -203,12 +204,12 @@ instance ToPgMessage CopyDone where
 
 instance ToPgMessage Describe where
   toPgMessage Describe =
-    let unnamedPortal = Builder.nulTermCString ""
+    let unnamedPortal = Builder.nulTerminatedUtf8String ""
      in Builder.char7 'D' <> Builder.int32BE (4 + 1 + 1) <> Builder.char7 'P' <> unnamedPortal
 
 instance ToPgMessage Execute where
   toPgMessage _ =
-    let unnamedPortal = Builder.nulTermCString ""
+    let unnamedPortal = Builder.nulTerminatedUtf8String ""
         infiniteRowsToReturn :: Int32 = 0
         contents = unnamedPortal <> Builder.int32BE infiniteRowsToReturn
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
@@ -298,8 +299,8 @@ bytestringToHex = BS.concatMap (\w -> let (hi, lo) = w `divMod` 16 in BS.pack [h
 
 instance ToPgMessage Bind where
   toPgMessage Bind {..} =
-    let unnamedDestPortal = Builder.nulTermCString ""
-        preparedStmtName = Builder.nulTermCString $ fromMaybe "" preparedStmtHash
+    let unnamedDestPortal = Builder.nulTerminatedUtf8String ""
+        preparedStmtName = Builder.nulTerminatedUtf8String $ fromMaybe "" preparedStmtHash
         numParamFmtCodesAllBinary :: Int16 = 1
         fmtCodesBinary :: Int16 = 1
         numQryParams :: Int16 = fromIntegral $ length paramsValuesInOrder
@@ -322,7 +323,7 @@ instance ToPgMessage Bind where
 
 instance ToPgMessage Parse where
   toPgMessage Parse {..} =
-    let preparedStmtName = Builder.nulTermCString $ fromMaybe "" preparedStmtHash
+    let preparedStmtName = Builder.nulTerminatedUtf8String $ fromMaybe "" preparedStmtHash
         numParamsSpecified :: Int16 = fromIntegral $ length specifiedParameterTypes
         -- A 0 for an OID means "type unspecified", and is what we use when we don't know the type
         paramOids = mconcat $ map (Builder.int32BE . maybe 0 fromIntegral) specifiedParameterTypes
@@ -334,9 +335,9 @@ instance ToPgMessage StartupMessage where
   toPgMessage StartupMessage {..} =
     let protocolMajorVersion :: Int16 = 3
         protocolMinorVersion :: Int16 = 0
-        userBS = Builder.nulTermCString "user" <> Builder.nulTermCString user
-        databaseBS = Builder.nulTermCString "database" <> Builder.nulTermCString database
-        optionsBS = Builder.nulTermCString "options" <> Builder.nulTermCString options
+        userBS = Builder.nulTerminatedUtf8String "user" <> Builder.nulTerminatedUtf8String user
+        databaseBS = Builder.nulTerminatedUtf8String "database" <> Builder.nulTerminatedUtf8String database
+        optionsBS = Builder.nulTerminatedUtf8String "options" <> Builder.nulTerminatedUtf8String options
         contents = Builder.int16BE protocolMajorVersion <> Builder.int16BE protocolMinorVersion <> userBS <> databaseBS <> optionsBS <> Builder.word8 0
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
      in -- TODO: What protocol version do we announce? We're following the example from the docs for now

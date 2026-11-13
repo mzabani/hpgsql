@@ -46,6 +46,9 @@ spec = do
       "Connecting with SCRAM-SHA-256 password"
       connectingWithSCRAMPassword
     it
+      "Connecting with a non-ASCII username"
+      connectingWithNonAsciiUsername
+    it
       "A connection whose backend was terminated mid-query throws instead of hanging"
       disconnectingMidQueryDoesNotHang
     it
@@ -99,6 +102,9 @@ connectingWithMD5Password = connectionWithPasswordTest "user_md5"
 
 connectingWithSCRAMPassword :: IO ()
 connectingWithSCRAMPassword = connectionWithPasswordTest "user_scram"
+
+connectingWithNonAsciiUsername :: IO ()
+connectingWithNonAsciiUsername = connectionWithPasswordTest "usuário"
 
 connectionWithPasswordTest :: Text -> IO ()
 connectionWithPasswordTest user = do

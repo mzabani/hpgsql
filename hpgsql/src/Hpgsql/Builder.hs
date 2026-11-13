@@ -55,9 +55,6 @@ char7 c = LengthAwareBuilder 1 (Builder.char7 c)
 string7 :: String -> LengthAwareBuilder
 string7 s = LengthAwareBuilder (fromIntegral $ length s) (Builder.string7 s)
 
-nulTermCString :: String -> Builder
-nulTermCString s = string7 s <> word8 0
-
 nulTerminatedUtf8String :: String -> LengthAwareBuilder
 nulTerminatedUtf8String s = let bs = encodeUtf8 (Text.pack s) in LengthAwareBuilder (fromIntegral $ BS.length bs) (Builder.byteString bs) <> word8 0
 
