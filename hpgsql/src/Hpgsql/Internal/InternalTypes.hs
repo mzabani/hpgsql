@@ -482,7 +482,7 @@ data HPgConnection = HPgConnection
   }
 
 instance Eq HPgConnection where
-  conn1 == conn2 = socket conn1 == socket conn2
+  conn1 == conn2 = conn1.socket == conn2.socket
 
 -- | A reentrant mutex, i.e. one that can be re-acquired by the same
 -- thread without deadlocking.

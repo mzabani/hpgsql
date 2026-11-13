@@ -9,7 +9,8 @@ This is a performance improvement and bugfixing release, with very few features 
 - Fix wrong scale when encoding `numeric` values as per the postgres `scale(numeric)` function.
 - Fix stale `transactionStatus` immediately after `putCopyError`.
 - Add missing client nonce check in ScramSHA256 authentication.
-- Some (likely rare) cases of the SQL quasi quoter not throwing a good type error or RecordWildCards producing wrong objects when uside inside `#{}` fixed.
+- Throw informative exception instead of deadlocking os cross-query contamination when attempting to use documented-to-be-undefined-behaviour code patterns, that is: attempting to resume a Stream from a previous query _while_ another query is running will now throw an exception.
+- Some (likely rare) cases of the SQL quasi quoter not throwing a good type error or RecordWildCards producing partial objects when uside inside `#{}` fixed.
 - Support non-ASCII characters in roles' passwords.
 - Added a `Monoid Query` instance.
 - Domain types in both arrays and custom types can now be decoded, and `DomainType` now has more information in it.

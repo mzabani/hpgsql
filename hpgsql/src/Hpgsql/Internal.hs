@@ -737,7 +737,7 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
   withControlMsgsLock
     conn
     -- Check last received message and take lock before receiving next message
-    (const getQueryStateIfFirstOrThrow)
+    (getQueryStateIfSafeToReceiveMsg qryId thisThreadId)
     (const $ pure ())
     $ \qryState -> do
       case responseMsgsState qryState of
@@ -774,42 +774,12 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
         Middle3 msg -> RespCommandComplete msg
         Left3 msg -> RespErrorResponse msg
     receiveReadyForQueryAtomically = receiveNextMsgWithMaskedContinuation conn (msgParser @ReadyForQuery) $ \rq -> updateQueryStateIfFirstOrThrow $ RespReadyForQuery rq
-    getQueryStateIfFirstOrThrow :: STM QueryState
-    getQueryStateIfFirstOrThrow = updateConnStateTxn conn $ \sttv -> do
-      st <- STM.readTVar sttv
-      case currentPipeline st of
-        [] -> throwIrrecoverableError $ "QueryId " <> Text.pack (show qryId) <> " does not exist because the pipeline is empty. This is most likely a bug in Hpgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
-        queries
-          | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Bug in Hpgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " <> Text.pack (show (qryId, queries))
-          | any ((/= thisThreadId) . queryOwner) queries -> throwIrrecoverableError "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
-        (splitQueries -> (earlierQueries, thisQuery))
-          | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
-          | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
-          | otherwise -> pure thisQuery
-
-    splitQueries :: [QueryState] -> ([QueryState], QueryState)
-    splitQueries qs = case List.span ((< qryId) . queryIdentifier) qs of
-      (_, []) -> error $ "Could not find query with right Id: " ++ show (qs, qryId)
-      (as, firstQuery : _others)
-        | queryIdentifier firstQuery == qryId -> (as, firstQuery)
-        | otherwise -> error $ "Could not find query right Id (part 2): " ++ show (qs, qryId)
-
-    queryComplete :: QueryState -> Bool
-    queryComplete QueryState {responseMsgsState} = case responseMsgsState of
-      CommandCompleteReceived _ _ -> True
-      _ -> False
-
-    queryInError :: QueryState -> Bool
-    queryInError QueryState {responseMsgsState} = case responseMsgsState of
-      ErrorResponseReceived _ _ -> True
-      ReadyForQueryReceived (Left ErrorResponse {}) _ -> True
-      _ -> False
 
     updateQueryStateIfFirstOrThrow :: ResponseMsg -> STM (Maybe ResponseMsg, ResponseMsgsReceived)
     updateQueryStateIfFirstOrThrow respMsg = updateConnStateTxn conn $ \sttv -> do
       -- IMPORTANT: No `STM.retry` here as this is called unmasked and must terminate promptly!
       st <- STM.readTVar sttv
-      firstPendingQry <- getQueryStateIfFirstOrThrow
+      firstPendingQry <- getQueryStateIfSafeToReceiveMsg qryId thisThreadId sttv
       (newState, newPrepStmtNames) <- case (respMsg, firstPendingQry.responseMsgsState) of
         (RespParseComplete msg, NoMsgsReceived) ->
           -- Add the parsed statement name to internal state if there is one
@@ -850,6 +820,43 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
             preparedStatementNames = newPrepStmtNames
           }
       pure (Just respMsg, newState)
+
+-- | Given a `QueryId` and this thread's `WeakThreadId`, returns the Query Id's `QueryState`
+-- if that is the active query in the pipeline.
+-- If there's no active pipeline, or if the desired Query Id does not exist in the active pipeline,
+-- or if the active pipeline is owned by a different thread, or if previous queries in the pipeline
+-- have erred or haven't all completed, this will throw an exception.
+-- Basically, this throws unless it's time to receive _some_ message related to the supplied Query ID.
+getQueryStateIfSafeToReceiveMsg :: QueryId -> WeakThreadId -> TVar InternalConnectionState -> STM QueryState
+getQueryStateIfSafeToReceiveMsg qryId thisThreadId sttv = do
+  st <- STM.readTVar sttv
+  case currentPipeline st of
+    [] -> throwIrrecoverableError $ "QueryId " <> Text.pack (show qryId) <> " does not exist because the pipeline is empty. This is most likely a bug in Hpgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
+    queries
+      | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " <> Text.pack (show (qryId, queries))
+      | any ((/= thisThreadId) . queryOwner) queries -> throwIrrecoverableError "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
+    (splitQueries -> (earlierQueries, thisQuery))
+      | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
+      | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
+      | otherwise -> pure thisQuery
+  where
+    splitQueries :: [QueryState] -> ([QueryState], QueryState)
+    splitQueries qs = case List.span ((< qryId) . queryIdentifier) qs of
+      (_, []) -> error $ "Could not find query with right Id: " ++ show (qs, qryId)
+      (as, firstQuery : _others)
+        | queryIdentifier firstQuery == qryId -> (as, firstQuery)
+        | otherwise -> error $ "Could not find query right Id (part 2): " ++ show (qs, qryId)
+
+queryComplete :: QueryState -> Bool
+queryComplete QueryState {responseMsgsState} = case responseMsgsState of
+  CommandCompleteReceived _ _ -> True
+  _ -> False
+
+queryInError :: QueryState -> Bool
+queryInError QueryState {responseMsgsState} = case responseMsgsState of
+  ErrorResponseReceived _ _ -> True
+  ReadyForQueryReceived (Left ErrorResponse {}) _ -> True
+  _ -> False
 
 -- | A sequence of all the bytes of one or more DataRow messages and the total
 -- number of DataRow messages.
@@ -900,6 +907,21 @@ consumeResults conn qryId = do
       let allOtherRows =
             S.unfold
               ( \() -> do
+                  -- Without this check, consuming a Stream would be essentially an unchecked and
+                  -- direct window into the socket, meaning users might advance a Stream, run another
+                  -- query, put the connection back into the pool, etc., and then try to advance
+                  -- that same first Stream again, maybe fetching rows from another query or deadlocking
+                  -- (because there are no DataRows to be received).
+                  -- While we document Streams must be linearly consumed or else undefined behaviour,
+                  -- this check proved to have no performance cost in our benchmarks. It might have a cost
+                  -- when receiving e.g. very large text values because there's little multiple-rows batching
+                  -- in that case, but still it's a very healthy check to have.
+                  -- Streams are still not thread-safe, and there's still a check-then-receive race condition.
+                  -- But that is so adversarial (and we have documented Streams must be consumed by a single thread)
+                  -- that it's not worth worrying about.
+                  qryState <- STM.atomically $ getQueryStateIfSafeToReceiveMsg qryId thisThreadId conn.internalConnectionState
+                  when (queryComplete qryState || queryInError qryState) $ throwIrrecoverableError "Cannot receive rows of a query that has already failed or completed"
+
                   mRow@(_, nRows) <- receiveNextMsgGeneric conn ReceiveDataRows
                   if nRows > 0
                     then pure $ Right (DataRows mRow :> ())
