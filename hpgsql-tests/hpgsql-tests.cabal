@@ -87,6 +87,7 @@ executable hpgsql-tests
     , bytestring
     , case-insensitive
     , containers
+    , deepseq
     , hashable
     , hedgehog
     , hpgsql

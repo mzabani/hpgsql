@@ -46,7 +46,7 @@ module Hpgsql.Internal.PinnedByteArray
     LazyPinnedByteArray,
     append,
     copyStrictSlice,
-    createPinnedByteArray,
+    createPinnedByteArray',
     drop,
     emptyLazyPBA,
     emptyPBA,
@@ -144,11 +144,18 @@ emptyLazyPBA :: LazyPinnedByteArray
 emptyLazyPBA = fromStrict emptyPBA
 
 createPinnedByteArray :: Int -> (Addr# -> IO CInt) -> IO PinnedByteArray
-createPinnedByteArray (I# size#) f = IO $ \s0 ->
+createPinnedByteArray size f = fst <$> createPinnedByteArray' size withUnit
+  where
+    withUnit addr = do
+      len <- f addr
+      pure (len, ())
+
+createPinnedByteArray' :: Int -> (Addr# -> IO (CInt, a)) -> IO (PinnedByteArray, a)
+createPinnedByteArray' (I# size#) f = IO $ \s0 ->
   let !(# newRW, mutArr# :: MutableByteArray# RealWorld #) = newPinnedByteArray# size# s0
-      !(# newRW', lenCopied #) = unIO (f (mutableByteArrayContents# mutArr#)) newRW
+      !(# newRW', (lenCopied, ret) #) = unIO (f (mutableByteArrayContents# mutArr#)) newRW
       !(# finalRW, frozenArr# #) = unsafeFreezeByteArray# mutArr# newRW'
-   in (# finalRW, PinnedByteArray 0 (fromIntegral lenCopied) frozenArr# #)
+   in (# finalRW, (PinnedByteArray 0 (fromIntegral lenCopied) frozenArr#, ret) #)
 
 fromByteString :: ByteString -> PinnedByteArray
 fromByteString (BS fptr len) = unsafeDupablePerformIO $ createPinnedByteArray len $ \dst -> withForeignPtr fptr $ \src -> do

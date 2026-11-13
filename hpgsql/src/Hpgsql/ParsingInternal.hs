@@ -150,6 +150,8 @@ isPossibleBlockStartingChar popts c =
     || c
       == 'E'
     || c
+      == 'e'
+    || c
       == '?'
     || ( case popts of
            AcceptQuasiQuoterExpressions _ -> c == '#' || c == '^'
@@ -290,7 +292,7 @@ doubleQuotedIdentifier = fmap StaticSql $ do
 -- See https://www.postgresql.org/docs/current/sql-syntax-lexical.html
 cStyleEscapedString :: Parser BlockOrNotBlock
 cStyleEscapedString = fmap StaticSql $ do
-  openingChars <- string "E'"
+  openingChars <- string "E'" <|> string "e'"
   rest <-
     Parsec.scan
       (False, False)
