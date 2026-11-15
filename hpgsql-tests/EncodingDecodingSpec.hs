@@ -18,7 +18,7 @@ import qualified Data.List as List
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust, isNothing)
 import Data.Ratio ((%))
-import Data.Scientific (Scientific)
+import Data.Scientific (Scientific, scientific)
 import Data.String (fromString)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -53,9 +53,9 @@ import Hpgsql.Connection (ConnectOpts (..), connect, connectOpts, defaultConnect
 import Hpgsql.Encoding (EncodingContext (..), FieldDecoder (..), FieldEncoder (..), FieldInfo (..), FromPgField (..), FromPgRow (..), LowerCasedPgEnum (..), RowDecoder, RowEncoder (..), ToPgField (..), ToPgRow (..), arrayField, compositeTypeDecoder, compositeTypeEncoder, nullableField, rawBytesFieldDecoder, singleField, typeFieldDecoder, typeFieldEncoder, typeMustBeNamed, typeOidWithName)
 import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Pipeline (pipeline, pipeline1, pipeline1With, pipelineWith, runPipeline)
-import Hpgsql.Query (mkQuery, sql, vALUES)
+import Hpgsql.Query (escapeIdentifier, mkQuery, sql, vALUES)
 import Hpgsql.Time (Unbounded (..))
-import Hpgsql.TypeInfo (Oid (..), TypeInfo (..), builtinPgTypesMap, lookupTypeByOid)
+import Hpgsql.TypeInfo (Oid (..))
 import Hpgsql.Types (Only (..), PGArray (..), PgJson)
 import Numeric (showHex)
 import Test.Hspec
@@ -87,6 +87,9 @@ spec = parallel $ do
       it
         "Rational values round-trip"
         rationalValuesRoundTrip
+      it
+        "Scientific values round-trip with a correct scale()"
+        scientificValuesRoundTripWithVariedScale
       it
         "Json values round-trip"
         jsonValuesRoundTrip
@@ -315,6 +318,24 @@ rationalValuesRoundTrip conn = do
       intQry = mkQuery "SELECT $1, $2" intRow
   queryWith rowDecoder conn intQry `shouldReturn` [ratRes]
   queryWith ((,) <$> singleField notRewrittenFieldDecoder <*> singleField notRewrittenFieldDecoder) conn intQry `shouldReturn` [ratRes]
+
+scientificValuesRoundTripWithVariedScale :: HPgConnection -> PropertyT IO ()
+scientificValuesRoundTripWithVariedScale conn = hedgehog $ do
+  coeff :: Integer <- Gen.forAll $ Gen.integral (Gen.linearFrom 0 (-(10 ^ (18 :: Int))) (10 ^ (18 :: Int)))
+  expon :: Int <- Gen.forAll $ Gen.int (Gen.linearFrom 0 (-40) 40)
+  let val = scientific coeff expon
+      qry = mkQuery "SELECT $1::numeric, scale($1::numeric)" (Only val)
+  [(decodedVal, decodedScale)] <- liftIO $ queryWith rowDecoder conn qry
+  decodedVal === val
+  if expon >= 0
+    then decodedScale === (0 :: Int32) -- Whole numbers
+    else do
+      -- Example: 10^(-2) is 0.01, so minNeededScale is 2.
+      -- However, 0.0100::numeric is the same number, but has
+      -- scale 4 in postgres.
+      let minNeededScale = fromIntegral (-expon) :: Int32
+      annotateShow (minNeededScale, decodedScale)
+      (decodedScale >= minNeededScale) === True
 
 jsonValuesRoundTrip :: HPgConnection -> PropertyT IO ()
 jsonValuesRoundTrip conn = hedgehog $ do
@@ -1309,8 +1330,8 @@ valuesTypeRoundTrip :: HPgConnection -> PropertyT IO ()
 valuesTypeRoundTrip conn = hedgehog $ do
   rows2Tuple <- Gen.forAll $ Gen.list (Gen.linear 0 20) $ (,) <$> Gen.int (Gen.linearFrom 0 (-1000) 1000) <*> Gen.bool
   rowsSingleVal <- Gen.forAll $ Gen.list (Gen.linear 0 20) $ Only <$> Gen.int (Gen.linearFrom 0 (-1000) 1000)
-  results2Tuple <- liftIO $ query conn [sql|WITH t AS (^{vALUES rows2Tuple}) SELECT * FROM t|]
-  resultsSingleVal <- liftIO $ query conn [sql|WITH t AS (^{vALUES rowsSingleVal}) SELECT * FROM t|]
+  results2Tuple <- liftIO $ query conn [sql|WITH ^{escapeIdentifier "t"} AS (^{vALUES rows2Tuple}) SELECT * FROM ^{escapeIdentifier "t"}|]
+  resultsSingleVal <- liftIO $ query conn [sql|WITH ^{escapeIdentifier "t"} AS (^{vALUES rowsSingleVal}) SELECT * FROM t|]
   List.sort results2Tuple === List.sort rows2Tuple
   List.sort resultsSingleVal === List.sort rowsSingleVal
 

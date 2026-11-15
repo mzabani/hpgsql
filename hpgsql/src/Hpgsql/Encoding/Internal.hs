@@ -469,7 +469,7 @@ instance ToPgField Scientific where
               ndigits, weight :: Int16
               digits :: ByteString
               (ndigits, weight, digits) = calculateDigits 0 0 (abs base10000Coeff) ""
-              dscale = PBA.encodeInt16BE (abs $ fromIntegral base10000Expon) -- More than necessary, but safe?
+              dscale = PBA.encodeInt16BE (fromIntegral (max 0 (-base10000Expon))) -- Digits after the decimal point; 0 for integral values (base10000Expon >= 0). May be more than strictly necessary when negative, but that's safe.
            in NotNull $ PBA.encodeInt16BE ndigits <> PBA.encodeInt16BE (weight - 1 + fromIntegral (base10000Expon `div` 4)) <> sign <> dscale <> digits
       }
     where

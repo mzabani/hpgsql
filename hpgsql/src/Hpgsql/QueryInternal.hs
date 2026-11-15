@@ -227,8 +227,8 @@ buildQueryQQ isPrepared parts =
   let (queryFrags, allParams) = go parts 1
    in Query {queryString = queryFrags, queryParams = allParams, isPrepared}
   where
-    go [] _ = ([], [])
-    go (part : rest) argNum = case part of
+    go [] !_ = ([], [])
+    go (part : rest) !argNum = case part of
       StaticSqlPart bs ->
         let (restFrags, restParams) = go rest argNum
          in (FragmentOfStaticSql bs : restFrags, restParams)
@@ -243,7 +243,8 @@ buildQueryQQ isPrepared parts =
          in (FragmentWithSemiColon : restFrags, restParams)
       EmbeddedQueryPart q ->
         let (newMaxArgNum, renumberedFrags) = renumberParamsFrom q.queryString argNum
-            (restFrags, restParams) = go rest (newMaxArgNum + 1)
+            nextArgNum = if null q.queryParams then argNum else newMaxArgNum + 1
+            (restFrags, restParams) = go rest nextArgNum
          in (renumberedFrags ++ restFrags, q.queryParams ++ restParams)
 
 parseBlockQuasiQuoter :: BlockOrNotBlock -> [SqlFragment]

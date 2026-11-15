@@ -130,11 +130,15 @@ convertExpr (HsAppType _ (L _ e) (HsWC _ (L _ ty))) = TH.AppTypeE <$> convertExp
 convertExpr (HsAppType _ (L _ e) _ (HsWC _ (L _ ty))) = TH.AppTypeE <$> convertExpr e <*> convertType ty
 #endif
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
-convertExpr (RecordCon _ (L _ conName) (HsRecFields _ flds _)) = do
+convertExpr (RecordCon _ _ (HsRecFields _ _ (Just _))) =
+  unsupportedLanguageFeatureMsg "RecordWildCards (the `..` syntax) in record construction"
+convertExpr (RecordCon _ (L _ conName) (HsRecFields _ flds Nothing)) = do
   flds' <- traverse convertRecField flds
   Right $ TH.RecConE (rdrToName conName) flds'
 #elif MIN_VERSION_ghc_lib_parser(9,8,0)
-convertExpr (RecordCon _ (L _ conName) (HsRecFields flds _)) = do
+convertExpr (RecordCon _ _ (HsRecFields _ (Just _))) =
+  unsupportedLanguageFeatureMsg "RecordWildCards (the `..` syntax) in record construction"
+convertExpr (RecordCon _ (L _ conName) (HsRecFields flds Nothing)) = do
   flds' <- traverse convertRecField flds
   Right $ TH.RecConE (rdrToName conName) flds'
 #endif
@@ -280,11 +284,15 @@ convertConPatDetails con (InfixCon (L _ l) (L _ r)) = do
   r' <- convertPat r
   Right (TH.InfixP l' (rdrToName con) r')
 #if MIN_VERSION_ghc_lib_parser(9,10,0)
-convertConPatDetails con (RecCon (HsRecFields _ flds _)) = do
+convertConPatDetails _ (RecCon (HsRecFields _ _ (Just _))) =
+  unsupportedLanguageFeatureMsg "RecordWildCards (the `..` syntax) in pattern matching"
+convertConPatDetails con (RecCon (HsRecFields _ flds Nothing)) = do
   flds' <- traverse convertPatRecField flds
   Right (TH.RecP (rdrToName con) flds')
 #elif MIN_VERSION_ghc_lib_parser(9,8,0)
-convertConPatDetails con (RecCon (HsRecFields flds _)) = do
+convertConPatDetails _ (RecCon (HsRecFields _ (Just _))) =
+  unsupportedLanguageFeatureMsg "RecordWildCards (the `..` syntax) in pattern matching"
+convertConPatDetails con (RecCon (HsRecFields flds Nothing)) = do
   flds' <- traverse convertPatRecField flds
   Right (TH.RecP (rdrToName con) flds')
 #endif
@@ -379,8 +387,10 @@ convertType (HsFunTy _ _ (L _ t1) (L _ t2)) =
   TH.AppT . TH.AppT TH.ArrowT <$> convertType t1 <*> convertType t2
 convertType (HsParTy _ (L _ t)) =
   convertType t
-convertType (HsQualTy _ _ (L _ t)) =
-  convertType t
+convertType (HsQualTy _ (L _ ctxt) (L _ t)) = do
+  ctxt' <- traverse (\(L _ c) -> convertType c) ctxt
+  t' <- convertType t
+  Right (TH.ForallT [] ctxt' t')
 convertType (HsForAllTy{}) = unsupportedLanguageFeatureMsg "HsForAllTy in a type"
 convertType (HsAppKindTy{}) = unsupportedLanguageFeatureMsg "HsAppKindTy in a type"
 convertType (HsOpTy{}) = unsupportedLanguageFeatureMsg "HsOpTy in a type"

@@ -1,4 +1,4 @@
-module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), PasswordMessage (..), Sync (..), parsePgMessage, nulTermCString) where
+module Hpgsql.Msgs (AuthenticationResponse (..), AuthenticationMethod (..), BackendKeyData (..), Bind (..), BindComplete (..), CancelRequest (..), CommandComplete (..), CopyData (..), CopyDone (..), CopyFail (..), CopyInResponse (..), DataRow (..), Describe (..), ErrorDetail (..), ErrorResponse (..), Execute (..), Flush (..), NoData (..), ParameterStatus (..), Query (..), ReadyForQuery (..), RowDescription (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), ToPgMessage (..), FromPgMessage (..), PgMsgParser (..), Terminate (..), TransactionStatus (..), NoticeResponse (..), NotificationResponse (..), Parse (..), ParseComplete (..), PasswordMessage (..), Sync (..), parsePgMessage) where
 
 import Control.Applicative (Alternative (..))
 import Control.Arrow (Kleisli (..))
@@ -193,9 +193,10 @@ instance ToPgMessage CopyData where
      in Builder.char7 'd' <> Builder.int32BE (4 + len) <> bs
 
 instance ToPgMessage CopyFail where
-  toPgMessage (CopyFail bs) =
-    let cstr = nulTermCString bs
-     in Builder.char7 'f' <> Builder.int32BE (4 + fromIntegral (length bs) + 1) <> cstr
+  toPgMessage (CopyFail failMsg) =
+    let bs = Builder.nulTerminatedUtf8String failMsg
+        len = Builder.builderLength bs
+     in Builder.char7 'f' <> Builder.int32BE (4 + len) <> bs
 
 instance ToPgMessage CopyDone where
   toPgMessage CopyDone =
@@ -203,12 +204,12 @@ instance ToPgMessage CopyDone where
 
 instance ToPgMessage Describe where
   toPgMessage Describe =
-    let unnamedPortal = nulTermCString ""
+    let unnamedPortal = Builder.nulTerminatedUtf8String ""
      in Builder.char7 'D' <> Builder.int32BE (4 + 1 + 1) <> Builder.char7 'P' <> unnamedPortal
 
 instance ToPgMessage Execute where
   toPgMessage _ =
-    let unnamedPortal = nulTermCString ""
+    let unnamedPortal = Builder.nulTerminatedUtf8String ""
         infiniteRowsToReturn :: Int32 = 0
         contents = unnamedPortal <> Builder.int32BE infiniteRowsToReturn
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
@@ -248,10 +249,10 @@ instance FromPgMessage ParseComplete where
 instance ToPgMessage PasswordMessage where
   toPgMessage (PasswordMessage crypt username password) =
     let passwordBs = case crypt of
-          AuthCleartextPassword -> nulTermCString password
+          AuthCleartextPassword -> Builder.nulTerminatedUtf8String password
           AuthMD5Password (LBS.toStrict -> salt) ->
-            let passwordBytes = Builder.toStrictByteString (Builder.string7 password)
-                usernameBytes = Builder.toStrictByteString (Builder.string7 username)
+            let passwordBytes = Builder.toStrictByteString (Builder.nulTerminatedUtf8String password)
+                usernameBytes = Builder.toStrictByteString (Builder.nulTerminatedUtf8String username)
                 innerHex = bytestringToHex (md5Hash (passwordBytes <> usernameBytes))
                 outerHex = bytestringToHex (md5Hash (innerHex <> salt))
              in Builder.byteString "md5" <> Builder.byteString outerHex <> Builder.word8 0
@@ -289,9 +290,6 @@ instance ToPgMessage Terminate where
   toPgMessage Terminate =
     Builder.char7 'X' <> Builder.int32BE 4
 
-nulTermCString :: String -> Builder
-nulTermCString s = Builder.string7 s <> Builder.word8 0
-
 bytestringToHex :: ByteString -> ByteString
 bytestringToHex = BS.concatMap (\w -> let (hi, lo) = w `divMod` 16 in BS.pack [hexChar hi, hexChar lo])
   where
@@ -301,8 +299,8 @@ bytestringToHex = BS.concatMap (\w -> let (hi, lo) = w `divMod` 16 in BS.pack [h
 
 instance ToPgMessage Bind where
   toPgMessage Bind {..} =
-    let unnamedDestPortal = nulTermCString ""
-        preparedStmtName = nulTermCString $ fromMaybe "" preparedStmtHash
+    let unnamedDestPortal = Builder.nulTerminatedUtf8String ""
+        preparedStmtName = Builder.nulTerminatedUtf8String $ fromMaybe "" preparedStmtHash
         numParamFmtCodesAllBinary :: Int16 = 1
         fmtCodesBinary :: Int16 = 1
         numQryParams :: Int16 = fromIntegral $ length paramsValuesInOrder
@@ -325,7 +323,7 @@ instance ToPgMessage Bind where
 
 instance ToPgMessage Parse where
   toPgMessage Parse {..} =
-    let preparedStmtName = nulTermCString $ fromMaybe "" preparedStmtHash
+    let preparedStmtName = Builder.nulTerminatedUtf8String $ fromMaybe "" preparedStmtHash
         numParamsSpecified :: Int16 = fromIntegral $ length specifiedParameterTypes
         -- A 0 for an OID means "type unspecified", and is what we use when we don't know the type
         paramOids = mconcat $ map (Builder.int32BE . maybe 0 fromIntegral) specifiedParameterTypes
@@ -337,9 +335,9 @@ instance ToPgMessage StartupMessage where
   toPgMessage StartupMessage {..} =
     let protocolMajorVersion :: Int16 = 3
         protocolMinorVersion :: Int16 = 0
-        userBS = nulTermCString "user" <> nulTermCString user
-        databaseBS = nulTermCString "database" <> nulTermCString database
-        optionsBS = nulTermCString "options" <> nulTermCString options
+        userBS = Builder.nulTerminatedUtf8String "user" <> Builder.nulTerminatedUtf8String user
+        databaseBS = Builder.nulTerminatedUtf8String "database" <> Builder.nulTerminatedUtf8String database
+        optionsBS = Builder.nulTerminatedUtf8String "options" <> Builder.nulTerminatedUtf8String options
         contents = Builder.int16BE protocolMajorVersion <> Builder.int16BE protocolMinorVersion <> userBS <> databaseBS <> optionsBS <> Builder.word8 0
         contentsLen = fromIntegral $ LBS.length $ Builder.toLazyByteString contents
      in -- TODO: What protocol version do we announce? We're following the example from the docs for now

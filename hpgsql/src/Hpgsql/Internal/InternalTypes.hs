@@ -138,6 +138,9 @@ instance Semigroup Query where
         -- That feels unlikely.. so we go with ||
         Query {queryString = q1.queryString <> remappedQ2, queryParams = q1.queryParams <> q2.queryParams, isPrepared = q1.isPrepared || q2.isPrepared}
 
+instance Monoid Query where
+  mempty = Query {queryString = [], queryParams = [], isPrepared = False}
+
 -- | A single statement, not multiple, with dollar-numbered query arguments
 -- starting from $1.
 data SingleQuery = SingleQuery {queryString :: !ByteString, queryParams :: ![EncodingContext -> (Maybe Oid, BinaryField)], preparedStmtHash :: !(Maybe String)}
@@ -171,7 +174,7 @@ instance IsString Query where
 -- | For internal usage only. Takes a `Query` and breaks it up into
 -- individual SQL statements that can be sent to a postgres backend.
 breakQueryIntoStatements :: Query -> NonEmpty SingleQuery
-breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams = allQueryParams, isPrepared} =
+breakQueryIntoStatements Query {queryString = fullQueryString, queryParams = allQueryParams, isPrepared} =
   -- If a user insists in trying to run an empty query, or if
   -- they mistakenly concatenate empty statements, we let them
   toEmptyQueryIfNecessary $
@@ -206,7 +209,7 @@ breakQueryIntoStatements qry@Query {queryString = fullQueryString, queryParams =
       FragmentOfCommentsOrWhitespace t -> t
     go :: [SingleQueryFragment] -> [EncodingContext -> (Maybe Oid, BinaryField)] -> [([SingleQueryFragment], [EncodingContext -> (Maybe Oid, BinaryField)])]
     go [] [] = []
-    go [] _ = error $ "Hpgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query is " ++ show qry
+    go [] _ = error $ "Hpgsql error: empty query fragment list but outstanding query params. Number of query arguments is " ++ show (length allQueryParams) ++ " and query fragments are " ++ show fullQueryString
     go frags params =
       let (stmtFrags, nextFrags) = case List.break isLastFragmentOfAStatement frags of
             (firstStmts, []) -> (firstStmts, [])
@@ -479,7 +482,7 @@ data HPgConnection = HPgConnection
   }
 
 instance Eq HPgConnection where
-  conn1 == conn2 = socket conn1 == socket conn2
+  conn1 == conn2 = conn1.socket == conn2.socket
 
 -- | A reentrant mutex, i.e. one that can be re-acquired by the same
 -- thread without deadlocking.

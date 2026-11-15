@@ -22,7 +22,7 @@ import Hpgsql.Cancellation (cancelActiveStatement)
 import Hpgsql.Connection (withConnection)
 import Hpgsql.Copy (copyFromS, putCopyData, withCopy)
 import Hpgsql.Encoding (FromPgRow (..))
-import Hpgsql.Pipeline (pipeline, pipelineExec, pipelineWith, runPipeline)
+import Hpgsql.Pipeline (pipeline, pipelineExec, pipelineS, pipelineWith, runPipeline)
 import Hpgsql.Query (sql)
 import Hpgsql.Transaction (TransactionStatus (..), transactionStatus)
 import Hpgsql.Types (Only (..))
@@ -43,6 +43,15 @@ spec = do
         it
           "Exercise interruption safety"
           exerciseInterruptionSafety
+        it
+          "Resuming stream of a query of a previous pipeline after cancelling it leads to informative exception"
+          noCrossQueryContaminationDifferentPipelinesFirstQueryCancelled
+        it
+          "Resuming stream of a query of a previous pipeline leads to informative exception"
+          noCrossQueryContaminationForQueriesInDifferentPipelines
+        it
+          "Resuming stream of previous query in the same pipeline leads to informative exception"
+          noCrossQueryContaminationInSamePipeline
         it
           "Query interruption is semantics-preserving inside explicit transaction"
           interruptingQueryInsideTransactionPreservesSemantics
@@ -261,6 +270,78 @@ exerciseInterruptionSafety conn = do
       -- putStrLn $ "Killing thread, time: " ++ show i
       cancel queryAsync
     execute conn "SELECT 1" `shouldReturn` 1
+
+-- | Resuming a query's result Stream after firing another query is documented to be
+-- undefined behaviour, but we throw an informative exception nonetheless instead of
+-- worse things like returning rows of a different query or deadlocking.
+noCrossQueryContaminationDifferentPipelinesFirstQueryCancelled :: HPgConnection -> IO ()
+noCrossQueryContaminationDifferentPipelinesFirstQueryCancelled conn = do
+  getStream <- runPipeline conn (pipelineS [sql|SELECT * FROM generate_series(1, 20000000)|])
+  stream1 :: Stream (Of (Only Int)) IO () <- getStream
+  firstStep <- S.next stream1
+  case firstStep of
+    Left () -> expectationFailure "Stream was unexpectedly empty"
+    Right (Only firstRow, restStream1) -> do
+      firstRow `shouldBe` 1
+
+      -- A totally unrelated query, on the same thread/connection, without having finished `restStream1`.
+      -- This will cancel the first query and run as expected.
+      query conn [sql|SELECT 999|] `shouldReturn` ([Only 999] :: [Only Int])
+
+      -- Resuming the abandoned stream must throw an informative exception.
+      result <- timeout 5_000_000 $ do
+        S.next (S.drop 9999990 restStream1) `shouldThrow` irrecoverableErrorWithMsg "Trying to receive outstanding messages for a pipeline that has already been fully consumed"
+      result `shouldBe` Just ()
+
+-- | Very similar to `noCrossQueryContaminationDifferentPipelinesFirstQueryCancelled`, but here
+-- we have two queries returning Streams. Unless the proper checks are in place,
+-- advancing a Stream could be equivalent to reading directly from the socket,
+-- which means one could get rows from different queries.
+-- This is also undefined behaviour and is documented in haddocks, but we expect
+-- hpgsql to throw an informative exception instead of doing something worse.
+noCrossQueryContaminationForQueriesInDifferentPipelines :: HPgConnection -> IO ()
+noCrossQueryContaminationForQueriesInDifferentPipelines conn = do
+  getStream1 <- runPipeline conn (pipelineS [sql|SELECT * FROM generate_series(1, 20000000)|])
+  stream1 :: Stream (Of (Only Int)) IO () <- getStream1
+  Right (Only firstRow1, restStream1) <- S.next stream1
+  firstRow1 `shouldBe` 1
+
+  getStream2 <- runPipeline conn (pipelineS [sql|SELECT * FROM generate_series(500000000, 500000000 + 19999999)|])
+  stream2 :: Stream (Of (Only Int)) IO () <- getStream2
+  Right (Only firstRow2, _restStream2) <- S.next stream2
+  firstRow2 `shouldBe` 500000000
+
+  -- Reading from the first stream should throw an informative exception
+  result <- timeout 5_000_000 $ do
+    S.next (S.drop 9999990 restStream1) `shouldThrow` irrecoverableErrorWithMsg "Trying to receive outstanding messages for a pipeline that has already been fully consumed"
+  result `shouldBe` Just ()
+
+-- | Same as `noCrossQueryContaminationForQueriesInDifferentPipelines` but for two
+-- queries in the same pipeline.
+noCrossQueryContaminationInSamePipeline :: HPgConnection -> IO ()
+noCrossQueryContaminationInSamePipeline conn = do
+  (getStream1, getStream2) <-
+    runPipeline
+      conn
+      ( (,)
+          <$> pipelineS [sql|SELECT * FROM generate_series(1, 20000000)|]
+          <*> pipelineS [sql|SELECT * FROM generate_series(500000000, 500000000 + 19999999)|]
+      )
+  stream1 :: Stream (Of (Only Int)) IO () <- getStream1
+  Right (Only firstRow1, restStream1) <- S.next stream1
+  firstRow1 `shouldBe` 1
+
+  -- Drain stream1 to completion via its own continuation.
+  S.effects restStream1
+
+  stream2 :: Stream (Of (Only Int)) IO () <- getStream2
+  Right (Only firstRow2, _) <- S.next stream2
+  firstRow2 `shouldBe` 500000000
+
+  -- Advance the first Stream and we should get an informative exception
+  result <- timeout 5_000_000 $ do
+    S.next (S.drop 9999990 restStream1) `shouldThrow` irrecoverableErrorWithMsg "Cannot receive rows of a query that has already failed or completed"
+  result `shouldBe` Just ()
 
 -- | Massively exercise sending an asynchronous exception to a COPY FROM STDIN
 -- that is actively sending data to the backend.

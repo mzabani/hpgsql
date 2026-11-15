@@ -1,6 +1,20 @@
 ## v0.4.0
 
-- Around 16% performance improvements in row decoding performance
+This is a performance improvement and bugfixing release, with very few features added. Users are highly encouraged to upgrade.
+
+- `vALUES` was encoding the list in reverse order, and that has been fixed. Shouldn't have affected order-insensitive queries, but is embarrassing.
+- Fix a connection hanging if postgres killed the connection abruptly, when either sending or receiving to/from the socket. Now a proper exception is thrown.
+- Fix a parameter interpolation bug that caused an infinite loop at run time, before queries were even sent to postgres.
+- Fix COPY deadlocking when trying to run syntactically invalid COPY statements.
+- Fix wrong scale when encoding `numeric` values as per the postgres `scale(numeric)` function.
+- Fix stale `transactionStatus` immediately after `putCopyError`.
+- Add missing client nonce check in ScramSHA256 authentication.
+- Throw informative exception instead of deadlocking os cross-query contamination when attempting to use documented-to-be-undefined-behaviour code patterns, that is: attempting to resume a Stream from a previous query _while_ another query is running will now throw an exception.
+- Some (likely rare) cases of the SQL quasi quoter not throwing a good type error or RecordWildCards producing partial objects when uside inside `#{}` fixed.
+- Support non-ASCII characters in roles' passwords.
+- Added a `Monoid Query` instance.
+- Domain types in both arrays and custom types can now be decoded, and `DomainType` now has more information in it.
+- In terms of raw row decoding performance, we now beat Npgsql and are close to tokio-postgres in one benchmark. Read more below.
 
 No breaking API changes in non-Internal modules in this version, but we now recommend using `fieldRowDecoder` instead of `singleField fieldDecoder` where you can. They're equivalent when compiling with -O1 due to rewrite rules, but the former is more performant when compiling with no optimizations.
 

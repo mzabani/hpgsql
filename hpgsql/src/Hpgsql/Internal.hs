@@ -142,7 +142,7 @@ import qualified Hpgsql.Internal.PinnedByteArray as PBA
 import Hpgsql.Locking (getMyWeakThreadId, withMutex)
 import Hpgsql.Msgs (AuthenticationMethod (..), AuthenticationResponse (..), BackendKeyData (..), Bind (..), CancelRequest (..), CopyData (..), CopyDone (..), Describe (..), Execute (..), FromPgMessage (..), NoticeResponse (..), ParameterStatus (..), Parse (..), PasswordMessage (..), PgMsgParser (..), SASLInitialResponse (..), SASLResponse (..), StartupMessage (..), Sync (..), Terminate (..), ToPgMessage (..), parsePgMessage)
 import qualified Hpgsql.Msgs as Msgs
-import Hpgsql.Networking (recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
+import Hpgsql.Networking (RecvResult (..), SendResult (..), recvNonBlocking, sendNonBlocking, socketWaitRead, socketWaitWrite)
 import Hpgsql.Query (breakQueryIntoStatements)
 import qualified Hpgsql.ScramSHA256 as ScramSHA256
 import qualified Hpgsql.SimpleParser as Parser
@@ -611,8 +611,12 @@ receiveNextMsgGeneric conn@HPgConnection {socket, recvBuffer} receiveWhat = do
           -- or an exception is thrown when receiving.
           mask $ \restore -> rethrowAsIrrecoverable $ do
             restore $ socketWaitRead socket
-            someBytes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
-            atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
+            recvRes <- timeDebugNonBlockingOperation "recv" $ recvNonBlocking socket (max conn.connOpts.recvChunkSize $ fromIntegral $ minBytesNecessary - nBytesInBuffer)
+            case recvRes of
+              RecvSuccess someBytes -> atomicWriteIORef recvBuffer (currentBuffer `PBA.append` someBytes)
+              RecvRemotePeerClosed ->
+                throwIrrecoverableError "recv: Remote peer has closed the connection"
+              RecvTryAgain -> pure ()
           receiveUntilBufferHasAtLeast minBytesNecessary
 
 sendCancellationRequest :: HPgConnection -> IO ()
@@ -696,7 +700,7 @@ withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = d
             let go = do
                   others <- modifyMVar conn.sendBuffer $ \case
                     [] -> pure ([], [])
-                    ((!msgs, afterSentTxn) : xs) ->
+                    buff@((!msgs, afterSentTxn) : xs) ->
                       if LBS.null msgs
                         then do
                           -- debugPrint "Finished sending msgs"
@@ -704,11 +708,15 @@ withControlMsgsLock conn@HPgConnection {socket, socketMutex} acqStm relStm f = d
                           pure (xs, xs)
                         else do
                           restore $ socketWaitWrite socket
-                          n <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
-                          -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
-                          let !remaining = LBS.drop n msgs
-                              fin = (remaining, afterSentTxn) : xs
-                          pure (fin, fin)
+                          sendRes <- timeDebugNonBlockingOperation "sendNonBlocking" $ sendNonBlocking socket msgs
+                          case sendRes of
+                            SendSuccess n -> do
+                              -- debugPrint $ "Sent " ++ show n ++ ". Left: " ++ show (LBS.length (LBS.drop n msgs))
+                              let !remaining = LBS.drop n msgs
+                                  fin = (remaining, afterSentTxn) : xs
+                              pure (fin, fin)
+                            SendTryAgain -> pure (buff, buff) -- `man 2 select` says "even if a file descriptor indicates as writable, a large write may still block"
+                            SendRemotePeerClosed -> throwIrrecoverableError "send: Remote peer has closed the connection"
 
                   -- debugPrint $ show $ stop || null others
                   unless (null others) go
@@ -729,7 +737,7 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
   withControlMsgsLock
     conn
     -- Check last received message and take lock before receiving next message
-    (const getQueryStateIfFirstOrThrow)
+    (getQueryStateIfSafeToReceiveMsg qryId thisThreadId)
     (const $ pure ())
     $ \qryState -> do
       case responseMsgsState qryState of
@@ -766,42 +774,12 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
         Middle3 msg -> RespCommandComplete msg
         Left3 msg -> RespErrorResponse msg
     receiveReadyForQueryAtomically = receiveNextMsgWithMaskedContinuation conn (msgParser @ReadyForQuery) $ \rq -> updateQueryStateIfFirstOrThrow $ RespReadyForQuery rq
-    getQueryStateIfFirstOrThrow :: STM QueryState
-    getQueryStateIfFirstOrThrow = updateConnStateTxn conn $ \sttv -> do
-      st <- STM.readTVar sttv
-      case currentPipeline st of
-        [] -> throwIrrecoverableError $ "QueryId " <> Text.pack (show qryId) <> " does not exist because the pipeline is empty. This is most likely a bug in Hpgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
-        queries
-          | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Bug in Hpgsql: trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " <> Text.pack (show (qryId, queries))
-          | any ((/= thisThreadId) . queryOwner) queries -> throwIrrecoverableError "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
-        (splitQueries -> (earlierQueries, thisQuery))
-          | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
-          | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
-          | otherwise -> pure thisQuery
-
-    splitQueries :: [QueryState] -> ([QueryState], QueryState)
-    splitQueries qs = case List.span ((< qryId) . queryIdentifier) qs of
-      (_, []) -> error $ "Could not find query with right Id: " ++ show (qs, qryId)
-      (as, firstQuery : _others)
-        | queryIdentifier firstQuery == qryId -> (as, firstQuery)
-        | otherwise -> error $ "Could not find query right Id (part 2): " ++ show (qs, qryId)
-
-    queryComplete :: QueryState -> Bool
-    queryComplete QueryState {responseMsgsState} = case responseMsgsState of
-      CommandCompleteReceived _ _ -> True
-      _ -> False
-
-    queryInError :: QueryState -> Bool
-    queryInError QueryState {responseMsgsState} = case responseMsgsState of
-      ErrorResponseReceived _ _ -> True
-      ReadyForQueryReceived (Left ErrorResponse {}) _ -> True
-      _ -> False
 
     updateQueryStateIfFirstOrThrow :: ResponseMsg -> STM (Maybe ResponseMsg, ResponseMsgsReceived)
     updateQueryStateIfFirstOrThrow respMsg = updateConnStateTxn conn $ \sttv -> do
       -- IMPORTANT: No `STM.retry` here as this is called unmasked and must terminate promptly!
       st <- STM.readTVar sttv
-      firstPendingQry <- getQueryStateIfFirstOrThrow
+      firstPendingQry <- getQueryStateIfSafeToReceiveMsg qryId thisThreadId sttv
       (newState, newPrepStmtNames) <- case (respMsg, firstPendingQry.responseMsgsState) of
         (RespParseComplete msg, NoMsgsReceived) ->
           -- Add the parsed statement name to internal state if there is one
@@ -842,6 +820,43 @@ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId = do
             preparedStatementNames = newPrepStmtNames
           }
       pure (Just respMsg, newState)
+
+-- | Given a `QueryId` and this thread's `WeakThreadId`, returns the Query Id's `QueryState`
+-- if that is the active query in the pipeline.
+-- If there's no active pipeline, or if the desired Query Id does not exist in the active pipeline,
+-- or if the active pipeline is owned by a different thread, or if previous queries in the pipeline
+-- have erred or haven't all completed, this will throw an exception.
+-- Basically, this throws unless it's time to receive _some_ message related to the supplied Query ID.
+getQueryStateIfSafeToReceiveMsg :: QueryId -> WeakThreadId -> TVar InternalConnectionState -> STM QueryState
+getQueryStateIfSafeToReceiveMsg qryId thisThreadId sttv = do
+  st <- STM.readTVar sttv
+  case currentPipeline st of
+    [] -> throwIrrecoverableError $ "QueryId " <> Text.pack (show qryId) <> " does not exist because the pipeline is empty. This is most likely a bug in Hpgsql, but just in case, are you trying to consume a pipeline that no longer exists?"
+    queries
+      | all ((> qryId) . queryIdentifier) queries -> throwIrrecoverableError $ "Trying to receive outstanding messages for a pipeline that has already been fully consumed. Information about this pipeline no longer available in internal state.: " <> Text.pack (show (qryId, queries))
+      | any ((/= thisThreadId) . queryOwner) queries -> throwIrrecoverableError "Hpgsql does not support consuming different SQL statements' results of the same pipeline from different threads. Behaviour is undefined if you try that."
+    (splitQueries -> (earlierQueries, thisQuery))
+      | any queryInError earlierQueries -> throwIrrecoverableError "Another query in the same pipeline threw an error"
+      | not (all queryComplete earlierQueries) -> throwIrrecoverableError "Are you trying to consume a statement's results before consuming the results of previous statements of the same pipeline? Hpgsql does not support that. It is also possible a previous statement in the pipeline threw an irrecoverable error, and you still tried to consume another statement's results, which is also not supported."
+      | otherwise -> pure thisQuery
+  where
+    splitQueries :: [QueryState] -> ([QueryState], QueryState)
+    splitQueries qs = case List.span ((< qryId) . queryIdentifier) qs of
+      (_, []) -> error $ "Could not find query with right Id: " ++ show (qs, qryId)
+      (as, firstQuery : _others)
+        | queryIdentifier firstQuery == qryId -> (as, firstQuery)
+        | otherwise -> error $ "Could not find query right Id (part 2): " ++ show (qs, qryId)
+
+queryComplete :: QueryState -> Bool
+queryComplete QueryState {responseMsgsState} = case responseMsgsState of
+  CommandCompleteReceived _ _ -> True
+  _ -> False
+
+queryInError :: QueryState -> Bool
+queryInError QueryState {responseMsgsState} = case responseMsgsState of
+  ErrorResponseReceived _ _ -> True
+  ReadyForQueryReceived (Left ErrorResponse {}) _ -> True
+  _ -> False
 
 -- | A sequence of all the bytes of one or more DataRow messages and the total
 -- number of DataRow messages.
@@ -892,6 +907,21 @@ consumeResults conn qryId = do
       let allOtherRows =
             S.unfold
               ( \() -> do
+                  -- Without this check, consuming a Stream would be essentially an unchecked and
+                  -- direct window into the socket, meaning users might advance a Stream, run another
+                  -- query, put the connection back into the pool, etc., and then try to advance
+                  -- that same first Stream again, maybe fetching rows from another query or deadlocking
+                  -- (because there are no DataRows to be received).
+                  -- While we document Streams must be linearly consumed or else undefined behaviour,
+                  -- this check proved to have no performance cost in our benchmarks. It might have a cost
+                  -- when receiving e.g. very large text values because there's little multiple-rows batching
+                  -- in that case, but still it's a very healthy check to have.
+                  -- Streams are still not thread-safe, and there's still a check-then-receive race condition.
+                  -- But that is so adversarial (and we have documented Streams must be consumed by a single thread)
+                  -- that it's not worth worrying about.
+                  qryState <- STM.atomically $ getQueryStateIfSafeToReceiveMsg qryId thisThreadId conn.internalConnectionState
+                  when (queryComplete qryState || queryInError qryState) $ throwIrrecoverableError "Cannot receive rows of a query that has already failed or completed"
+
                   mRow@(_, nRows) <- receiveNextMsgGeneric conn ReceiveDataRows
                   if nRows > 0
                     then pure $ Right (DataRows mRow :> ())
@@ -1243,14 +1273,14 @@ pipelineS = pipelineSWith rowDecoder
 -- you should never consume it more than once, for it _will_ give you wrong results if you do that.
 -- This is normal behaviour for IO Streams, but it's worth emphasizing.
 pipelineSWith :: RowDecoder a -> Query -> Pipeline (IO (Stream (Of a) IO ()))
-pipelineSWith rowparser@(RowDecoder _ _ expectedColFmts) (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
+pipelineSWith rowDec (lastAndInitNE . breakQueryIntoStatements -> (firstQueriesToSend, lastQueryToSend)) =
   Pipeline
-    (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just expectedColFmts)])
+    (map (,Nothing) firstQueriesToSend ++ [(lastQueryToSend, Just rowDec.numExpectedColumns)])
     ( \conn qryIds -> do
         case lastAndInit qryIds of
           (firstQueries, mLastQry) -> do
             forM_ firstQueries $ consumeResultsIgnoreRows conn
-            pure $ consumeStreamingResults (ApplicativeRowDecoder rowparser) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
+            pure $ consumeStreamingResults (ApplicativeRowDecoder rowDec) conn (fromMaybe (error "pipelineS internal bug: no mLastQry") mLastQry)
     )
 
 -- | Prefer to use 'pipelineS' and 'pipelineSWith', because 'RowDecoder' can typecheck PostgreSQL results
@@ -1525,15 +1555,32 @@ withCopyInternal conn (lastAndInitNE . breakQueryIntoStatements -> (firstQueries
               SomeMessage $ Bind {paramsValuesInOrder = map snd paramOidsAndValues, resultColumnFmts = 0, preparedStmtHash = Nothing},
               -- We don't send Msgs.Describe because we expect CopyInResponse in place of NoData
               SomeMessage Execute,
-              SomeMessage Msgs.Flush -- This might not be necessary for COPY, but possibly useful if the user calls this with not-a-COPY statement so we get errors earlier?
+              SomeMessage Sync
             ]
     )
     (pure ())
     $ \(qryId :| _) -> do
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      void $ receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
-      copyFn qryId
+      -- Keep receiving until we're either in copy-in mode (CopyInResponse) or Parse/Bind/
+      -- Execute failed and we've drained all the way to ReadyForQuery
+      let receiveUntilCopyReadyOrError = do
+            (_, st) <- receiveOutstandingResponseMsgsAtomically thisThreadId conn qryId
+            case st of
+              RowDescriptionOrNoDataOrCopyInResponseReceived (Right3 CopyInResponse) -> pure Nothing
+              RowDescriptionOrNoDataOrCopyInResponseReceived _notCopyInResponse -> throwIrrecoverableErrorWithStatement queryString "Got a response not for COPY statements from Postgres. Are you sure this is a valid COPY statement?"
+              ReadyForQueryReceived (Left err) _ -> pure $ Just err
+              ReadyForQueryReceived (Right _) _ -> pure Nothing
+              ParseCompleteReceived _ -> receiveUntilCopyReadyOrError
+              BindCompleteReceived _ -> receiveUntilCopyReadyOrError
+              ErrorResponseReceived _ _ -> receiveUntilCopyReadyOrError -- We want to receive ReadyForQuery before continuing
+              _ -> throwIrrecoverableErrorWithStatement queryString "Received unknown message from postgres after sending COPY statement"
+      mErr <- receiveUntilCopyReadyOrError
+      case mErr of
+        Just err -> throwPostgresError queryString err
+        Nothing ->
+          -- We expect copyFn to send rows, Sync, and wait until ReadyForQuery.
+          -- This is an internal method, and this expectation is part of
+          -- our contract.
+          copyFn qryId
 
 -- | Copies rows into a table with the binary COPY protocol.
 -- This must be a "COPY table FROM STDIN WITH (FORMAT BINARY)"-like statement.
@@ -1618,6 +1665,8 @@ copyStart conn copyQry = snd <$> withCopyInternal conn copyQry (\_qryId -> pure 
 putCopyData :: HPgConnection -> ByteString -> IO ()
 putCopyData conn t = nonAtomicSendMsg conn $ CopyData (Builder.byteString t)
 
+-- | Aborts an ongoing COPY operation with an abort message. This cannot be used
+-- with `withCopy` and `withCopy_` yet.
 putCopyError :: HPgConnection -> String -> IO ()
 putCopyError conn causeForFailure = withControlMsgsLock conn (const $ pure ()) (const $ pure ()) $ const $ do
   mCopyState <-
@@ -1634,6 +1683,8 @@ putCopyError conn causeForFailure = withControlMsgsLock conn (const $ pure ()) (
               [qs@QueryState {queryProtocol = CopyQuery StillCopying}] -> STM.writeTVar (internalConnectionState conn) $ st {currentPipeline = [qs {queryProtocol = CopyQuery CopyFailAndSyncSent}]}
               _ -> throwIrrecoverableError "Impossible: when marking CopyFail state was invalid"
       atomicallySendControlMsgs_ conn ([SomeMessage $ Msgs.CopyFail causeForFailure, SomeMessage Sync], markCopyFailSent)
+      -- Drain the backend's next messages, which should be ErrorResponse and ReadyForQuery
+      cancelActiveStatement conn True
     Just copyState ->
       throwIrrecoverableError $ "Current COPY command is not in a cancellable state. Its current state is " <> Text.pack (show copyState)
     Nothing ->
@@ -1645,13 +1696,13 @@ copyEnd conn = do
   qryId <- STM.atomically $ do
     st <- STM.readTVar conn.internalConnectionState
     case st.currentPipeline of
-      [] -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd"
+      [] -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "No active COPY statement when running copyEnd"
       [qs] -> case qs.queryProtocol of
-        ExtendedQuery -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "No active COPY statement when running copyEnd, but rather there was a regular query"
-        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was issued by a different thread, and Hpgsql does not support multiple threads running/ending the same COPY statement"
-        CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement was already finished"
-        CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active COPY statement had previously failed"
-      _ -> throwIrrecoverableErrorWithStatement "Ending a COPY statement" "Active pipeline with other statements running when a copyEnd was attempted"
+        ExtendedQuery -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "No active COPY statement when running copyEnd, but rather there was a regular query"
+        CopyQuery StillCopying -> if qs.queryOwner == thisThreadId then pure qs.queryIdentifier else throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement was issued by a different thread, and Hpgsql does not support multiple threads running/ending the same COPY statement"
+        CopyQuery CopyDoneAndSyncSent -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement was already finished"
+        CopyQuery CopyFailAndSyncSent -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active COPY statement had previously failed"
+      _ -> throwIrrecoverableErrorWithStatement "Call to copyEnd" "Active pipeline with other statements running when a copyEnd was attempted"
 
   copyEndInternal conn qryId
 

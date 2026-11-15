@@ -126,7 +126,7 @@ validSqlStatements =
           <> "\n$function$",
       SemiColon
     ],
-    [StaticSql "SELECT COALESCE(4, 1 - 2) - 3 + 4 - 5;"],
+    [StaticSql "SELECT E", StaticSql "'str\\\\ing'", StaticSql "COALESCE(4, 1 - 2) - 3 + 4 - 5;"],
     [StaticSql "SELECT (1 - 4) / 5 * 3 / 9.1;"],
     -- Semi-colons inside parenthesised blocks are not statement boundaries
     [StaticSql "create rule \n name as on \n some_event to \n\n some_table do (command1; command2; command3;);"],
@@ -276,14 +276,16 @@ spec = do
                 "CREATE TABLE hello",
                 "CREATE TABLE hello; -- Comment",
                 "CREATE TABLE hello -- Comment",
-                "CREATE TABLE hello -- Comment\n;"
+                "CREATE TABLE hello -- Comment\n;",
+                "SELECT e'a\\'b';"
               ]
       map flattenBlocks stmts
         === [ [StaticSql "CREATE TABLE hello", SemiColon],
               [StaticSql "CREATE TABLE hello"],
               [StaticSql "CREATE TABLE hello", SemiColon, CommentsOrWhitespace " -- Comment"],
               [StaticSql "CREATE TABLE hello ", CommentsOrWhitespace "-- Comment"],
-              [StaticSql "CREATE TABLE hello ", CommentsOrWhitespace "-- Comment\n", SemiColon]
+              [StaticSql "CREATE TABLE hello ", CommentsOrWhitespace "-- Comment\n", SemiColon],
+              [StaticSql "SELECT e'a\\'b'", SemiColon]
             ]
     it "Statement separation boundaries are good" $ hedgehog $ do
       origPieces <- fmap mconcat $ forAll $ Gen.list (Range.linear 1 100) genSingleSqlStatement
